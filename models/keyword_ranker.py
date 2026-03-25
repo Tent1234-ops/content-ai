@@ -9,21 +9,19 @@ def rank_keywords(text, keywords):
     if not keywords:
         return []
 
-    text_embedding = model.encode(text, convert_to_tensor=True)
-    keyword_embeddings = model.encode(keywords, convert_to_tensor=True)
+    text_emb = model.encode(text, convert_to_tensor=True)
+    kw_emb = model.encode(keywords, convert_to_tensor=True)
 
-    scores = util.cos_sim(text_embedding, keyword_embeddings)[0]
+    scores = util.cos_sim(text_emb, kw_emb)[0]
 
     ranked = sorted(
-        [
-            {
-                "keyword": kw,
-                "score": float(score)  # 🔥 fix numpy
-            }
-            for kw, score in zip(keywords, scores.cpu().numpy())
-        ],
-        key=lambda x: x["score"],
+        zip(keywords, scores.cpu().numpy()),
+        key=lambda x: x[1],
         reverse=True
     )
 
-    return ranked
+    # 🔥 return เป็น dict (สำคัญมาก)
+    return [
+        {"keyword": k, "score": float(s)}
+        for k, s in ranked
+    ]

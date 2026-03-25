@@ -6,24 +6,18 @@ model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 
 
 def recommend_content(user_text, dataset_texts, top_k=3):
-    if not dataset_texts:
-        return []
-
     user_emb = model.encode(user_text, convert_to_tensor=True)
-    dataset_emb = model.encode(dataset_texts, convert_to_tensor=True)
+    data_emb = model.encode(dataset_texts, convert_to_tensor=True)
 
-    scores = util.cos_sim(user_emb, dataset_emb)[0]
+    scores = util.cos_sim(user_emb, data_emb)[0]
 
     ranked = sorted(
-        [
-            {
-                "text": text,
-                "score": float(score)  # 🔥 fix ตรงนี้
-            }
-            for text, score in zip(dataset_texts, scores.cpu().numpy())
-        ],
-        key=lambda x: x["score"],
+        zip(dataset_texts, scores.cpu().numpy()),
+        key=lambda x: x[1],
         reverse=True
     )
 
-    return ranked[:top_k]
+    return [
+        {"text": t, "score": float(s)}
+        for t, s in ranked[:top_k]
+    ]
