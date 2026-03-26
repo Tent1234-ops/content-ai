@@ -3,21 +3,25 @@ from pythainlp.corpus.common import thai_stopwords
 from sklearn.feature_extraction.text import TfidfVectorizer
 import re
 
-print("Loading Universal Keyword Extractor V5...")
+print("Loading Universal Keyword Extractor V6...")
 
 thai_stop = set(thai_stopwords())
 
+# =========================
 # 🔥 noise words
+# =========================
 NOISE_WORDS = {
     "แน่นอน", "เอาจริง", "ส่วนตัว", "คือ", "แบบ",
     "มาก", "เลย", "โอเค", "ครับ", "ค่ะ", "ใช้ได้",
     "ตัว", "นี้", "นั้น"
 }
 
+# =========================
 # 🔥 speech error patterns
+# =========================
 BAD_PATTERNS = [
-    r"^รอก",     # จาก "ไม่รอก"
-    r"เฟล",      # จาก feeling
+    r"^รอก",
+    r"เฟล",
 ]
 
 # =========================
@@ -52,7 +56,7 @@ def tokenize(text):
 def tfidf_keywords(text, corpus):
     vectorizer = TfidfVectorizer(
         tokenizer=tokenize,
-        ngram_range=(1,2),   # 🔥 ลด phrase มั่ว
+        ngram_range=(1,2),
         max_features=500
     )
 
@@ -66,16 +70,22 @@ def tfidf_keywords(text, corpus):
     return [k for k, v in scores if v > 0]
 
 # =========================
-# 🔥 ตรวจ keyword เพี้ยน
+# 🔥 keyword เพี้ยน
 # =========================
 def is_bad_keyword(kw):
+    # speech error
     for p in BAD_PATTERNS:
         if re.search(p, kw):
             return True
+
+    # สั้นเกิน
+    if len(kw) <= 2:
+        return True
+
     return False
 
 # =========================
-# 🔥 Filter keyword คุณภาพต่ำ
+# 🔥 Filter คุณภาพต่ำ
 # =========================
 def filter_keywords(keywords):
     clean = []
@@ -91,12 +101,8 @@ def filter_keywords(keywords):
         if any(w in NOISE_WORDS for w in words):
             continue
 
-        # ❌ speech error
+        # ❌ เพี้ยน
         if is_bad_keyword(kw):
-            continue
-
-        # ❌ คำสั้นไร้ความหมาย
-        if all(len(w) <= 3 for w in words):
             continue
 
         # ❌ ซ้ำคำ
@@ -108,26 +114,21 @@ def filter_keywords(keywords):
     return clean
 
 # =========================
-# 🔥 Tech-aware boost
+# 🔥 Boost (generic ไม่ผูก domain)
 # =========================
-TECH_TERMS = [
-    "keyboard", "mechanical keyboard",
-    "hot swap", "rgb", "gasket",
-    "switch", "linear switch",
-    "typing feel"
-]
-
 def boost_keywords(keywords, text):
     boosted = []
 
     for kw in keywords:
         score = 0
 
+        # อยู่ใน text จริง → สำคัญ
         if kw in text:
-            score += 1
-
-        if any(t in kw for t in TECH_TERMS):
             score += 2
+
+        # phrase > word → สำคัญกว่า
+        if len(kw.split()) > 1:
+            score += 1
 
         boosted.append((kw, score))
 
@@ -143,7 +144,7 @@ def deduplicate_keywords(keywords):
     seen = set()
 
     for kw in keywords:
-        base = kw.split()[-1]  # เช่น switch
+        base = kw.split()[-1]
 
         if base not in seen:
             final.append(kw)
@@ -178,15 +179,16 @@ def extract_keywords(text, corpus=None):
         # 3. boost
         tfidf_k = boost_keywords(tfidf_k, text)
 
-        # 4. model name
+        # 4. model name (สำคัญ)
         keywords += extract_model(text)
 
+        # 5. merge
         keywords += tfidf_k
 
-        # 5. deduplicate concept
+        # 6. deduplicate concept
         keywords = deduplicate_keywords(keywords)
 
-        # 6. remove dup
+        # 7. remove dup
         keywords = list(dict.fromkeys(keywords))
 
         return keywords[:10]
