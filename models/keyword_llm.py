@@ -3,16 +3,22 @@ from pythainlp.corpus.common import thai_stopwords
 from sklearn.feature_extraction.text import TfidfVectorizer
 import re
 
-print("Loading Universal Keyword Extractor V4...")
+print("Loading Universal Keyword Extractor V5...")
 
 thai_stop = set(thai_stopwords())
 
-# 🔥 noise words (สำคัญมาก)
+# 🔥 noise words
 NOISE_WORDS = {
     "แน่นอน", "เอาจริง", "ส่วนตัว", "คือ", "แบบ",
     "มาก", "เลย", "โอเค", "ครับ", "ค่ะ", "ใช้ได้",
     "ตัว", "นี้", "นั้น"
 }
+
+# 🔥 speech error patterns
+BAD_PATTERNS = [
+    r"^รอก",     # จาก "ไม่รอก"
+    r"เฟล",      # จาก feeling
+]
 
 # =========================
 # Normalize
@@ -46,7 +52,7 @@ def tokenize(text):
 def tfidf_keywords(text, corpus):
     vectorizer = TfidfVectorizer(
         tokenizer=tokenize,
-        ngram_range=(1,2),   # 🔥 ลดเหลือ 2 → ลด phrase มั่ว
+        ngram_range=(1,2),   # 🔥 ลด phrase มั่ว
         max_features=500
     )
 
@@ -60,7 +66,16 @@ def tfidf_keywords(text, corpus):
     return [k for k, v in scores if v > 0]
 
 # =========================
-# 🔥 Filter phrase คุณภาพต่ำ
+# 🔥 ตรวจ keyword เพี้ยน
+# =========================
+def is_bad_keyword(kw):
+    for p in BAD_PATTERNS:
+        if re.search(p, kw):
+            return True
+    return False
+
+# =========================
+# 🔥 Filter keyword คุณภาพต่ำ
 # =========================
 def filter_keywords(keywords):
     clean = []
@@ -68,15 +83,23 @@ def filter_keywords(keywords):
     for kw in keywords:
         words = kw.split()
 
-        # ❌ ตัด phrase ที่ยาวแต่ไม่มีความหมาย
+        # ❌ ยาวเกิน
         if len(words) > 2:
             continue
 
-        # ❌ มี noise word
+        # ❌ มี noise
         if any(w in NOISE_WORDS for w in words):
             continue
 
-        # ❌ ซ้ำคำแปลกๆ
+        # ❌ speech error
+        if is_bad_keyword(kw):
+            continue
+
+        # ❌ คำสั้นไร้ความหมาย
+        if all(len(w) <= 3 for w in words):
+            continue
+
+        # ❌ ซ้ำคำ
         if len(set(words)) != len(words):
             continue
 
@@ -85,7 +108,7 @@ def filter_keywords(keywords):
     return clean
 
 # =========================
-# 🔥 Tech-aware boost (ฉลาดขึ้น)
+# 🔥 Tech-aware boost
 # =========================
 TECH_TERMS = [
     "keyboard", "mechanical keyboard",
@@ -113,6 +136,22 @@ def boost_keywords(keywords, text):
     return [k for k, _ in boosted]
 
 # =========================
+# 🔥 Deduplicate concept
+# =========================
+def deduplicate_keywords(keywords):
+    final = []
+    seen = set()
+
+    for kw in keywords:
+        base = kw.split()[-1]  # เช่น switch
+
+        if base not in seen:
+            final.append(kw)
+            seen.add(base)
+
+    return final
+
+# =========================
 # Extract model
 # =========================
 def extract_model(text):
@@ -130,21 +169,24 @@ def extract_keywords(text, corpus=None):
 
         keywords = []
 
-        # TF-IDF
+        # 1. TF-IDF
         tfidf_k = tfidf_keywords(text, corpus)
 
-        # filter
+        # 2. filter
         tfidf_k = filter_keywords(tfidf_k)
 
-        # boost
+        # 3. boost
         tfidf_k = boost_keywords(tfidf_k, text)
 
-        # model name
+        # 4. model name
         keywords += extract_model(text)
 
         keywords += tfidf_k
 
-        # remove dup
+        # 5. deduplicate concept
+        keywords = deduplicate_keywords(keywords)
+
+        # 6. remove dup
         keywords = list(dict.fromkeys(keywords))
 
         return keywords[:10]
