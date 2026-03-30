@@ -53,7 +53,7 @@ def clean_text(text: str):
 
 
 # =========================
-# 🔥 post-filter keyword (สำคัญมาก)
+# 🔥 post-filter keyword
 # =========================
 def clean_keywords(keywords):
     cleaned = []
@@ -61,15 +61,14 @@ def clean_keywords(keywords):
     for kw in keywords:
         kw = kw.strip()
 
-        # ❌ ตัด keyword ขยะ
         if len(kw) < 3:
             continue
 
-        # ❌ pattern แปลก เช่น "คีย์บอร์ด เท่"
+        # ตัดคำคุณศัพท์ลอย ๆ
         if re.search(r"(เท่|ดี|มาก|สุด)$", kw):
             continue
 
-        # ❌ keyword ซ้ำคำ
+        # ซ้ำคำ
         if len(set(kw.split())) == 1 and len(kw.split()) > 1:
             continue
 
@@ -79,70 +78,100 @@ def clean_keywords(keywords):
 
 
 # =========================
+# 🔥 classify keyword (สำคัญมาก)
+# =========================
+def classify_keywords(keywords):
+    content = []
+    metadata = []
+    entity = []
+    other = []
+
+    CONTENT_HINTS = [
+        "switch", "swap", "rgb", "gasket",
+        "latency", "sound", "typing", "battery",
+        "performance", "weight", "size"
+    ]
+
+    METADATA_HINTS = [
+        "windows", "mac", "ios", "android"
+    ]
+
+    for kw in keywords:
+
+        # ENTITY → model เช่น ak820
+        if re.search(r"[a-z]+\d{2,4}", kw):
+            entity.append(kw)
+
+        # METADATA
+        elif kw in METADATA_HINTS:
+            metadata.append(kw)
+
+        # CONTENT (semantic)
+        elif any(hint in kw for hint in CONTENT_HINTS):
+            content.append(kw)
+
+        else:
+            other.append(kw)
+
+    return {
+        "content": list(dict.fromkeys(content)),
+        "metadata": list(dict.fromkeys(metadata)),
+        "entity": list(dict.fromkeys(entity)),
+        "other": list(dict.fromkeys(other))
+    }
+
+
+# =========================
 # MAIN PIPELINE
 # =========================
 def analyze_video(video_path: str):
 
-    # =========================
     # 1. audio
-    # =========================
     audio_path = "temp.wav"
     extract_audio(video_path, audio_path)
 
-    # =========================
     # 2. speech → text
-    # =========================
     transcript = transcribe(audio_path)
 
-    # =========================
     # 3. clean
-    # =========================
     clean_transcript = clean_text(transcript)
 
-    # =========================
-    # 4. candidate (กว้าง)
-    # =========================
+    # 4. candidate
     candidate_keywords = extract_keywords(clean_transcript)
 
-    # =========================
-    # 5. semantic filter (คัดจริง)
-    # =========================
+    # 5. semantic filter
     semantic_filtered = semantic_keywords(
         clean_transcript,
         candidate_keywords,
         top_k=20
     )
 
-    # =========================
     # 6. merge + clean
-    # =========================
     merged_keywords = list(dict.fromkeys(
         semantic_filtered + candidate_keywords
     ))
 
     final_keywords = clean_keywords(merged_keywords)
 
-    # =========================
-    # 7. ranking (embedding)
-    # =========================
+    # 7. classify (🔥 ใหม่)
+    classified = classify_keywords(final_keywords)
+
+    # 8. ranking
     ranked_keywords = rank_keywords(
         clean_transcript,
         final_keywords
     )
 
-    # 🔥 เอา top จริง
     top_keywords = [k["keyword"] for k in ranked_keywords[:10]]
 
-    # =========================
-    # 8. summary (ใช้ top keyword เท่านั้น)
-    # =========================
+    # 9. summary
     summary = summarize_text(
         clean_transcript,
         keywords=top_keywords
     )
 
     # =========================
-    # 9. STRUCTURED OUTPUT (🔥 ใช้เข้า DB)
+    # 🔥 FINAL OUTPUT (DB READY)
     # =========================
     result = {
         "transcript": transcript,
@@ -150,13 +179,22 @@ def analyze_video(video_path: str):
         "analysis": {
             "summary": summary,
 
-            # 🔥 keyword ที่สำคัญจริง
+            # สำหรับ UI
             "top_keywords": ranked_keywords[:10],
 
-            # 🔥 keyword ทั้งหมด (dataset ใช้ตัวนี้)
+            # 🔥 สำหรับ AI logic (สำคัญสุด)
+            "content_keywords": classified["content"],
+
+            # 🔥 ไม่ใช้แนะนำ
+            "metadata": classified["metadata"],
+
+            # 🔥 เช่น model name
+            "entities": classified["entity"],
+
+            # dataset
             "all_keywords": final_keywords,
 
-            # 🔥 raw candidate (debug/ปรับ model)
+            # debug
             "candidates": candidate_keywords
         }
     }
