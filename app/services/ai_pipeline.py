@@ -42,7 +42,8 @@ def clean_text(text: str):
     text = text.lower()
 
     noise_words = [
-        "เอาจริง", "แน่นอน", "แบบ", "คือ", "ก็", "นะ", "ครับ", "ค่ะ"
+        "เอาจริง", "แน่นอน", "แบบ", "คือ",
+        "ก็", "นะ", "ครับ", "ค่ะ", "อ่า"
     ]
 
     for w in noise_words:
@@ -53,7 +54,7 @@ def clean_text(text: str):
 
 
 # =========================
-# 🔥 keyword cleaning
+# 🔥 keyword cleaning (สำคัญสุด)
 # =========================
 def clean_keywords(keywords):
     cleaned = []
@@ -64,16 +65,20 @@ def clean_keywords(keywords):
         if len(kw) < 3:
             continue
 
-        # ❌ ตัดคำ useless
+        # ❌ generic ทิ้ง
         if kw in ["keyboard", "สินค้า", "ตัว", "ของ"]:
             continue
 
         # ❌ adjective ลอย
-        if re.search(r"(เท่|ดี|มาก|สุด)$", kw):
+        if re.search(r"(เท่|ดี|มาก|สุด|สวย)$", kw):
             continue
 
         # ❌ ซ้ำคำ
         if len(set(kw.split())) == 1 and len(kw.split()) > 1:
+            continue
+
+        # ❌ ตัดคำมั่วจาก ASR
+        if re.search(r"[ก-๙]{1,2}\s", kw):
             continue
 
         cleaned.append(kw)
@@ -82,12 +87,13 @@ def clean_keywords(keywords):
 
 
 # =========================
-# 🔥 domain enrichment (สำคัญมาก)
+# 🔥 domain enrichment (ปรับให้แม่น)
 # =========================
 def enrich_keywords(text, keywords):
     extra = []
 
-    if "keyboard" in text:
+    # keyboard domain (ตอนนี้ focus)
+    if "keyboard" in text or "คีย์บอร์ด" in text:
         extra.append("mechanical keyboard")
 
     if "75" in text:
@@ -105,11 +111,17 @@ def enrich_keywords(text, keywords):
     if "rgb" in text or "ไฟ" in text:
         extra.append("rgb lighting")
 
+    if "gasket" in text:
+        extra.append("gasket mount")
+
+    if "foam" in text:
+        extra.append("foam mod")
+
     return list(dict.fromkeys(keywords + extra))
 
 
 # =========================
-# 🔥 classify keyword
+# 🔥 classify (สำคัญมาก)
 # =========================
 def classify_keywords(keywords):
     content = []
@@ -119,8 +131,10 @@ def classify_keywords(keywords):
 
     CONTENT_HINTS = [
         "switch", "swap", "rgb", "gasket",
-        "latency", "sound", "typing", "battery",
-        "performance", "weight", "size", "keyboard"
+        "latency", "sound", "typing",
+        "battery", "performance",
+        "weight", "size", "keyboard",
+        "keycaps", "foam"
     ]
 
     METADATA_HINTS = [
@@ -153,7 +167,7 @@ def classify_keywords(keywords):
 
 
 # =========================
-# MAIN PIPELINE
+# 🔥 MAIN PIPELINE (Production Ready)
 # =========================
 def analyze_video(video_path: str):
 
@@ -170,7 +184,7 @@ def analyze_video(video_path: str):
     # 4. candidate (กว้าง)
     candidate_keywords = extract_keywords(clean_transcript)
 
-    # 5. semantic filter (คัดจริง)
+    # 5. semantic filter
     semantic_filtered = semantic_keywords(
         clean_transcript,
         candidate_keywords,
@@ -185,16 +199,16 @@ def analyze_video(video_path: str):
     # 7. clean keyword
     cleaned_keywords = clean_keywords(merged_keywords)
 
-    # 8. 🔥 enrich domain (สำคัญสุด)
+    # 8. enrich domain
     enriched_keywords = enrich_keywords(
         clean_transcript,
         cleaned_keywords
     )
 
-    # 9. 🔥 ตัด generic ก่อน rank
+    # 9. 🔥 remove metadata BEFORE rank
     filtered_keywords = [
         kw for kw in enriched_keywords
-        if kw not in ["keyboard"]
+        if kw not in ["mac", "windows", "ios", "android"]
     ]
 
     # 10. ranking
@@ -206,7 +220,7 @@ def analyze_video(video_path: str):
     top_keywords = [k["keyword"] for k in ranked_keywords[:10]]
 
     # 11. classify
-    classified = classify_keywords(filtered_keywords)
+    classified = classify_keywords(enriched_keywords)
 
     # 12. summary
     summary = summarize_text(
@@ -215,7 +229,7 @@ def analyze_video(video_path: str):
     )
 
     # =========================
-    # 🔥 FINAL OUTPUT
+    # 🔥 FINAL OUTPUT (DB READY)
     # =========================
     result = {
         "transcript": transcript,
@@ -223,13 +237,22 @@ def analyze_video(video_path: str):
         "analysis": {
             "summary": summary,
 
+            # UI
             "top_keywords": ranked_keywords[:10],
 
+            # 🔥 ใช้ AI logic ต่อ
             "content_keywords": classified["content"],
+
+            # ❌ ไม่ใช้แนะนำ
             "metadata": classified["metadata"],
+
+            # model name
             "entities": classified["entity"],
 
-            "all_keywords": filtered_keywords,
+            # dataset
+            "all_keywords": enriched_keywords,
+
+            # debug
             "candidates": candidate_keywords
         }
     }
