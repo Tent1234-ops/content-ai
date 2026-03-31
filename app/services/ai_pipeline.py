@@ -53,7 +53,7 @@ def clean_text(text: str):
 
 
 # =========================
-# 🔥 post-filter keyword
+# 🔥 keyword cleaning
 # =========================
 def clean_keywords(keywords):
     cleaned = []
@@ -64,11 +64,15 @@ def clean_keywords(keywords):
         if len(kw) < 3:
             continue
 
-        # ตัดคำคุณศัพท์ลอย ๆ
+        # ❌ ตัดคำ useless
+        if kw in ["keyboard", "สินค้า", "ตัว", "ของ"]:
+            continue
+
+        # ❌ adjective ลอย
         if re.search(r"(เท่|ดี|มาก|สุด)$", kw):
             continue
 
-        # ซ้ำคำ
+        # ❌ ซ้ำคำ
         if len(set(kw.split())) == 1 and len(kw.split()) > 1:
             continue
 
@@ -78,7 +82,34 @@ def clean_keywords(keywords):
 
 
 # =========================
-# 🔥 classify keyword (สำคัญมาก)
+# 🔥 domain enrichment (สำคัญมาก)
+# =========================
+def enrich_keywords(text, keywords):
+    extra = []
+
+    if "keyboard" in text:
+        extra.append("mechanical keyboard")
+
+    if "75" in text:
+        extra.append("75% keyboard")
+
+    if "red switch" in text:
+        extra.append("red switch")
+
+    if "linear" in text:
+        extra.append("linear switch")
+
+    if "pbt" in text or "double shot" in text:
+        extra.append("pbt keycaps")
+
+    if "rgb" in text or "ไฟ" in text:
+        extra.append("rgb lighting")
+
+    return list(dict.fromkeys(keywords + extra))
+
+
+# =========================
+# 🔥 classify keyword
 # =========================
 def classify_keywords(keywords):
     content = []
@@ -89,7 +120,7 @@ def classify_keywords(keywords):
     CONTENT_HINTS = [
         "switch", "swap", "rgb", "gasket",
         "latency", "sound", "typing", "battery",
-        "performance", "weight", "size"
+        "performance", "weight", "size", "keyboard"
     ]
 
     METADATA_HINTS = [
@@ -98,15 +129,15 @@ def classify_keywords(keywords):
 
     for kw in keywords:
 
-        # ENTITY → model เช่น ak820
+        # ENTITY (model)
         if re.search(r"[a-z]+\d{2,4}", kw):
             entity.append(kw)
 
-        # METADATA
+        # metadata
         elif kw in METADATA_HINTS:
             metadata.append(kw)
 
-        # CONTENT (semantic)
+        # content จริง
         elif any(hint in kw for hint in CONTENT_HINTS):
             content.append(kw)
 
@@ -136,42 +167,55 @@ def analyze_video(video_path: str):
     # 3. clean
     clean_transcript = clean_text(transcript)
 
-    # 4. candidate
+    # 4. candidate (กว้าง)
     candidate_keywords = extract_keywords(clean_transcript)
 
-    # 5. semantic filter
+    # 5. semantic filter (คัดจริง)
     semantic_filtered = semantic_keywords(
         clean_transcript,
         candidate_keywords,
         top_k=20
     )
 
-    # 6. merge + clean
+    # 6. merge
     merged_keywords = list(dict.fromkeys(
         semantic_filtered + candidate_keywords
     ))
 
-    final_keywords = clean_keywords(merged_keywords)
+    # 7. clean keyword
+    cleaned_keywords = clean_keywords(merged_keywords)
 
-    # 7. classify (🔥 ใหม่)
-    classified = classify_keywords(final_keywords)
+    # 8. 🔥 enrich domain (สำคัญสุด)
+    enriched_keywords = enrich_keywords(
+        clean_transcript,
+        cleaned_keywords
+    )
 
-    # 8. ranking
+    # 9. 🔥 ตัด generic ก่อน rank
+    filtered_keywords = [
+        kw for kw in enriched_keywords
+        if kw not in ["keyboard"]
+    ]
+
+    # 10. ranking
     ranked_keywords = rank_keywords(
         clean_transcript,
-        final_keywords
+        filtered_keywords
     )
 
     top_keywords = [k["keyword"] for k in ranked_keywords[:10]]
 
-    # 9. summary
+    # 11. classify
+    classified = classify_keywords(filtered_keywords)
+
+    # 12. summary
     summary = summarize_text(
         clean_transcript,
         keywords=top_keywords
     )
 
     # =========================
-    # 🔥 FINAL OUTPUT (DB READY)
+    # 🔥 FINAL OUTPUT
     # =========================
     result = {
         "transcript": transcript,
@@ -179,22 +223,13 @@ def analyze_video(video_path: str):
         "analysis": {
             "summary": summary,
 
-            # สำหรับ UI
             "top_keywords": ranked_keywords[:10],
 
-            # 🔥 สำหรับ AI logic (สำคัญสุด)
             "content_keywords": classified["content"],
-
-            # 🔥 ไม่ใช้แนะนำ
             "metadata": classified["metadata"],
-
-            # 🔥 เช่น model name
             "entities": classified["entity"],
 
-            # dataset
-            "all_keywords": final_keywords,
-
-            # debug
+            "all_keywords": filtered_keywords,
             "candidates": candidate_keywords
         }
     }
