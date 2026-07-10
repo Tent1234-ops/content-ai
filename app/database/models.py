@@ -1,38 +1,176 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, DateTime
 from datetime import datetime
+
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
+
 from .db import Base
+
 
 class User(Base):
     __tablename__ = "users"
+
     user_id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(100))
-    email = Column(String(255))
-    password = Column(String(255))
-    created_at = Column(DateTime, default=datetime.utcnow)
+    username = Column(String(100), unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False, default="user")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    contents = relationship("UserContent", back_populates="owner", cascade="all, delete-orphan")
+    logs = relationship("SystemLog", back_populates="user")
+    configs = relationship("SystemConfig", back_populates="user")
+
 
 class UserContent(Base):
     __tablename__ = "user_contents"
+
     content_id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.user_id"))
-    title = Column(String(255))
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    title = Column(String(255), nullable=False)
     video_url = Column(String(255))
     transcript = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    owner = relationship("User", back_populates="contents")
+    analysis_results = relationship("AnalysisResult", back_populates="content", cascade="all, delete-orphan")
+    recommendations = relationship("Recommendation", back_populates="content", cascade="all, delete-orphan")
+    content_keywords = relationship("ContentKeyword", back_populates="content", cascade="all, delete-orphan")
+
 
 class Keyword(Base):
     __tablename__ = "keywords"
+
     keyword_id = Column(Integer, primary_key=True)
-    keyword = Column(String(100), unique=True)
+    keyword = Column(String(100), unique=True, nullable=False)
+
+    content_keywords = relationship("ContentKeyword", back_populates="keyword_ref")
+
 
 class ContentKeyword(Base):
     __tablename__ = "content_keywords"
+
     id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("user_contents.content_id"))
-    keyword_id = Column(Integer, ForeignKey("keywords.keyword_id"))
+    content_id = Column(Integer, ForeignKey("user_contents.content_id"), nullable=False)
+    keyword_id = Column(Integer, ForeignKey("keywords.keyword_id"), nullable=False)
+    score = Column(Float, nullable=False, default=0.0)
+
+    content = relationship("UserContent", back_populates="content_keywords")
+    keyword_ref = relationship("Keyword", back_populates="content_keywords")
+
+
+class Cluster(Base):
+    __tablename__ = "clusters"
+
+    cluster_id = Column(Integer, primary_key=True)
+    cluster_name = Column(String(150), nullable=False, unique=True)
+    description = Column(Text)
+
+    analysis_results = relationship("AnalysisResult", back_populates="cluster")
+    memberships = relationship("ClusterMembership", back_populates="cluster", cascade="all, delete-orphan")
+
+
+class DatasetContent(Base):
+    __tablename__ = "dataset_contents"
+
+    dataset_id = Column(Integer, primary_key=True)
+    title = Column(String(255), nullable=False)
+    video_url = Column(String(255))
+    transcript = Column(Text)
+    category = Column(String(100))
+    source_platform = Column(String(50), nullable=False, default="youtube")
+    views = Column(Integer, nullable=False, default=0)
+    likes = Column(Integer, nullable=False, default=0)
+    comments = Column(Integer, nullable=False, default=0)
+    trend_score = Column(Float, nullable=False, default=0.0)
+    duration_seconds = Column(Integer)
+    published_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    analysis_results = relationship("AnalysisResult", back_populates="dataset")
+    memberships = relationship("ClusterMembership", back_populates="dataset")
+
 
 class AnalysisResult(Base):
     __tablename__ = "analysis_results"
+
     result_id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("user_contents.content_id"))
+    content_id = Column(Integer, ForeignKey("user_contents.content_id"), nullable=False)
+    cluster_id = Column(Integer, ForeignKey("clusters.cluster_id"))
+    dataset_id = Column(Integer, ForeignKey("dataset_contents.dataset_id"))
     summary = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    content = relationship("UserContent", back_populates="analysis_results")
+    cluster = relationship("Cluster", back_populates="analysis_results")
+    dataset = relationship("DatasetContent", back_populates="analysis_results")
+
+
+class ClusterRun(Base):
+    __tablename__ = "cluster_runs"
+
+    run_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"))
+    algorithm = Column(String(50), nullable=False, default="kmeans")
+    n_clusters = Column(Integer, nullable=False)
+    feature_dimension = Column(Integer, nullable=False, default=0)
+    inertia = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    memberships = relationship("ClusterMembership", back_populates="run", cascade="all, delete-orphan")
+
+
+class ClusterMembership(Base):
+    __tablename__ = "cluster_memberships"
+
+    membership_id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("cluster_runs.run_id"), nullable=False)
+    cluster_id = Column(Integer, ForeignKey("clusters.cluster_id"), nullable=False)
+    content_id = Column(Integer, ForeignKey("user_contents.content_id"))
+    dataset_id = Column(Integer, ForeignKey("dataset_contents.dataset_id"))
+    item_text = Column(Text, nullable=False)
+    top_terms = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    run = relationship("ClusterRun", back_populates="memberships")
+    cluster = relationship("Cluster", back_populates="memberships")
+    dataset = relationship("DatasetContent", back_populates="memberships")
+
+
+class Recommendation(Base):
+    __tablename__ = "recommendations"
+
+    rec_id = Column(Integer, primary_key=True)
+    content_id = Column(Integer, ForeignKey("user_contents.content_id"), nullable=False)
+    recommended_keywords = Column(Text)
+    recommended_duration = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    content = relationship("UserContent", back_populates="recommendations")
+
+
+class SystemConfig(Base):
+    __tablename__ = "system_configs"
+
+    config_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"))
+    max_keywords = Column(Integer, nullable=False, default=10)
+    hook_duration = Column(Integer, nullable=False, default=60)
+    process_interval = Column(Integer, nullable=False, default=24)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="configs")
+
+
+class SystemLog(Base):
+    __tablename__ = "system_logs"
+
+    log_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"))
+    action = Column(String(255), nullable=False)
+    status = Column(String(50), nullable=False)
+    detail = Column(Text)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="logs")

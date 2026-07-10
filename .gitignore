@@ -1,0 +1,15 @@
+﻿# Python cache
+__pycache__/
+*.py[cod]
+*.pyc.*
+
+# Runtime temp artifacts
+temp.wav
+
+# Local uploads / media outputs
+videos/
+
+# Environment / OS
+.env
+.DS_Store
+Thumbs.db
