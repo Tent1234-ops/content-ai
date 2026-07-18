@@ -76,6 +76,7 @@ async def analyze_and_save(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    print(f"[analyze/save] received upload: {file.filename}", flush=True)
     result = analyze_video(file_path)
     transcript = str(result.get("transcript") or "")
     nlp_result = run_nlp_pipeline(transcript or file.filename, 10)
