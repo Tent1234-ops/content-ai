@@ -2,6 +2,7 @@ from keybert import KeyBERT
 from sentence_transformers import SentenceTransformer
 from utils.text_clean import clean_text
 
+print("Loading Keyword AI embedding model...", flush=True)
 embedding_model = SentenceTransformer("BAAI/bge-m3")
 
 kw_model = KeyBERT(model=embedding_model)

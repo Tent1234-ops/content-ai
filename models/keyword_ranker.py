@@ -1,6 +1,6 @@
 from sentence_transformers import SentenceTransformer, util
 
-print("Loading Embedding Model (Keyword Ranker)...")
+print("Loading Embedding Model (Keyword Ranker)...", flush=True)
 
 model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
 

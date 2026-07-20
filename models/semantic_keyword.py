@@ -5,7 +5,7 @@ from pythainlp.corpus.common import thai_stopwords
 import numpy as np
 import re
 
-print("Loading Semantic Keyword Extractor V12...")
+print("Loading Semantic Keyword Extractor V12...", flush=True)
 
 model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 thai_stop = set(thai_stopwords())

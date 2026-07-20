@@ -1,0 +1,476 @@
+import json
+import re
+from datetime import datetime
+from email.utils import parsedate_to_datetime
+from typing import Dict, List, Optional
+from urllib.error import URLError
+from urllib.parse import quote_plus, urlencode
+from urllib.request import Request, urlopen
+from xml.etree import ElementTree as ET
+
+from app.core.config import settings
+from app.schemas.trends import GoogleTrendItem, YouTubeCategoryItem, YouTubeTrendItem
+
+
+def _compute_trend_score(views: int, likes: int, comments: int) -> float:
+    return round((views * 0.5) + (likes * 2.0) + (comments * 3.0), 2)
+
+
+def _compute_google_trend_score(traffic: int) -> float:
+    return round(float(traffic), 2)
+
+
+def _parse_iso8601_duration(duration_text: str | None) -> int | None:
+    if not duration_text:
+        return None
+    pattern = re.compile(
+        r"^P(?:"
+        r"(?:(?P<days>\d+)D)?"
+        r"(?:T"
+        r"(?:(?P<hours>\d+)H)?"
+        r"(?:(?P<minutes>\d+)M)?"
+        r"(?:(?P<seconds>\d+)S)?"
+        r")?"
+        r")$"
+    )
+    match = pattern.match(duration_text)
+    if not match:
+        return None
+    days = int(match.group("days") or 0)
+    hours = int(match.group("hours") or 0)
+    minutes = int(match.group("minutes") or 0)
+    seconds = int(match.group("seconds") or 0)
+    return (days * 86400) + (hours * 3600) + (minutes * 60) + seconds
+
+
+def _normalize_json_like_text(raw_text: str) -> str:
+    normalized = raw_text.replace("undefined", "null")
+    normalized = normalized.replace("\n", " ")
+    return normalized
+
+
+def _extract_js_object(text: str, marker: str) -> str:
+    start = text.find(marker)
+    if start == -1:
+        raise ValueError(f"Marker not found: {marker}")
+    start = text.find("{", start)
+    if start == -1:
+        raise ValueError("JSON object start not found")
+    depth = 0
+    in_string = False
+    escape = False
+    for index, char in enumerate(text[start:], start=start):
+        if escape:
+            escape = False
+            continue
+        if char == "\\":
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    raise ValueError("Could not extract JSON object from text")
+
+
+def _get_video_renderer_items(data: object) -> List[Dict[str, object]]:
+    if isinstance(data, dict):
+        if "videoRenderer" in data and isinstance(data["videoRenderer"], dict):
+            return [data["videoRenderer"]]
+        items = []
+        for value in data.values():
+            items.extend(_get_video_renderer_items(value))
+        return items
+    if isinstance(data, list):
+        items = []
+        for value in data:
+            items.extend(_get_video_renderer_items(value))
+        return items
+    return []
+
+
+def _parse_view_count(text: str | None) -> int:
+    if not text:
+        return 0
+    number_text = re.sub(r"[^0-9]", "", text)
+    try:
+        return int(number_text)
+    except ValueError:
+        return 0
+
+
+def _parse_duration_string(duration_text: str | None) -> int | None:
+    if not duration_text:
+        return None
+    parts = duration_text.split(":")
+    try:
+        parts = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 1:
+        return parts[0]
+    return None
+
+
+def _mock_youtube_categories(_region: str) -> List[YouTubeCategoryItem]:
+    return [
+        YouTubeCategoryItem(category_id="10", title="Music", assignable=True),
+        YouTubeCategoryItem(category_id="17", title="Sports", assignable=True),
+        YouTubeCategoryItem(category_id="20", title="Gaming", assignable=True),
+        YouTubeCategoryItem(category_id="22", title="People & Blogs", assignable=True),
+        YouTubeCategoryItem(category_id="24", title="Entertainment", assignable=True),
+        YouTubeCategoryItem(category_id="28", title="Science & Technology", assignable=True),
+    ]
+
+
+def _mock_youtube_trending(region: str, limit: int, video_category_id: Optional[str] = None) -> List[YouTubeTrendItem]:
+    seed_items = [
+        {
+            "title": "Top 5 gaming audio gadgets creators are talking about",
+            "channel_title": "Trend Lab TH",
+            "category": "28",
+            "published_at": datetime(2026, 4, 27, 9, 0, 0),
+            "video_url": "https://www.youtube.com/watch?v=mock001",
+            "thumbnail_url": "https://img.youtube.com/vi/mock001/hqdefault.jpg",
+            "views": 452000,
+            "likes": 38400,
+            "comments": 2150,
+            "duration_seconds": 72,
+        },
+        {
+            "title": "Affordable smartphone camera battle under budget",
+            "channel_title": "Creator Insight",
+            "category": "28",
+            "published_at": datetime(2026, 4, 27, 12, 30, 0),
+            "video_url": "https://www.youtube.com/watch?v=mock002",
+            "thumbnail_url": "https://img.youtube.com/vi/mock002/hqdefault.jpg",
+            "views": 618000,
+            "likes": 50100,
+            "comments": 3025,
+            "duration_seconds": 95,
+        },
+        {
+            "title": "Cafe review ideas that went viral this week",
+            "channel_title": "Social Pulse",
+            "category": "22",
+            "published_at": datetime(2026, 4, 26, 18, 0, 0),
+            "video_url": "https://www.youtube.com/watch?v=mock003",
+            "thumbnail_url": "https://img.youtube.com/vi/mock003/hqdefault.jpg",
+            "views": 390000,
+            "likes": 29750,
+            "comments": 1822,
+            "duration_seconds": 48,
+        },
+    ]
+    if video_category_id:
+        seed_items = [item for item in seed_items if item["category"] == video_category_id]
+    items: List[YouTubeTrendItem] = []
+    for raw in seed_items[:limit]:
+        items.append(
+            YouTubeTrendItem(
+                **raw,
+                trend_score=_compute_trend_score(raw["views"], raw["likes"], raw["comments"]),
+                source=f"youtube_mock_{region.lower()}",
+            )
+        )
+    return items
+
+
+def _mock_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
+    seed_items = [
+        {
+            "title": "เลือกตั้งท้องถิ่น",
+            "query": "เลือกตั้งท้องถิ่น",
+            "category": "News",
+            "published_at": datetime(2026, 5, 4, 8, 0, 0),
+            "video_url": "https://trends.google.com/trends/explore?q=%E0%B9%80%E0%B8%A5%E0%B8%B7%E0%B8%AD%E0%B8%81%E0%B8%95%E0%B8%B1%E0%B9%89%E0%B8%87%E0%B8%97%E0%B9%89%E0%B8%AD%E0%B8%87%E0%B8%96%E0%B8%B4%E0%B9%88%E0%B8%99&geo=TH",
+            "thumbnail_url": None,
+            "traffic_text": "200K+",
+            "trend_score": 200000.0,
+            "duration_seconds": None,
+        },
+        {
+            "title": "ผลบอลพรีเมียร์ลีก",
+            "query": "ผลบอลพรีเมียร์ลีก",
+            "category": "Sports",
+            "published_at": datetime(2026, 5, 4, 9, 0, 0),
+            "video_url": "https://trends.google.com/trends/explore?q=%E0%B8%9C%E0%B8%A5%E0%B8%9A%E0%B8%AD%E0%B8%A5%E0%B8%9E%E0%B8%A3%E0%B8%B5%E0%B9%80%E0%B8%A1%E0%B8%B5%E0%B8%A2%E0%B8%A3%E0%B9%8C%E0%B8%A5%E0%B8%B5%E0%B8%81&geo=TH",
+            "thumbnail_url": None,
+            "traffic_text": "100K+",
+            "trend_score": 100000.0,
+            "duration_seconds": None,
+        },
+        {
+            "title": "iPhone รุ่นใหม่",
+            "query": "iPhone รุ่นใหม่",
+            "category": "Technology",
+            "published_at": datetime(2026, 5, 4, 10, 0, 0),
+            "video_url": "https://trends.google.com/trends/explore?q=iPhone&geo=TH",
+            "thumbnail_url": None,
+            "traffic_text": "50K+",
+            "trend_score": 50000.0,
+            "duration_seconds": None,
+        },
+    ]
+    return [
+        GoogleTrendItem(**item, source=f"google_trends_mock_{region.lower()}")
+        for item in seed_items[:limit]
+    ]
+
+
+def _parse_google_traffic(traffic_text: str | None) -> int:
+    if not traffic_text:
+        return 0
+    normalized = traffic_text.strip().upper().replace(",", "").replace("+", "")
+    multiplier = 1
+    if normalized.endswith("K"):
+        multiplier = 1000
+        normalized = normalized[:-1]
+    elif normalized.endswith("M"):
+        multiplier = 1000000
+        normalized = normalized[:-1]
+    try:
+        return int(float(normalized) * multiplier)
+    except ValueError:
+        return 0
+
+
+def _live_youtube_categories(region: str) -> List[YouTubeCategoryItem]:
+    if not settings.youtube_api_key:
+        raise ValueError("Missing YOUTUBE_API_KEY")
+
+    params = {
+        "part": "snippet",
+        "regionCode": region,
+        "key": settings.youtube_api_key,
+    }
+    url = f"https://www.googleapis.com/youtube/v3/videoCategories?{urlencode(params)}"
+    with urlopen(url, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    items: List[YouTubeCategoryItem] = []
+    for item in payload.get("items", []):
+        snippet = item.get("snippet", {})
+        items.append(
+            YouTubeCategoryItem(
+                category_id=str(item.get("id", "")),
+                title=snippet.get("title", ""),
+                assignable=bool(snippet.get("assignable", True)),
+            )
+        )
+    return items
+
+
+def _live_youtube_trending(region: str, limit: int, video_category_id: Optional[str] = None) -> List[YouTubeTrendItem]:
+    if not settings.youtube_api_key:
+        return _live_youtube_trending_web_fallback(region, limit, video_category_id)
+
+    try:
+        categories = _live_youtube_categories(region)
+        category_map: Dict[str, str] = {item.category_id: item.title for item in categories}
+        params = {
+            "part": "snippet,statistics,contentDetails",
+            "chart": "mostPopular",
+            "regionCode": region,
+            "maxResults": min(limit, 50),
+            "key": settings.youtube_api_key,
+        }
+        if video_category_id:
+            params["videoCategoryId"] = video_category_id
+        url = f"https://www.googleapis.com/youtube/v3/videos?{urlencode(params)}"
+        with urlopen(url, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        items: List[YouTubeTrendItem] = []
+        for item in payload.get("items", []):
+            snippet = item.get("snippet", {})
+            stats = item.get("statistics", {})
+            views = int(stats.get("viewCount", 0))
+            likes = int(stats.get("likeCount", 0))
+            comments = int(stats.get("commentCount", 0))
+            duration_seconds = _parse_iso8601_duration((item.get("contentDetails") or {}).get("duration"))
+            items.append(
+                YouTubeTrendItem(
+                    title=snippet.get("title", ""),
+                    channel_title=snippet.get("channelTitle", ""),
+                    category=category_map.get(str(snippet.get("categoryId", "")), str(snippet.get("categoryId", ""))),
+                    published_at=datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00"))
+                    if snippet.get("publishedAt")
+                    else None,
+                    video_url=f"https://www.youtube.com/watch?v={item.get('id', '')}",
+                    thumbnail_url=((snippet.get("thumbnails") or {}).get("high") or {}).get("url"),
+                    views=views,
+                    likes=likes,
+                    comments=comments,
+                    trend_score=_compute_trend_score(views, likes, comments),
+                    duration_seconds=duration_seconds,
+                    source="youtube_live",
+                )
+            )
+        return items
+    except (ValueError, URLError, TimeoutError, json.JSONDecodeError):
+        return _live_youtube_trending_web_fallback(region, limit, video_category_id)
+
+
+def _live_youtube_trending_web_fallback(
+    region: str, limit: int, video_category_id: Optional[str] = None
+) -> List[YouTubeTrendItem]:
+    url = f"https://www.youtube.com/feed/trending?gl={region.upper()}"
+    request = Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+    })
+    with urlopen(request, timeout=20) as response:
+        page_text = response.read().decode("utf-8", errors="replace")
+
+    marker = "ytInitialData"
+    raw_json = _extract_js_object(page_text, marker)
+    payload = json.loads(_normalize_json_like_text(raw_json))
+    renderers = _get_video_renderer_items(payload)
+    items: List[YouTubeTrendItem] = []
+    for item in renderers[:limit]:
+        title = ""
+        try:
+            title = item["title"]["runs"][0]["text"]
+        except (KeyError, TypeError, IndexError):
+            title = item.get("title", {}).get("simpleText", "")
+
+        channel_title = ""
+        try:
+            channel_title = item["ownerText"]["runs"][0]["text"]
+        except (KeyError, TypeError, IndexError):
+            channel_title = item.get("shortBylineText", {}).get("runs", [{}])[0].get("text", "")
+
+        video_id = item.get("videoId", "")
+        video_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+        thumbnail_url = ""
+        try:
+            thumbnails = item["thumbnail"]["thumbnails"]
+            thumbnail_url = thumbnails[-1].get("url", "") if thumbnails else ""
+        except (KeyError, TypeError, IndexError):
+            thumbnail_url = ""
+
+        views_text = item.get("viewCountText", {}).get("simpleText") or item.get("viewCountText", {}).get("runs", [{}])[0].get("text")
+        views = _parse_view_count(views_text)
+
+        duration_text = item.get("lengthText", {}).get("simpleText")
+        duration_seconds = _parse_duration_string(duration_text)
+
+        items.append(
+            YouTubeTrendItem(
+                title=title,
+                channel_title=channel_title,
+                category=None,
+                published_at=None,
+                video_url=video_url,
+                thumbnail_url=thumbnail_url,
+                views=views,
+                likes=0,
+                comments=0,
+                trend_score=_compute_trend_score(views, 0, 0),
+                duration_seconds=duration_seconds,
+                source="youtube_live",
+            )
+        )
+    return items
+
+
+def _live_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
+    url = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={region.upper()}"
+    with urlopen(url, timeout=20) as response:
+        payload = response.read().decode("utf-8")
+
+    root = ET.fromstring(payload)
+    ns = {"ht": "https://trends.google.com/trends/trendingsearches/daily/rss"}
+    items: List[GoogleTrendItem] = []
+    for item in root.findall("./channel/item")[:limit]:
+        title = item.findtext("title", default="")
+        query = item.findtext("title", default="")
+        published_raw = item.findtext("pubDate")
+        published_at = parsedate_to_datetime(published_raw) if published_raw else None
+        traffic_text = item.findtext("ht:approx_traffic", namespaces=ns)
+        picture = item.findtext("ht:picture", namespaces=ns)
+        news_url = item.findtext("ht:news_item_url", namespaces=ns)
+        approx_traffic = _parse_google_traffic(traffic_text)
+        video_url = news_url or (
+            f"https://trends.google.com/trends/explore?q={quote_plus(query)}&geo={region.upper()}"
+        )
+        items.append(
+            GoogleTrendItem(
+                title=title,
+                query=query,
+                category=None,
+                published_at=published_at,
+                video_url=video_url,
+                thumbnail_url=picture,
+                views=0,
+                likes=0,
+                comments=0,
+                trend_score=_compute_google_trend_score(approx_traffic),
+                source="google_trends_live",
+                traffic_text=traffic_text,
+            )
+        )
+    return items
+
+
+def get_youtube_categories(region: str, mode: str) -> tuple[str, List[YouTubeCategoryItem]]:
+    if mode == "mock":
+        return "mock", _mock_youtube_categories(region)
+
+    if mode == "live":
+        return "live", _live_youtube_categories(region)
+
+    try:
+        return "live", _live_youtube_categories(region)
+    except (ValueError, URLError, TimeoutError):
+        return "mock", _mock_youtube_categories(region)
+
+
+def get_youtube_trending(
+    region: str,
+    limit: int,
+    mode: str,
+    video_category_id: Optional[str] = None,
+) -> tuple[str, List[YouTubeTrendItem]]:
+    if mode == "mock":
+        return "mock", _mock_youtube_trending(region, limit, video_category_id)
+
+    if mode == "live":
+        return "live", _live_youtube_trending(region, limit, video_category_id)
+
+    try:
+        items = _live_youtube_trending(region, limit, video_category_id)
+        if items:
+            return "live", items
+    except (ValueError, URLError, TimeoutError):
+        pass
+
+    return "mock", _mock_youtube_trending(region, limit, video_category_id)
+
+
+def get_google_trending(region: str, limit: int, mode: str) -> tuple[str, List[GoogleTrendItem]]:
+    if mode == "mock":
+        return "mock", _mock_google_trending(region, limit)
+
+    if mode == "live":
+        return "live", _live_google_trending(region, limit)
+
+    try:
+        items = _live_google_trending(region, limit)
+        if items:
+            return "live", items
+    except (ValueError, URLError, TimeoutError, ET.ParseError):
+        pass
+
+    return "mock", _mock_google_trending(region, limit)

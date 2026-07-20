@@ -1,0 +1,954 @@
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+
+import '../models/dashboard_overview.dart';
+import '../repositories/dashboard_repository.dart';
+import '../state/auth_scope.dart';
+import '../widgets/app_shell.dart';
+import '../widgets/state_widgets.dart';
+
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  final _repository = DashboardRepository();
+  DashboardOverview? _data;
+  String? _error;
+  bool _loading = false;
+  List<String> _followedTopics = [];
+  bool _showFollowedOnly = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _loadFollowedTopics();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await _repository.getOverview();
+      if (!mounted) return;
+      setState(() => _data = data);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _loadFollowedTopics() async {
+    try {
+      final topics = await _repository.getFollowedTopics();
+      if (!mounted) return;
+      setState(() => _followedTopics = topics);
+    } catch (e) {
+      // Silently fail - followed topics are optional
+    }
+  }
+
+  Future<void> _toggleFollowTopic(String topic) async {
+    final isFollowing = _followedTopics.contains(topic);
+    try {
+      if (isFollowing) {
+        await _repository.unfollowTopic(topic);
+      } else {
+        await _repository.followTopic(topic);
+      }
+      if (!mounted) return;
+      setState(() {
+        if (isFollowing) {
+          _followedTopics.remove(topic);
+        } else {
+          _followedTopics.add(topic);
+        }
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(isFollowing ? 'Unfollowed $topic' : 'Following $topic')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _logout() async {
+    await AuthScope.of(context).logout();
+    if (!mounted) return;
+    Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = AuthScope.of(context);
+    final data = _data;
+    final metrics = data?.metrics;
+    final role = auth.role;
+    final comparisons = data?.platformComparison ?? const [];
+    final topSources = data?.sourceDistribution ?? const [];
+    final topTrends = data?.topTrends ?? const [];
+    
+    final filteredTrends = _showFollowedOnly && _followedTopics.isNotEmpty
+        ? topTrends.where((t) => _followedTopics.any((topic) => t.title.toLowerCase().contains(topic.toLowerCase()))).toList()
+        : topTrends;
+    final maxTrendScore = filteredTrends.isNotEmpty
+        ? filteredTrends.map((t) => t.trendScore.toDouble()).reduce(math.max)
+        : 0.0;
+
+    return AppShell(
+      title: 'Dashboard',
+      currentRoute: '/dashboard',
+      isAdmin: auth.isAdmin,
+      onLogout: _logout,
+      actions: [
+        if (auth.isAdmin)
+          IconButton(
+            onPressed: () => Navigator.pushNamed(context, '/admin-console'),
+            icon: const Icon(Icons.admin_panel_settings_outlined),
+            tooltip: 'Admin Console',
+          ),
+        IconButton(
+          onPressed: () => Navigator.pushNamed(context, '/upload'),
+          icon: const Icon(Icons.upload_file),
+          tooltip: 'Analyze My Clip',
+        ),
+        IconButton(
+          onPressed: () => Navigator.pushNamed(context, '/history'),
+          icon: const Icon(Icons.history),
+          tooltip: 'My History',
+        ),
+        IconButton(
+          onPressed: _load,
+          icon: const Icon(Icons.refresh),
+          tooltip: 'Refresh',
+        ),
+      ],
+      child: _error != null
+          ? ErrorStateView(message: _error!, onRetry: _load)
+          : data == null
+              ? const Center(child: CircularProgressIndicator())
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      if (_loading) const LinearProgressIndicator(),
+                      if (role == 'admin')
+                        Card(
+                          color: Theme.of(context).colorScheme.secondaryContainer,
+                          child: ListTile(
+                            leading: const Icon(Icons.admin_panel_settings_outlined),
+                            title: const Text('Admin tools available'),
+                            subtitle: const Text('Open datasets, cluster runs, logs and reporting.'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.pushNamed(context, '/admin-console'),
+                          ),
+                        ),
+                      // Key Metrics
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          _MetricCard(
+                            title: 'Datasets',
+                            value: '${metrics?.totalDatasetContents ?? 0}',
+                            icon: Icons.dataset,
+                          ),
+                          _MetricCard(
+                            title: 'Users',
+                            value: '${metrics?.totalUsers ?? 0}',
+                            icon: Icons.people,
+                          ),
+                          _MetricCard(
+                            title: 'Cluster Runs',
+                            value: '${metrics?.totalClusterRuns ?? 0}',
+                            icon: Icons.bubble_chart,
+                          ),
+                          _MetricCard(
+                            title: 'My Analyses',
+                            value: '${metrics?.myAnalysisResults ?? 0}',
+                            icon: Icons.assessment,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+
+                      // Followed Topics Section
+                      _SectionHeader(
+                        title: 'Followed Topics',
+                        subtitle: 'Topics you\'re tracking for trends',
+                        action: _followedTopics.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: Icon(_showFollowedOnly ? Icons.check_box : Icons.check_box_outline_blank),
+                                onPressed: () => setState(() => _showFollowedOnly = !_showFollowedOnly),
+                                tooltip: 'Filter by followed topics',
+                              ),
+                      ),
+                      if (_followedTopics.isEmpty)
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                Icon(Icons.bookmark_outline, size: 32, color: Colors.grey.shade400),
+                                const SizedBox(height: 8),
+                                const Text('No topics followed yet'),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Click the bookmark icon next to trends to follow them',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: _followedTopics
+                              .map((topic) => Chip(
+                                    label: Text(topic),
+                                    onDeleted: () => _toggleFollowTopic(topic),
+                                    avatar: const Icon(Icons.bookmark, size: 18),
+                                  ))
+                              .toList(),
+                        ),
+                      const SizedBox(height: 24),
+
+                      // Platform Summary - ปรับให้เข้าใจง่าย
+                      const _SectionHeader(
+                        title: 'Data Sources',
+                        subtitle: 'Where your content analysis data comes from',
+                      ),
+                      if (data.platformSummaries.isEmpty)
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Text(
+                              'No data sources connected yet',
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                            ),
+                          ),
+                        )
+                      else
+                        ...data.platformSummaries.take(6).map((item) {
+                          final totalProfiles = item.profileCount;
+                          final totalDatasets = item.datasetCount;
+                           
+                          return Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(_getPlatformIcon(item.source), color: Theme.of(context).colorScheme.primary),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              item.source,
+                                              style: Theme.of(context).textTheme.titleSmall,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${item.domains.length} categories',
+                                              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                    children: [
+                                      Column(
+                                        children: [
+                                          Text(
+                                            totalDatasets.toString(),
+                                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                                  color: Theme.of(context).primaryColor,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Datasets',
+                                            style: Theme.of(context).textTheme.labelSmall,
+                                          ),
+                                        ],
+                                      ),
+                                      Container(
+                                        width: 1,
+                                        height: 40,
+                                        color: Colors.grey.shade300,
+                                      ),
+                                      Column(
+                                        children: [
+                                          Text(
+                                            totalProfiles.toString(),
+                                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                                  color: Theme.of(context).colorScheme.secondary,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'Profiles',
+                                            style: Theme.of(context).textTheme.labelSmall,
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }),
+                      const SizedBox(height: 24),
+
+                      _SectionHeader(
+                        title: 'Live YouTube Trends',
+                        subtitle: data.liveYoutubeTrendMode == 'live'
+                            ? 'Realtime trending videos from YouTube'
+                            : 'YouTube trends fallback or unavailable',
+                      ),
+                      if (data.liveYoutubeTrends.isEmpty)
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Center(
+                              child: Text(
+                                'No live YouTube trends available right now.',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        SizedBox(
+                          height: 280,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: data.liveYoutubeTrends.take(6).length,
+                            separatorBuilder: (_, __) => const SizedBox(width: 12),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            itemBuilder: (context, index) {
+                              final item = data.liveYoutubeTrends.take(6).toList()[index];
+                              final scoreLabel = item.trendScore.toStringAsFixed(0);
+                              final isLive = data.liveYoutubeTrendMode == 'live';
+                              return _AnimatedEntryCard(
+                                index: index,
+                                child: SizedBox(
+                                  width: 320,
+                                  child: Stack(
+                                    children: [
+                                      Card(
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(24),
+                                        ),
+                                        elevation: 4,
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(18),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text(
+                                                          item.title,
+                                                          maxLines: 3,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                                fontWeight: FontWeight.bold,
+                                                              ),
+                                                        ),
+                                                        const SizedBox(height: 10),
+                                                        Wrap(
+                                                          spacing: 8,
+                                                          runSpacing: 8,
+                                                          children: [
+                                                            _ChipLabel(
+                                                              label: isLive ? 'LIVE' : 'FALLBACK',
+                                                              color: isLive
+                                                                  ? Theme.of(context).colorScheme.primary
+                                                                  : Colors.grey.shade400,
+                                                            ),
+                                                            _ChipLabel(
+                                                              label: item.sourcePlatform,
+                                                              color: Theme.of(context).colorScheme.secondary,
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const Spacer(),
+                                              Text(
+                                                'Trend score',
+                                                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                scoreLabel,
+                                                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                                      fontWeight: FontWeight.bold,
+                                                    ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      const SizedBox(height: 24),
+
+                      // Duration Recommendations - ปรับให้มีค่าที่ชัดเจน
+                      if (comparisons.isNotEmpty)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _SectionHeader(
+                              title: 'Best Duration by Type',
+                              subtitle: 'Recommended length and sample size for top performing categories',
+                            ),
+                            SizedBox(
+                              height: 320,
+                              child: ListView.separated(
+                                scrollDirection: Axis.horizontal,
+                                padding: const EdgeInsets.only(bottom: 8),
+                                itemCount: comparisons.take(6).length,
+                                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                                itemBuilder: (context, index) {
+                                  final item = comparisons.take(6).toList()[index];
+                                  final youtubeDuration = item.youtubeDuration.isNotEmpty ? item.youtubeDuration : 'N/A';
+                                  final googleDuration = item.googleDuration.isNotEmpty ? item.googleDuration : 'N/A';
+                                  final totalSamples = item.youtubeSampleSize + item.googleSampleSize;
+                                  final maxSamples = totalSamples > 0 ? totalSamples.toDouble() : 1.0;
+                                  final ytFactor = item.youtubeSampleSize / maxSamples;
+                                  final googleFactor = item.googleSampleSize / maxSamples;
+                                  return _AnimatedEntryCard(
+                                    index: index,
+                                    child: SizedBox(
+                                      width: 300,
+                                      height: 300,
+                                      child: Card(
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        elevation: 3,
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(18),
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    item.domain,
+                                                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                    maxLines: 2,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                  const SizedBox(height: 10),
+                                                  Row(
+                                                    children: [
+                                                      _DurationPill(
+                                                        label: 'YouTube',
+                                                        value: youtubeDuration,
+                                                        color: Theme.of(context).colorScheme.primary,
+                                                      ),
+                                                      const SizedBox(width: 10),
+                                                      _DurationPill(
+                                                        label: 'Google',
+                                                        value: googleDuration,
+                                                        color: Theme.of(context).colorScheme.secondary,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  const SizedBox(height: 16),
+                                                  Text(
+                                                    'Dataset strength',
+                                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                                  ),
+                                                  const SizedBox(height: 10),
+                                                  Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          children: [
+                                                            Text('YouTube', style: Theme.of(context).textTheme.bodySmall),
+                                                            const SizedBox(height: 4),
+                                                            LinearProgressIndicator(
+                                                              value: ytFactor,
+                                                              color: Theme.of(context).colorScheme.primary,
+                                                              backgroundColor: Colors.grey.shade200,
+                                                              minHeight: 8,
+                                                            ),
+                                                            const SizedBox(height: 6),
+                                                            Text('${item.youtubeSampleSize} vids', style: Theme.of(context).textTheme.labelSmall),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 12),
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          children: [
+                                                            Text('Google', style: Theme.of(context).textTheme.bodySmall),
+                                                            const SizedBox(height: 4),
+                                                            LinearProgressIndicator(
+                                                              value: googleFactor,
+                                                              color: Theme.of(context).colorScheme.secondary,
+                                                              backgroundColor: Colors.grey.shade200,
+                                                              minHeight: 8,
+                                                            ),
+                                                            const SizedBox(height: 6),
+                                                            Text('${item.googleSampleSize} vids', style: Theme.of(context).textTheme.labelSmall),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                              Text(
+                                                totalSamples > 0
+                                                    ? 'Based on $totalSamples sample videos'
+                                                    : 'No sample data available yet',
+                                                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey.shade600),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+                        ),
+
+                      // Dataset-backed trends
+                      _SectionHeader(
+                        title: 'Trending Now',
+                        subtitle: _showFollowedOnly && filteredTrends.length < topTrends.length
+                            ? 'Saved dataset trends from analysis profiles'
+                            : 'Top trends from saved dataset content',
+                      ),
+                      if (filteredTrends.isEmpty)
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Center(
+                              child: Text(
+                                _showFollowedOnly ? 'No trends in followed topics' : 'No trends available',
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        SizedBox(
+                          height: 280,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: filteredTrends.take(8).length,
+                            separatorBuilder: (_, __) => const SizedBox(width: 12),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            itemBuilder: (context, index) {
+                              final item = filteredTrends.take(8).toList()[index];
+                              final isFollowed = _followedTopics.contains(item.title);
+                              final trendScore = item.trendScore.toDouble();
+                              final trendStrength = maxTrendScore > 0 ? (trendScore / maxTrendScore) * 100.0 : 0.0;
+                              final stars = (trendStrength / 20.0).round().clamp(0, 5);
+                              final scoreLabel = trendStrength >= 10 ? trendStrength.toStringAsFixed(0) : trendStrength.toStringAsFixed(1);
+                              final platformLabel = _formatPlatformName(item.sourcePlatform);
+                              final trendLabel = trendStrength >= 75
+                                  ? 'Hot trend'
+                                  : trendStrength >= 40
+                                      ? 'Rising topic'
+                                      : 'Watch closely';
+
+                              return _AnimatedEntryCard(
+                                index: index,
+                                child: SizedBox(
+                                  width: 320,
+                                  child: Stack(
+                                    children: [
+                                      Card(
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(24),
+                                        ),
+                                        elevation: 4,
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(18),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Column(
+                                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                                      children: [
+                                                        Text(
+                                                          item.title,
+                                                          maxLines: 3,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                                fontWeight: FontWeight.bold,
+                                                              ),
+                                                        ),
+                                                        const SizedBox(height: 10),
+                                                        Wrap(
+                                                          spacing: 8,
+                                                          runSpacing: 8,
+                                                          children: [
+                                                            _ChipLabel(
+                                                              label: platformLabel,
+                                                              color: Theme.of(context).colorScheme.primary,
+                                                            ),
+                                                            _ChipLabel(
+                                                              label: trendLabel,
+                                                              color: Theme.of(context).colorScheme.secondary,
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  CircleAvatar(
+                                                    radius: 20,
+                                                    backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                                                    child: Icon(
+                                                      _getPlatformIcon(item.sourcePlatform),
+                                                      color: Theme.of(context).colorScheme.primary,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const Spacer(),
+                                              Text(
+                                                'Trend score',
+                                                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Row(
+                                                children: List.generate(
+                                                  5,
+                                                  (starIndex) => Padding(
+                                                    padding: const EdgeInsets.only(right: 4),
+                                                    child: Icon(
+                                                      starIndex < stars ? Icons.star : Icons.star_border,
+                                                      size: 18,
+                                                      color: starIndex < stars ? const Color(0xFFFF006E) : Colors.grey.shade300,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(height: 14),
+                                              Row(
+                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                children: [
+                                                  Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        '$scoreLabel%',
+                                                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        'Relative trend strength',
+                                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  IconButton(
+                                                    onPressed: () => _toggleFollowTopic(item.title),
+                                                    icon: Icon(
+                                                      isFollowed ? Icons.bookmark : Icons.bookmark_outline,
+                                                      color: isFollowed ? Theme.of(context).colorScheme.secondary : Colors.grey.shade600,
+                                                    ),
+                                                    tooltip: isFollowed ? 'Unfollow' : 'Follow',
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        right: 18,
+                                        top: 18,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.07),
+                                            borderRadius: BorderRadius.circular(14),
+                                          ),
+                                          child: Text(
+                                            '${index + 1}',
+                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          ),
+                      const SizedBox(height: 24),
+                      // Source Distribution Chart
+                      if (topSources.isNotEmpty) ...[
+                        const _SectionHeader(
+                          title: 'Data Distribution',
+                          subtitle: 'Dataset records by source platform',
+                        ),
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: SimpleBarChart(items: topSources),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ],
+                  ),
+                ),
+    );
+  }
+
+  IconData _getPlatformIcon(String platform) {
+    return switch (platform.toLowerCase()) {
+      'youtube' => Icons.play_circle,
+      'google' => Icons.search,
+      'tiktok' => Icons.videocam,
+      'x' || 'twitter' => Icons.message,
+      _ => Icons.link,
+    };
+  }
+
+  String _formatPlatformName(String platform) {
+    final normalized = platform.replaceAll('_', ' ').trim();
+    return normalized.split(' ').map((part) => part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}').join(' ');
+  }
+}
+
+class _ChipLabel extends StatelessWidget {
+  const _ChipLabel({
+    required this.label,
+    required this.color,
+  });
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _AnimatedEntryCard extends StatelessWidget {
+  const _AnimatedEntryCard({
+    required this.index,
+    required this.child,
+  });
+
+  final int index;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: Duration(milliseconds: 400 + (index * 50)),
+      curve: Curves.easeOutCubic,
+      builder: (context, value, child) {
+        return Opacity(
+          opacity: value,
+          child: Transform.translate(
+            offset: Offset(0, 20 * (1 - value)),
+            child: child,
+          ),
+        );
+      },
+      child: child,
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+  });
+
+  final String title;
+  final String value;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 160,
+      child: Card(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.all(10),
+                child: Icon(icon, size: 24, color: Theme.of(context).colorScheme.primary),
+              ),
+              const SizedBox(height: 12),
+              Text(title, style: Theme.of(context).textTheme.bodyMedium),
+              const SizedBox(height: 8),
+              Text(value, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DurationPill extends StatelessWidget {
+  const _DurationPill({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+          const SizedBox(height: 4),
+          Text(value, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold, color: color)),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({
+    required this.title,
+    required this.subtitle,
+    this.action,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                const SizedBox(height: 2),
+                Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+          if (action != null) action!,
+        ],
+      ),
+    );
+  }
+}
