@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.database.db import Base, DB_BOOTSTRAP_ERROR, engine
-from app.routes import admin, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends
+from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends, notifications, follows
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 
@@ -33,7 +33,9 @@ def preload_ai_models():
 
 @app.on_event("startup")
 async def startup_event():
-    await asyncio.to_thread(preload_ai_models)
+    # Skipping AI model preload for faster testing
+    # await asyncio.to_thread(preload_ai_models)
+    pass
 # Configure CORS for Flutter Web & Mobile
 app.add_middleware(
     CORSMiddleware,
@@ -71,6 +73,9 @@ app.include_router(nlp.router)
 app.include_router(recommendation.router)
 app.include_router(trends.router)
 app.include_router(analyze.router)
+app.include_router(notifications.router)
+app.include_router(follows.router)
+app.include_router(admin_scanner.router)
 
 
 @app.get("/", tags=["health"])

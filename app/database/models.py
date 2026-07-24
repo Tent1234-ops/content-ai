@@ -21,6 +21,8 @@ class User(Base):
     contents = relationship("UserContent", back_populates="owner", cascade="all, delete-orphan")
     logs = relationship("SystemLog", back_populates="user")
     configs = relationship("SystemConfig", back_populates="user")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    followed_topics = relationship("FollowedTopic", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserContent(Base):
@@ -174,3 +176,33 @@ class SystemLog(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="logs")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    notification_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    dataset_id = Column(Integer)  # Optional reference to dataset
+    title = Column(String(255), nullable=False)
+    body = Column(Text)
+    message = Column(Text)  # Alternative message field
+    topic = Column(String(100))
+    source_platform = Column(String(50))  # youtube, google_trends, tiktok, etc.
+    trend_score = Column(Float)
+    is_read = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="notifications")
+
+
+class FollowedTopic(Base):
+    __tablename__ = "followed_topics"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    match_type = Column(String(20), nullable=False)  # 'domain' or 'keyword'
+    value = Column(String(255), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="followed_topics")

@@ -47,6 +47,7 @@ from .recommendation import (
     SourceActivityItem,
 )
 from .trends import GoogleTrendItem, GoogleTrendingResponse, YouTubeTrendItem, YouTubeTrendingResponse
+from .notifications import NotificationItem, NotificationsResponse, MarkReadRequest
 
 __all__ = [
     "AdminClusterRunItem",
@@ -103,4 +104,10 @@ __all__ = [
     "UserResponse",
     "YouTubeTrendItem",
     "YouTubeTrendingResponse",
+    "NotificationItem",
+    "NotificationsResponse",
+    "MarkReadRequest",
+    "FollowTopicRequest",
+    "FollowedTopicItem",
+    "FollowedTopicsResponse",
 ]

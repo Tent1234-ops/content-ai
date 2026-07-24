@@ -1,4 +1,4 @@
-from . import admin, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends
+from . import admin, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends, notifications, follows, admin_scanner
 
 __all__ = [
     "admin",
@@ -12,4 +12,7 @@ __all__ = [
     "nlp",
     "recommendation",
     "trends",
+    "notifications",
+    "follows",
+    "admin_scanner",
 ]
