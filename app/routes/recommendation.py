@@ -77,7 +77,7 @@ def recommend_from_content(
     content_id: int,
     source: str = Query(default="youtube", pattern="^(youtube|google)$"),
     profile_limit: int = Query(default=150, ge=10, le=500),
-    _current_user: User = Depends(require_roles("admin", "user")),
+    current_user: User = Depends(require_roles("admin", "user")),
     db: Session = Depends(get_db),
 ):
     result = build_recommendation_from_saved_content(
@@ -85,9 +85,11 @@ def recommend_from_content(
         content_id=content_id,
         source_prefix=source,
         profile_limit=profile_limit,
+        user_id=current_user.user_id,
+        allow_admin=(current_user.role == "admin"),
     )
     if result is None:
-        raise HTTPException(status_code=404, detail="Content not found")
+        raise HTTPException(status_code=404, detail="Content not found or access denied")
     return RecommendationAnalysisResponse.model_validate(result)
 
 

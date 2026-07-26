@@ -36,6 +36,7 @@ from app.services.admin_settings import (
     get_admin_statistics,
     export_config_backup,
     apply_config_from_backup,
+    get_admin_audit_log,
 )
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -282,11 +283,13 @@ def get_admin_dashboard_statistics(
             total_users=stats["total_users"],
             active_users=stats["active_users"],
             total_analyses=stats["total_analyses"],
-            total_saved_ideas=0,  # Can be extended from DB
+            total_saved_ideas=stats.get("total_saved_ideas", 0),
             analyses_by_category=stats["analyses_by_category"],
             most_used_categories=stats["most_used_categories"],
             avg_analyses_per_user=stats["avg_analyses_per_user"],
             trend_data_sources_active=stats["trend_data_sources_active"],
+            last_trend_scan=stats.get("last_trend_scan"),
+            last_config_update=stats.get("last_config_update"),
         )
     except Exception as exc:
         raise HTTPException(
@@ -369,12 +372,12 @@ def get_settings_audit_log(
     (Can be extended to log actual changes to system_configs table)
     """
     try:
+        audit_data = get_admin_audit_log(db, limit=limit)
         return {
             "status": "success",
             "message": "Audit log retrieved",
-            "total_entries": 0,
-            "entries": [],
-            "note": "Audit logging can be extended to track all config changes"
+            "total_entries": audit_data["total_entries"],
+            "entries": audit_data["entries"],
         }
     except Exception as exc:
         raise HTTPException(

@@ -51,6 +51,7 @@ def _ensure_mysql_database() -> None:
 def _ensure_mysql_schema_compat() -> None:
     bootstrap_engine = create_engine(_mysql_database_url(), pool_pre_ping=True)
     with bootstrap_engine.connect() as connection:
+        # Add duration_seconds if missing (older schema compatibility)
         column_exists = connection.execute(
             text(
                 """
@@ -65,6 +66,45 @@ def _ensure_mysql_schema_compat() -> None:
         ).scalar()
         if not column_exists:
             connection.execute(text("ALTER TABLE dataset_contents ADD COLUMN duration_seconds INT NULL"))
+            connection.commit()
+
+        # Increase video_url length for dataset_contents and user_contents to support long trend links
+        for table_name in ["dataset_contents", "user_contents"]:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT CHARACTER_MAXIMUM_LENGTH
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = :schema_name
+                      AND TABLE_NAME = :table_name
+                      AND COLUMN_NAME = 'video_url'
+                    """
+                ),
+                {"schema_name": settings.db_name, "table_name": table_name},
+            ).scalar()
+            if row is not None and row < 1024:
+                connection.execute(
+                    text(f"ALTER TABLE {table_name} MODIFY COLUMN video_url VARCHAR(1024) NULL")
+                )
+                connection.commit()
+
+        # Add updated_at column to system_configs if missing
+        config_updated_exists = connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = :schema_name
+                  AND TABLE_NAME = 'system_configs'
+                  AND COLUMN_NAME = 'updated_at'
+                """
+            ),
+            {"schema_name": settings.db_name},
+        ).scalar()
+        if not config_updated_exists:
+            connection.execute(
+                text("ALTER TABLE system_configs ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+            )
             connection.commit()
     bootstrap_engine.dispose()
 

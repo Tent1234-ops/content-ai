@@ -1,4 +1,5 @@
 from collections import Counter
+from datetime import datetime, timedelta
 from typing import Dict, List
 
 from sqlalchemy import func
@@ -16,9 +17,9 @@ from app.database.models import (
     UserContent,
 )
 from app.services.nlp import filter_tokens, tokenize_text
-from app.services.persistence import save_youtube_trends
+from app.services.persistence import save_google_trends, save_youtube_trends
 from app.services.recommendation import build_dataset_profiles, compare_dataset_profiles
-from app.services.trends import get_youtube_trending
+from app.services.trends import get_google_trending, get_youtube_trending
 
 
 def _safe_scalar(query, default: int = 0) -> int:
@@ -26,6 +27,147 @@ def _safe_scalar(query, default: int = 0) -> int:
     if value is None:
         return default
     return int(value)
+
+
+def _topic_keywords_from_text(text: str) -> list[str]:
+    tokens = filter_tokens(tokenize_text(text))
+    return [token for token in tokens if len(token) > 2]
+
+
+def _normalize_trend_item(item: object) -> dict:
+    if isinstance(item, dict):
+        return item
+    if hasattr(item, "dict") and callable(getattr(item, "dict")):
+        return item.dict()
+    return {}
+
+
+def _build_topic_scores_from_trends(items: list[object]) -> Counter[str]:
+    scores: Counter[str] = Counter()
+    for item in items:
+        data = _normalize_trend_item(item)
+        title = str(data.get("title", "")) or ""
+        category = str(data.get("category", "")) or ""
+        trend_weight = float(data.get("trend_score", 1.0) or 1.0)
+        text = " ".join([title, category]).strip()
+        if not text:
+            continue
+        if trend_weight <= 0:
+            trend_weight = 1.0
+        for token in _topic_keywords_from_text(text):
+            scores[token] += min(trend_weight / 1000.0, 10.0)
+    return scores
+
+
+def _build_item_novelty_score(item: object, historical_counts: Counter[str]) -> tuple[float, int]:
+    data = _normalize_trend_item(item)
+    title = str(data.get("title", "")) or ""
+    category = str(data.get("category", "")) or ""
+    text = " ".join([title, category]).strip()
+
+    if not text:
+        return 0.0, 0
+
+    keywords = _topic_keywords_from_text(text)
+    if not keywords:
+        return 0.0, 0
+
+    novelty = 0.0
+    total_history = 0
+    for keyword in set(keywords):
+        history_count = historical_counts.get(keyword, 0)
+        novelty += 1.0 / (1.0 + history_count)
+        total_history += history_count
+
+    return novelty, total_history
+
+
+def _rank_priority_items(items: list[object], historical_counts: Counter[str], limit: int = 10) -> list[Dict[str, object]]:
+    ranked: list[Dict[str, object]] = []
+    for item in items:
+        data = _normalize_trend_item(item)
+        title = str(data.get("title", "")) or ""
+        if not title:
+            continue
+        category = str(data.get("category", "")) if data.get("category") is not None else None
+        source_platform = data.get("source") or data.get("source_platform")
+        trend_score = float(data.get("trend_score", 0.0) or 0.0)
+        novelty, total_history = _build_item_novelty_score(item, historical_counts)
+        views = int(data.get("views", 0) or 0)
+        likes = int(data.get("likes", 0) or 0)
+        comments = int(data.get("comments", 0) or 0)
+        published_at = data.get("published_at")
+        video_url = data.get("video_url") or None
+
+        priority_score = trend_score + (novelty * 120.0) + min(views / 20000.0, 10.0)
+        ranked.append(
+            {
+                "title": title,
+                "category": category,
+                "source_platform": source_platform,
+                "video_url": video_url,
+                "trend_score": trend_score,
+                "priority_score": round(priority_score, 3),
+                "novelty_score": round(novelty, 3),
+                "views": views,
+                "likes": likes,
+                "comments": comments,
+                "published_at": published_at.isoformat() if hasattr(published_at, "isoformat") else str(published_at) if published_at else None,
+                "history_count": int(total_history),
+            }
+        )
+    ranked.sort(key=lambda item: (-item["priority_score"], -item["trend_score"], item["title"].lower()))
+    return [
+        {
+            "title": item["title"],
+            "category": item["category"],
+            "source_platform": item["source_platform"],
+            "video_url": item["video_url"],
+            "trend_score": item["trend_score"],
+            "priority_score": item["priority_score"],
+            "novelty_score": item["novelty_score"],
+            "views": item["views"],
+            "likes": item["likes"],
+            "comments": item["comments"],
+            "published_at": item["published_at"],
+        }
+        for item in ranked[:limit]
+    ]
+
+
+def _build_historical_topic_counts(db: Session, days: int = 30) -> Counter[str]:
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    rows = (
+        db.query(DatasetContent.title, DatasetContent.transcript, DatasetContent.category)
+        .filter(DatasetContent.created_at >= cutoff)
+        .all()
+    )
+    counts: Counter[str] = Counter()
+    for title, transcript, category in rows:
+        text = " ".join(part for part in [title or "", transcript or "", category or ""] if part).strip()
+        for token in _topic_keywords_from_text(text):
+            counts[token] += 1
+    return counts
+
+
+def _rank_priority_topics(live_scores: Counter[str], historical_counts: Counter[str], limit: int = 10) -> list[Dict[str, object]]:
+    ranked: list[Dict[str, object]] = []
+    for keyword, score in live_scores.items():
+        history = historical_counts.get(keyword, 0)
+        priority_score = score + (history * 0.05)
+        ranked.append({"keyword": keyword, "score": round(priority_score, 3), "history_count": int(history)})
+    ranked.sort(key=lambda item: (-item["score"], item["keyword"]))
+    return [{"keyword": item["keyword"], "score": item["score"]} for item in ranked[:limit]]
+
+
+def _rank_emerging_topics(live_scores: Counter[str], historical_counts: Counter[str], limit: int = 10) -> list[Dict[str, object]]:
+    ranked: list[Dict[str, object]] = []
+    for keyword, score in live_scores.items():
+        history = historical_counts.get(keyword, 0)
+        emerging_score = score * (2.0 / (1.0 + history))
+        ranked.append({"keyword": keyword, "score": round(emerging_score, 3), "history_count": int(history)})
+    ranked.sort(key=lambda item: (-item["score"], item["history_count"], item["keyword"]))
+    return [{"keyword": item["keyword"], "score": item["score"]} for item in ranked[:limit]]
 
 
 def build_dashboard_overview(
@@ -59,6 +201,9 @@ def build_dashboard_overview(
     source_distribution: List[Dict[str, object]] = []
     platform_summaries: List[Dict[str, object]] = []
     platform_comparison: List[Dict[str, object]] = []
+    priority_topics: List[Dict[str, object]] = []
+    emerging_topics: List[Dict[str, object]] = []
+    priority_items: List[Dict[str, object]] = []
 
     # Sync live YouTube trends into the saved dataset content whenever possible.
     trend_source_mode, trend_items = get_youtube_trending(region=region, limit=trend_limit, mode=trend_mode)
@@ -66,7 +211,14 @@ def build_dashboard_overview(
         try:
             save_youtube_trends(db=db, items=trend_items, user_id=current_user.user_id, source_mode=trend_source_mode)
         except Exception:
-            # We do not want dashboard rendering to fail because sync failed.
+            pass
+
+    # Sync live Google Trends into the saved dataset content whenever possible.
+    google_source_mode, google_items = get_google_trending(region=region, limit=trend_limit, mode=trend_mode)
+    if google_source_mode == "live" and google_items:
+        try:
+            save_google_trends(db=db, items=google_items, user_id=current_user.user_id, source_mode=google_source_mode)
+        except Exception:
             pass
 
     try:
@@ -190,6 +342,12 @@ def build_dashboard_overview(
             }
             for item in comparison["comparisons"]
         ]
+
+        live_topic_scores = _build_topic_scores_from_trends(trend_items + google_items)
+        historical_counts = _build_historical_topic_counts(db)
+        priority_topics = _rank_priority_topics(live_topic_scores, historical_counts, limit=10)
+        emerging_topics = _rank_emerging_topics(live_topic_scores, historical_counts, limit=10)
+        priority_items = _rank_priority_items(trend_items + google_items, historical_counts, limit=trend_limit)
     except SQLAlchemyError as exc:
         db_status = "degraded"
         db_error = exc.__class__.__name__
@@ -210,10 +368,60 @@ def build_dashboard_overview(
         "source_distribution": source_distribution,
         "platform_summaries": platform_summaries,
         "platform_comparison": platform_comparison,
+        "priority_topics": priority_topics,
+        "emerging_topics": emerging_topics,
+        "priority_items": priority_items,
         "youtube_trends": {
             "mode": trend_source_mode,
             "region": region,
             "total": len(trend_items),
             "items": trend_items,
+        },
+        "google_trends": {
+            "mode": google_source_mode,
+            "region": region,
+            "total": len(google_items),
+            "items": google_items,
+        },
+    }
+
+
+def build_dashboard_topic_insights(
+    db: Session,
+    current_user: User,
+    region: str,
+    trend_mode: str,
+    trend_limit: int,
+) -> Dict[str, object]:
+    trend_source_mode, trend_items = get_youtube_trending(region=region, limit=trend_limit, mode=trend_mode)
+    if trend_source_mode == "live" and trend_items:
+        try:
+            save_youtube_trends(db=db, items=trend_items, user_id=current_user.user_id, source_mode=trend_source_mode)
+        except Exception:
+            pass
+
+    google_source_mode, google_items = get_google_trending(region=region, limit=trend_limit, mode=trend_mode)
+    if google_source_mode == "live" and google_items:
+        try:
+            save_google_trends(db=db, items=google_items, user_id=current_user.user_id, source_mode=google_source_mode)
+        except Exception:
+            pass
+
+    live_topic_scores = _build_topic_scores_from_trends(trend_items + google_items)
+    historical_counts = _build_historical_topic_counts(db)
+    return {
+        "priority_items": _rank_priority_items(trend_items + google_items, historical_counts, limit=trend_limit),
+        "emerging_topics": _rank_emerging_topics(live_topic_scores, historical_counts, limit=trend_limit),
+        "youtube_trends": {
+            "mode": trend_source_mode,
+            "region": region,
+            "total": len(trend_items),
+            "items": trend_items,
+        },
+        "google_trends": {
+            "mode": google_source_mode,
+            "region": region,
+            "total": len(google_items),
+            "items": google_items,
         },
     }

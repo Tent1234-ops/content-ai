@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, timedelta
 from statistics import median
 from typing import Dict, Iterable, List
 
 from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent, UserContent
+from app.services.admin_settings import get_admin_config
 from app.services.classification import classify_text_domain
 from app.services.nlp import filter_tokens, normalize_text_for_nlp, run_nlp_pipeline, tokenize_text
 from app.services.pipeline.core import (
@@ -41,16 +43,21 @@ def _weighted_increment(counter: Dict[str, float], key: str, weight: float) -> N
     counter[key] = counter.get(key, 0.0) + weight
 
 
-def analyze_text_snapshot(text: str, title: str | None = None) -> Dict[str, object]:
+def analyze_text_snapshot(
+    text: str,
+    title: str | None = None,
+    max_keywords: int = 12,
+    hook_duration: int = 60,
+) -> Dict[str, object]:
     merged_text = " ".join(part for part in [title or "", text or ""] if part).strip()
     merged_text = normalize_asr_terms(merged_text)
     features = extract_features(merged_text)
     detected = detect_domain(merged_text)
     domain = infer_domain_from_features(features, detected)
 
-    nlp_result = run_nlp_pipeline(merged_text, max_keywords=12)
+    nlp_result = run_nlp_pipeline(merged_text, max_keywords=max_keywords)
     ranked_keywords = [
-        {"keyword": item["keyword"], "score": float(item["score"])}
+        {"keyword": item["keyword"], "score": float(item["score"]) }
         for item in nlp_result.get("top_keywords", [])
     ]
     existing_keywords = {item["keyword"] for item in ranked_keywords}
@@ -67,7 +74,8 @@ def analyze_text_snapshot(text: str, title: str | None = None) -> Dict[str, obje
     dimension_status = build_dimension_status(domain, comparison_dimensions)
 
     tokens = filter_tokens(tokenize_text(normalize_text_for_nlp(merged_text)))
-    hook_terms = tokens[:8]
+    hook_term_limit = min(12, max(4, int(hook_duration / 15)))
+    hook_terms = tokens[:hook_term_limit]
     return {
         "domain": domain,
         "features": features,
@@ -120,9 +128,17 @@ def build_dataset_profiles(
     source_prefix: str = "youtube",
     limit: int = 150,
 ) -> List[Dict[str, object]]:
+    admin_config = get_admin_config(db)
+    if source_prefix == "youtube" and not admin_config.enable_youtube_trending:
+        return []
+    if source_prefix == "google" and not admin_config.enable_google_trends:
+        return []
+
+    min_date = datetime.utcnow() - timedelta(days=admin_config.analysis_time_range_days)
     rows = (
         db.query(DatasetContent)
         .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
+        .filter(DatasetContent.created_at >= min_date)
         .order_by(DatasetContent.trend_score.desc(), DatasetContent.views.desc(), DatasetContent.created_at.desc())
         .limit(limit)
         .all()
@@ -138,7 +154,12 @@ def build_dataset_profiles(
         base_text = " ".join(part for part in [row.title or "", row.transcript or "", row.category or ""] if part).strip()
         if not base_text:
             continue
-        snapshot = analyze_text_snapshot(base_text, row.title)
+        snapshot = analyze_text_snapshot(
+            base_text,
+            row.title,
+            max_keywords=admin_config.max_keywords_display,
+            hook_duration=admin_config.hook_analysis_duration,
+        )
         domain = str(snapshot["domain"])
         weight = 1.0 + min(float(row.trend_score or 0.0) / 500000.0, 5.0)
         grouped_rows[domain].append({"row": row, "snapshot": snapshot, "weight": weight})
@@ -218,7 +239,13 @@ def build_recommendation_from_text(
     source_prefix: str = "youtube",
     profile_limit: int = 150,
 ) -> Dict[str, object]:
-    user_snapshot = analyze_text_snapshot(text, title)
+    admin_config = get_admin_config(db)
+    user_snapshot = analyze_text_snapshot(
+        text,
+        title,
+        max_keywords=admin_config.max_keywords_display,
+        hook_duration=admin_config.hook_analysis_duration,
+    )
     classification = classify_text_domain(
         db,
         title=title,
@@ -320,8 +347,14 @@ def build_recommendation_from_saved_content(
     content_id: int,
     source_prefix: str = "youtube",
     profile_limit: int = 150,
+    user_id: int | None = None,
+    allow_admin: bool = False,
 ) -> Dict[str, object] | None:
-    content = db.query(UserContent).filter(UserContent.content_id == content_id).first()
+    query = db.query(UserContent).filter(UserContent.content_id == content_id)
+    if user_id is not None and not allow_admin:
+        query = query.filter(UserContent.user_id == user_id)
+
+    content = query.first()
     if content is None:
         return None
     return build_recommendation_from_text(

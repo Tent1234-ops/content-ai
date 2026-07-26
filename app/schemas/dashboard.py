@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
-from app.schemas.trends import YouTubeTrendItem
+from app.schemas.trends import GoogleTrendItem, YouTubeTrendItem
 
 
 class DashboardMetricSummary(BaseModel):
@@ -34,6 +34,13 @@ class DashboardYouTubeTrends(BaseModel):
     region: str
     total: int
     items: List[YouTubeTrendItem]
+
+
+class DashboardGoogleTrends(BaseModel):
+    mode: str
+    region: str
+    total: int
+    items: List[GoogleTrendItem]
 
 
 class DashboardTopTrendItem(BaseModel):
@@ -74,6 +81,32 @@ class DashboardPlatformComparisonItem(BaseModel):
     google_duration: str
 
 
+class DashboardTopicItem(BaseModel):
+    keyword: str
+    score: float
+
+
+class DashboardPriorityItem(BaseModel):
+    title: str
+    category: Optional[str] = None
+    source_platform: Optional[str] = None
+    video_url: Optional[str] = None
+    trend_score: float
+    priority_score: float
+    novelty_score: float
+    views: int
+    likes: int
+    comments: int
+    published_at: Optional[str] = None
+
+
+class DashboardEmergingTopicsResponse(BaseModel):
+    priority_items: List[DashboardPriorityItem]
+    emerging_topics: List[DashboardTopicItem]
+    youtube_trends: DashboardYouTubeTrends
+    google_trends: DashboardGoogleTrends
+
+
 class DashboardOverviewResponse(BaseModel):
     db_status: str
     db_error: Optional[str] = None
@@ -87,4 +120,8 @@ class DashboardOverviewResponse(BaseModel):
     source_distribution: List[DashboardSourceItem]
     platform_summaries: List[DashboardPlatformSummary]
     platform_comparison: List[DashboardPlatformComparisonItem]
+    priority_topics: List[DashboardTopicItem]
+    emerging_topics: List[DashboardTopicItem]
+    priority_items: List[DashboardPriorityItem]
     youtube_trends: DashboardYouTubeTrends
+    google_trends: DashboardGoogleTrends

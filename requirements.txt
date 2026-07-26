@@ -18,4 +18,5 @@ scenedetect
 keybert
 scikit-learn
 openai
+json5
 spacy

@@ -8,6 +8,8 @@ from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree as ET
 
+import json5
+
 from app.core.config import settings
 from app.schemas.trends import GoogleTrendItem, YouTubeCategoryItem, YouTubeTrendItem
 
@@ -246,6 +248,28 @@ def _parse_google_traffic(traffic_text: str | None) -> int:
         return 0
 
 
+_GOOGLE_TRENDS_REGION_MAP = {
+    "US": "united_states",
+    "TH": "thailand",
+    "GB": "united_kingdom",
+    "IN": "india",
+    "CA": "canada",
+    "AU": "australia",
+    "SG": "singapore",
+    "ID": "indonesia",
+    "MX": "mexico",
+    "BR": "brazil",
+    "JP": "japan",
+    "DE": "germany",
+    "FR": "france",
+    "ZA": "south_africa",
+}
+
+
+def _normalize_google_region(region: str) -> str:
+    return _GOOGLE_TRENDS_REGION_MAP.get(region.upper(), region.lower())
+
+
 def _live_youtube_categories(region: str) -> List[YouTubeCategoryItem]:
     if not settings.youtube_api_key:
         raise ValueError("Missing YOUTUBE_API_KEY")
@@ -386,42 +410,54 @@ def _live_youtube_trending_web_fallback(
 
 
 def _live_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
-    url = f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={region.upper()}"
-    with urlopen(url, timeout=20) as response:
-        payload = response.read().decode("utf-8")
+    try:
+        url = f"https://trends.google.com/trends/trendingsearches/daily?geo={region.upper()}"
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(request, timeout=20) as response:
+            page_text = response.read().decode("utf-8", errors="replace")
 
-    root = ET.fromstring(payload)
-    ns = {"ht": "https://trends.google.com/trends/trendingsearches/daily/rss"}
-    items: List[GoogleTrendItem] = []
-    for item in root.findall("./channel/item")[:limit]:
-        title = item.findtext("title", default="")
-        query = item.findtext("title", default="")
-        published_raw = item.findtext("pubDate")
-        published_at = parsedate_to_datetime(published_raw) if published_raw else None
-        traffic_text = item.findtext("ht:approx_traffic", namespaces=ns)
-        picture = item.findtext("ht:picture", namespaces=ns)
-        news_url = item.findtext("ht:news_item_url", namespaces=ns)
-        approx_traffic = _parse_google_traffic(traffic_text)
-        video_url = news_url or (
-            f"https://trends.google.com/trends/explore?q={quote_plus(query)}&geo={region.upper()}"
-        )
-        items.append(
-            GoogleTrendItem(
-                title=title,
-                query=query,
-                category=None,
-                published_at=published_at,
-                video_url=video_url,
-                thumbnail_url=picture,
-                views=0,
-                likes=0,
-                comments=0,
-                trend_score=_compute_google_trend_score(approx_traffic),
-                source="google_trends_live",
-                traffic_text=traffic_text,
-            )
-        )
-    return items
+        blocks = re.findall(r"AF_initDataCallback\((\{.*?\})\);", page_text, flags=re.S)
+        for raw_block in blocks:
+            try:
+                block = json5.loads(raw_block)
+            except Exception:
+                continue
+            if block.get("key") != "ds:0":
+                continue
+            data = block.get("data")
+            if not isinstance(data, list) or len(data) < 2 or not isinstance(data[1], list):
+                continue
+            items: List[GoogleTrendItem] = []
+            for index, entry in enumerate(data[1][:limit]):
+                if not isinstance(entry, list) or not entry:
+                    continue
+                title = str(entry[0]) if entry[0] is not None else ""
+                country = str(entry[2]) if len(entry) > 2 and entry[2] is not None else None
+                traffic = None
+                if len(entry) > 6 and isinstance(entry[6], int):
+                    traffic = entry[6]
+
+                items.append(
+                    GoogleTrendItem(
+                        title=title,
+                        query=title,
+                        category=country or "Search",
+                        published_at=datetime.utcnow(),
+                        video_url=f"https://trends.google.com/trends/explore?q={quote_plus(title)}&geo={region.upper()}",
+                        thumbnail_url=None,
+                        views=0,
+                        likes=0,
+                        comments=0,
+                        trend_score=float(traffic if traffic is not None else max(limit - index, 1)),
+                        source="google_trends_live",
+                        traffic_text=str(traffic) if traffic is not None else None,
+                    )
+                )
+            if items:
+                return items
+    except Exception:
+        pass
+    return _mock_google_trending(region, limit)
 
 
 def get_youtube_categories(region: str, mode: str) -> tuple[str, List[YouTubeCategoryItem]]:

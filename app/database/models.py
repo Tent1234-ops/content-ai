@@ -31,7 +31,7 @@ class UserContent(Base):
     content_id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     title = Column(String(255), nullable=False)
-    video_url = Column(String(255))
+    video_url = Column(String(1024))
     transcript = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -78,7 +78,7 @@ class DatasetContent(Base):
 
     dataset_id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False)
-    video_url = Column(String(255))
+    video_url = Column(String(1024))
     transcript = Column(Text)
     category = Column(String(100))
     source_platform = Column(String(50), nullable=False, default="youtube")
@@ -160,7 +160,14 @@ class SystemConfig(Base):
     max_keywords = Column(Integer, nullable=False, default=10)
     hook_duration = Column(Integer, nullable=False, default=60)
     process_interval = Column(Integer, nullable=False, default=24)
+    notification_batch_size = Column(Integer, nullable=False, default=50)
+    youtube_region = Column(String(2), nullable=False, default="TH")
+    google_region = Column(String(2), nullable=False, default="TH")
+    enable_youtube_trending = Column(Boolean, nullable=False, default=True)
+    enable_google_trends = Column(Boolean, nullable=False, default=True)
+    auto_scan_interval_hours = Column(Integer, nullable=False, default=6)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="configs")
 
@@ -183,14 +190,13 @@ class Notification(Base):
 
     notification_id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    dataset_id = Column(Integer)  # Optional reference to dataset
     title = Column(String(255), nullable=False)
     body = Column(Text)
-    message = Column(Text)  # Alternative message field
-    topic = Column(String(100))
-    source_platform = Column(String(50))  # youtube, google_trends, tiktok, etc.
-    trend_score = Column(Float)
+    link = Column(String(255))
+    type = Column(String(50), nullable=False, default="system")
+    payload = Column(Text)  # optional JSON payload
     is_read = Column(Boolean, nullable=False, default=False)
+    delivered_via_ws = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="notifications")
