@@ -7,6 +7,8 @@ import numpy as np
 from app.services.pipeline.domain_rules import (
     detect_domain as shared_detect_domain,
     infer_domain_from_features as shared_infer_domain_from_features,
+    DOMAIN_HINTS as SHARED_DOMAIN_HINTS,
+    DOMAIN_BASE as SHARED_DOMAIN_BASE,
 )
 from utils.text_clean import clean_text
 
@@ -116,11 +118,26 @@ def remove_asr_noise(text: str) -> str:
     return normalize_space(cleaned)
 
 
-def normalize_asr_terms(text: str) -> str:
+import difflib
+
+# Optional Thai NLP helpers
+try:
+    from pythainlp.tokenize import word_tokenize as pythai_word_tokenize
+    from pythainlp.spell import correct as pythai_correct
+except Exception:
+    pythai_word_tokenize = None
+    pythai_correct = None
+
+
+def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
     # Canonicalize common ASR mistakes before feature extraction.
     replacements = {
         "เกรมมิ้ง": "เกมมิ่ง",
         "เกรมมิ่ง": "เกมมิ่ง",
+        "เคมมิง": "เกมมิ่ง",
+        "เคมมิ้ง": "เกมมิ่ง",
+        "เคมมิ่ง": "เกมมิ่ง",
+        "gaming": "เกมมิ่ง",
         "เมาส": "เมาส์",
         "พอสวอป": "hot swap",
         "ฮอตสวอป": "hot swap",
@@ -144,9 +161,81 @@ def normalize_asr_terms(text: str) -> str:
         "e g": "eg",
         "aem": "iem",
     }
-    normalized = text
+    normalized = text or ""
     for wrong, right in replacements.items():
         normalized = normalized.replace(wrong, right)
+
+    # Build candidate token set from domain hints + base keywords + brand names
+    candidates = set()
+    for k, v in {**SHARED_DOMAIN_HINTS, **SHARED_DOMAIN_BASE}.items():
+        for item in v:
+            if item:
+                for tok in re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", item.lower()):
+                    candidates.add(tok)
+    # include phrases too
+    for k, v in {**SHARED_DOMAIN_HINTS, **SHARED_DOMAIN_BASE}.items():
+        for item in v:
+            candidates.add(item.lower())
+    # include brand tokens
+    try:
+        for b in BRANDS:
+            for tok in re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", b.lower()):
+                candidates.add(tok)
+            candidates.add(b.lower())
+    except Exception:
+        pass
+
+    # Fuzzy-correct likely mis-heard tokens against candidates
+    try:
+        cutoff = 0.78 if not aggressive else 0.68
+        tokens = re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", normalized)
+        changed = False
+        for tok in tokens:
+            low = tok.lower()
+            if low in candidates:
+                continue
+            match = difflib.get_close_matches(low, list(candidates), n=1, cutoff=cutoff)
+            if match:
+                normalized = re.sub(rf"(?<![\w-]){re.escape(tok)}(?![\w-])", match[0], normalized, flags=re.IGNORECASE)
+                changed = True
+                continue
+            # Try suffix matching
+            for cand in candidates:
+                if len(cand) < 3:
+                    continue
+                suffix = low[-len(cand):]
+                ratio = difflib.SequenceMatcher(None, suffix, cand).ratio()
+                if ratio >= cutoff:
+                    def _replace_suffix(m):
+                        s = m.group(0)
+                        return s[: -len(suffix)] + cand
+                    normalized = re.sub(rf"(?<![\w-]){re.escape(tok)}(?![\w-])", _replace_suffix, normalized, flags=re.IGNORECASE)
+                    changed = True
+                    break
+        if changed:
+            normalized = normalize_space(normalized)
+    except Exception:
+        pass
+
+    # If pythainlp is available, run a contextual correction pass for Thai tokens
+    try:
+        if pythai_word_tokenize and pythai_correct:
+            # tokenize into Thai/Latin tokens preserving ordering
+            tokens = re.findall(r"[\u0E00-\u0E7Fa-zA-Z0-9\-]+|\s+|\S", normalized)
+            rebuilt = []
+            for t in tokens:
+                if re.search(r"[\u0E00-\u0E7F]", t):
+                    try:
+                        corrected = pythai_correct(t)
+                    except Exception:
+                        corrected = t
+                    rebuilt.append(corrected)
+                else:
+                    rebuilt.append(t)
+            normalized = normalize_space("".join(rebuilt))
+    except Exception:
+        pass
+
     return normalize_space(normalized)
 
 
@@ -390,22 +479,51 @@ def infer_domain_from_features(features: Dict[str, object], detected_domain: str
 # Product and Features
 # =========================
 BRANDS = [
+    # Common gaming/peripheral brands
     "logitech",
     "razer",
     "steelseries",
     "hyperx",
+    "corsair",
+    "cooler master",
+    "msi",
+    "asus",
+    "lenovo",
+    "dell",
     "keychron",
     "akko",
     "royal kludge",
-    "corsair",
     "fantech",
     "ajazz",
     "vxe",
     "darkenfire",
-    "edifier",
-    "simgot",
+    # Audio-focused brands
     "sony",
     "bose",
+    "sennheiser",
+    "shure",
+    "beyerdynamic",
+    "jbl",
+    "marshall",
+    "edifier",
+    "anker",
+    "soundcore",
+    "anker soundcore",
+    "simgot",
+    "fiio",
+    "ifi",
+    "audeze",
+    "meze",
+    "kz",
+    "blon",
+    "truthear",
+    "qcy",
+    "xiaomi",
+    "realme",
+    "oneplus",
+    "huawei",
+    "samsung",
+    "apple",
 ]
 
 
@@ -1984,7 +2102,22 @@ def analyze_video(video_path: str):
     stt = transcribe_with_meta("temp.wav")
     transcript = stt.get("text", "")
 
-    raw = normalize_asr_terms(remove_asr_noise(transcript))
+    # Decide whether to use aggressive correction based on segment-level confidence
+    avg_no_speech = stt.get("avg_no_speech_prob")
+    max_no_speech = None
+    try:
+        segments = stt.get("segments") or []
+        max_no_speech = max((s.get("no_speech_prob") for s in segments if s.get("no_speech_prob") is not None), default=None)
+    except Exception:
+        max_no_speech = None
+
+    aggressive = False
+    if avg_no_speech is not None and avg_no_speech > 0.35:
+        aggressive = True
+    if max_no_speech is not None and max_no_speech > 0.5:
+        aggressive = True
+
+    raw = normalize_asr_terms(remove_asr_noise(transcript), aggressive=aggressive)
     clean = clean_text(raw)
 
     visual_text, captions = visual_context(video_path)
