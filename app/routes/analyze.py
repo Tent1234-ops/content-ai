@@ -34,35 +34,41 @@ async def analyze(
         shutil.copyfileobj(file.file, buffer)
 
     # =========================
-    # 2. run AI ONLY
+    # 2. run AI as background job (enqueue)
     # =========================
-    result = analyze_video(file_path)
-    transcript = str(result.get("transcript") or "")
-    analysis = result.get("analysis", {})
-    classification = classify_text_domain(
-        db,
-        title=file.filename,
-        text=transcript or file.filename,
-        source_prefix="youtube",
-        profile_limit=150,
-    )
-    selected_domain = str(analysis.get("domain") or "general")
-    if float(classification.get("confidence", 0.0)) >= 0.45:
-        selected_domain = str(classification["domain"])
-    hook_terms = run_nlp_pipeline(transcript or file.filename, 8).get("filtered_tokens", [])[:8]
-    recommendation = build_recommendation_from_analysis_data(
-        db,
-        domain=selected_domain,
-        user_keywords=[item["keyword"] for item in analysis.get("top_keywords", [])],
-        dimension_status=analysis.get("dimension_status", []),
-        hook_terms=hook_terms,
-        source_prefix="youtube",
-        profile_limit=150,
-    )
-    recommendation["classification"] = classification
-    result["recommendation"] = recommendation
+    from app.services.jobs import enqueue
+    from app.services.ai_pipeline import analyze_video as pipeline_analyze
 
-    return result
+    def _job(file_path_local: str, user_id: int = None):
+        res = pipeline_analyze(file_path_local)
+        transcript = str(res.get("transcript") or "")
+        analysis = res.get("analysis", {})
+        classification = classify_text_domain(
+            db,
+            title=file.filename,
+            text=transcript or file.filename,
+            source_prefix="youtube",
+            profile_limit=150,
+        )
+        selected_domain = str(analysis.get("domain") or "general")
+        if float(classification.get("confidence", 0.0)) >= 0.45:
+            selected_domain = str(classification["domain"])
+        hook_terms = run_nlp_pipeline(transcript or file.filename, 8).get("filtered_tokens", [])[:8]
+        recommendation = build_recommendation_from_analysis_data(
+            db,
+            domain=selected_domain,
+            user_keywords=[item["keyword"] for item in analysis.get("top_keywords", [])],
+            dimension_status=analysis.get("dimension_status", []),
+            hook_terms=hook_terms,
+            source_prefix="youtube",
+            profile_limit=150,
+        )
+        recommendation["classification"] = classification
+        res["recommendation"] = recommendation
+        return res
+
+    job_id = enqueue(_job, file_path, _current_user.user_id if hasattr(_current_user, 'user_id') else None)
+    return {"job_id": job_id}
 
 
 @router.post("/analyze/save")
@@ -78,48 +84,55 @@ async def analyze_and_save(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    print(f"[analyze/save] saved file to {file_path}, starting analysis", flush=True)
-    result = analyze_video(file_path)
-    print(f"[analyze/save] analysis completed for {file.filename}", flush=True)
-    transcript = str(result.get("transcript") or "")
-    nlp_result = run_nlp_pipeline(transcript or file.filename, 10)
-    analysis = result.get("analysis", {})
-    classification = classify_text_domain(
-        db,
-        title=file.filename,
-        text=transcript or file.filename,
-        source_prefix="youtube",
-        profile_limit=150,
-    )
-    selected_domain = str(analysis.get("domain") or "general")
-    if float(classification.get("confidence", 0.0)) >= 0.45:
-        selected_domain = str(classification["domain"])
-    recommendation = build_recommendation_from_analysis_data(
-        db,
-        domain=selected_domain,
-        user_keywords=[item["keyword"] for item in analysis.get("top_keywords", [])] or [item["keyword"] for item in nlp_result.get("top_keywords", [])],
-        dimension_status=analysis.get("dimension_status", []),
-        hook_terms=nlp_result.get("filtered_tokens", [])[:8],
-        source_prefix="youtube",
-        profile_limit=150,
-    )
-    recommendation["classification"] = classification
-    saved = save_video_analysis_result(
-        db,
-        user=current_user,
-        filename=file.filename,
-        file_path=file_path,
-        transcript=transcript,
-        analysis_payload=result,
-        nlp_result=nlp_result,
-        recommendation_payload=recommendation,
-    )
-    return {
-        "content_id": saved["content_id"],
-        "saved_keywords": saved["saved_keywords"],
-        "recommended_keywords": saved["recommended_keywords"],
-        "recommended_duration": saved["recommended_duration"],
-        "recommendation": recommendation,
-        "analysis": result,
-        "nlp_result": nlp_result,
-    }
+    print(f"[analyze/save] saved file to {file_path}, enqueueing analysis+save job", flush=True)
+
+    from app.services.jobs import enqueue
+    from app.services.ai_pipeline import analyze_video as pipeline_analyze
+
+    def _job_save(file_path_local: str, user_id_local: int):
+        res = pipeline_analyze(file_path_local)
+        transcript = str(res.get("transcript") or "")
+        nlp_result = run_nlp_pipeline(transcript or file.filename, 10)
+        analysis = res.get("analysis", {})
+        classification = classify_text_domain(
+            db,
+            title=file.filename,
+            text=transcript or file.filename,
+            source_prefix="youtube",
+            profile_limit=150,
+        )
+        selected_domain = str(analysis.get("domain") or "general")
+        if float(classification.get("confidence", 0.0)) >= 0.45:
+            selected_domain = str(classification["domain"])
+        recommendation = build_recommendation_from_analysis_data(
+            db,
+            domain=selected_domain,
+            user_keywords=[item["keyword"] for item in analysis.get("top_keywords", [])] or [item["keyword"] for item in nlp_result.get("top_keywords", [])],
+            dimension_status=analysis.get("dimension_status", []),
+            hook_terms=nlp_result.get("filtered_tokens", [])[:8],
+            source_prefix="youtube",
+            profile_limit=150,
+        )
+        recommendation["classification"] = classification
+        saved = save_video_analysis_result(
+            db,
+            user=current_user,
+            filename=file.filename,
+            file_path=file_path_local,
+            transcript=transcript,
+            analysis_payload=res,
+            nlp_result=nlp_result,
+            recommendation_payload=recommendation,
+        )
+        return {
+            "content_id": saved["content_id"],
+            "saved_keywords": saved["saved_keywords"],
+            "recommended_keywords": saved["recommended_keywords"],
+            "recommended_duration": saved["recommended_duration"],
+            "recommendation": recommendation,
+            "analysis": res,
+            "nlp_result": nlp_result,
+        }
+
+    job_id = enqueue(_job_save, file_path, current_user.user_id if hasattr(current_user, 'user_id') else None)
+    return {"job_id": job_id}

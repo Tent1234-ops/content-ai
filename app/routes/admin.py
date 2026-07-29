@@ -496,6 +496,72 @@ def get_admin_sources(
             raise HTTPException(status_code=500, detail=f"Error retrieving sources: {str(exc)}")
 
 
+# ---------------------------------------------------------------------------
+# Admin: Lexicon management (brands, models)
+# ---------------------------------------------------------------------------
+@router.get("/lexicon", tags=["admin-settings"])
+def get_lexicon(
+            _current_user: User = Depends(require_roles("admin")),
+):
+            from app.services.lexicon import load_lexicon
+
+            try:
+                return {"status": "ok", "lexicon": load_lexicon()}
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Error loading lexicon: {str(exc)}")
+
+
+class LexiconUpdate(BaseModel):
+            brands: list[str] | None = None
+            models: list[str] | None = None
+
+
+@router.put("/lexicon", tags=["admin-settings"])
+def update_lexicon(
+            payload: LexiconUpdate,
+            _current_user: User = Depends(require_roles("admin")),
+):
+            from app.services.lexicon import save_lexicon
+
+            try:
+                data = {"brands": payload.brands or [], "models": payload.models or []}
+                saved = save_lexicon(data)
+                return {"status": "ok", "lexicon": saved}
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Error saving lexicon: {str(exc)}")
+
+
+@router.post("/lexicon/brands", tags=["admin-settings"])
+def add_lexicon_brand(
+            item: dict,
+            _current_user: User = Depends(require_roles("admin")),
+):
+            from app.services.lexicon import add_brand
+            b = item.get("brand") or item.get("name")
+            if not b:
+                raise HTTPException(status_code=400, detail="brand is required")
+            try:
+                saved = add_brand(b)
+                return {"status": "ok", "lexicon": saved}
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Error adding brand: {str(exc)}")
+
+
+@router.delete("/lexicon/brands", tags=["admin-settings"])
+def remove_lexicon_brand(
+            brand: str | None = None,
+            _current_user: User = Depends(require_roles("admin")),
+):
+            from app.services.lexicon import remove_brand
+            if not brand:
+                raise HTTPException(status_code=400, detail="brand query param required")
+            try:
+                saved = remove_brand(brand)
+                return {"status": "ok", "lexicon": saved}
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Error removing brand: {str(exc)}")
+
+
 @router.put("/sources/{source_name}", tags=["admin-settings"])
 def update_admin_source(
         source_name: str,

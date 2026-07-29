@@ -76,6 +76,9 @@ app.include_router(analyze.router)
 app.include_router(notifications.router)
 app.include_router(follows.router)
 app.include_router(admin_scanner.router)
+# jobs router for background job status
+from app.routes import jobs
+app.include_router(jobs.router)
 
 
 @app.get("/", tags=["health"])

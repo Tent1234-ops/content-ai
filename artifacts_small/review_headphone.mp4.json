@@ -1,0 +1,149 @@
+{
+  "transcript": "หูฟังเคมมิงที่โคตเทป แต่ราคาโคตจะไม่แพง ผมยกให้ตัวนี้เลย คือไอ้หูฟังเทปตัวเนี่ยไม่เชื่อผมโอ้ยคนเดียวนะเว้ย ขนาดเสียงหูฟังอย่างพี่พูนี่ยังบอกว่าดีเลย และราคาของมันเนี่ยถ้าร่วมโคตส่วนรถเนี่ยราคาไม่ถึง 2,000 ด้วยซะ อันนี้คือ Simgod EG 280 เป็นหูฟังที่คุ้มค่าสำหรับสายเล่นเกมมากๆ นี่มีแดกหางหนูมาให้ด้วย จะไปต่อใช้เล่นเกมมันโทษสับมือถือก็ได้ แล้วเป็นหูฟัง IEM ที่มีมายโคโฟต์มาให้ในตัวด้วย ซึ่งปกติหูฟัง IEM จะไม่ค่อยให้อะไรแบบนี้มา แล้วก็ตัวสายในยาว 1.7m แล้วก็มี application สำหรับปลับแต่งหูฟังด้วย",
+  "analysis": {
+    "title": "หูฟังเกมมิ่งที่โคตเทป แต่ราคาโคตจะไม่แพง ผมยกให้ตัวนี้เลย คือไอ้หูฟังเทปตัวเนี่ยไม่เชื่อผมโอ้ยคนเดียวนะเว้ย ขนาดเสียงหูฟังอย่างพี่พูนี่ยังบอกว่าดีเลย ...",
+    "domain": "audio",
+    "product": "simgot eg280",
+    "features": {
+      "audio_product": true
+    },
+    "top_keywords": [
+      {
+        "keyword": "sound quality",
+        "score": 1.2130478501319886
+      },
+      {
+        "keyword": "connectivity",
+        "score": 0.9879093796014786
+      },
+      {
+        "keyword": "microphone quality",
+        "score": 0.7764086961746216
+      },
+      {
+        "keyword": "soundstage",
+        "score": 0.7751120567321778
+      },
+      {
+        "keyword": "comfort",
+        "score": 0.45
+      }
+    ],
+    "all_keywords": [
+      "sound quality",
+      "connectivity",
+      "microphone quality",
+      "soundstage",
+      "comfort"
+    ],
+    "entity_keywords": [
+      "simgot eg280"
+    ],
+    "context_keywords": [
+      "gaming audio"
+    ],
+    "comparison_dimensions": [
+      {
+        "name": "sound quality",
+        "confidence": 0.617,
+        "value": null
+      },
+      {
+        "name": "connectivity",
+        "confidence": 0.567,
+        "value": null
+      },
+      {
+        "name": "microphone quality",
+        "confidence": 0.521,
+        "value": null
+      },
+      {
+        "name": "soundstage",
+        "confidence": 0.521,
+        "value": null
+      },
+      {
+        "name": "comfort",
+        "confidence": 0.45,
+        "value": null
+      }
+    ],
+    "dimension_status": [
+      {
+        "name": "sound quality",
+        "status": "weak",
+        "confidence": 0.617,
+        "value": null
+      },
+      {
+        "name": "soundstage",
+        "status": "weak",
+        "confidence": 0.521,
+        "value": null
+      },
+      {
+        "name": "microphone quality",
+        "status": "weak",
+        "confidence": 0.521,
+        "value": null
+      },
+      {
+        "name": "latency",
+        "status": "missing",
+        "confidence": 0.0,
+        "value": null
+      },
+      {
+        "name": "noise cancelling",
+        "status": "missing",
+        "confidence": 0.0,
+        "value": null
+      },
+      {
+        "name": "comfort",
+        "status": "weak",
+        "confidence": 0.45,
+        "value": null
+      },
+      {
+        "name": "connectivity",
+        "status": "weak",
+        "confidence": 0.567,
+        "value": null
+      },
+      {
+        "name": "battery life",
+        "status": "missing",
+        "confidence": 0.0,
+        "value": null
+      },
+      {
+        "name": "value for money",
+        "status": "missing",
+        "confidence": 0.0,
+        "value": null
+      }
+    ],
+    "recommendation_policy": {
+      "gap_delta_threshold": 0.2,
+      "present_threshold": 0.85,
+      "weak_threshold": 0.6,
+      "inferred_confidence": 0.58,
+      "recommend_when_user_status": [
+        "missing",
+        "weak"
+      ],
+      "note": "Compare user-vs-viral by dimension confidence. Recommend when viral_conf - user_conf >= gap_delta_threshold."
+    },
+    "pipeline_mode": "rule_first",
+    "analysis_quality": 0.8,
+    "stt_meta": {
+      "language": "th",
+      "language_probability": 0.9966480135917664,
+      "segment_count": 11,
+      "avg_no_speech_prob": 0.5297880145636472,
+      "weak_audio": false
+    }
+  }
+}

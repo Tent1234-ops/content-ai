@@ -23,6 +23,11 @@ DEFAULT_CONFIG = {
     "enable_google_trends": True,
     "enable_tiktok_trending": True,
     "auto_scan_interval_hours": 6,
+    # New defaults
+    "asr_model_default": "small",
+    "enable_model_toggle": True,
+    "job_backend": "inprocess",
+    "redis_url": None,
 }
 
 
@@ -50,6 +55,11 @@ def get_or_create_admin_config(db: Session) -> SystemConfig:
         enable_google_trends=DEFAULT_CONFIG["enable_google_trends"],
         enable_tiktok_trending=DEFAULT_CONFIG["enable_tiktok_trending"],
         auto_scan_interval_hours=DEFAULT_CONFIG["auto_scan_interval_hours"],
+        # New fields
+        asr_model_default=DEFAULT_CONFIG["asr_model_default"],
+        enable_model_toggle=DEFAULT_CONFIG["enable_model_toggle"],
+        job_backend=DEFAULT_CONFIG["job_backend"],
+        redis_url=DEFAULT_CONFIG["redis_url"],
     )
     db.add(config)
     db.commit()
@@ -92,6 +102,8 @@ def save_admin_config(db: Session, config_update: AdminConfigUpdate) -> AdminCon
     # Update only provided fields
     update_data = config_update.model_dump(exclude_unset=True)
     
+    from app.runtime import set as runtime_set
+
     for field, value in update_data.items():
         if value is not None:
             # Map schema field names to database field names
@@ -117,6 +129,18 @@ def save_admin_config(db: Session, config_update: AdminConfigUpdate) -> AdminCon
                 config.enable_tiktok_trending = value
             elif field == "auto_scan_interval_hours":
                 config.auto_scan_interval_hours = value
+            elif field == "asr_model_default":
+                config.asr_model_default = value
+                runtime_set("asr_model", value)
+            elif field == "enable_model_toggle":
+                config.enable_model_toggle = value
+                runtime_set("enable_model_toggle", bool(value))
+            elif field == "job_backend":
+                config.job_backend = value
+                runtime_set("job_backend", value)
+            elif field == "redis_url":
+                config.redis_url = value
+                runtime_set("redis_url", value)
     
     db.commit()
     db.refresh(config)

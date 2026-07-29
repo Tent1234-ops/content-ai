@@ -160,6 +160,9 @@ def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
         "simgod": "simgot",
         "e g": "eg",
         "aem": "iem",
+        # Quick fixes observed in dataset/artifacts
+        "โคตเทป": "โคตรเทพ",
+        "โคต": "โคตร",
     }
     normalized = text or ""
     for wrong, right in replacements.items():
@@ -178,7 +181,13 @@ def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
             candidates.add(item.lower())
     # include brand tokens
     try:
-        for b in BRANDS:
+        # Merge in lexicon from data/lexicon.json if present
+        try:
+            from app.services.lexicon import list_brands
+            lex_brands = list_brands()
+        except Exception:
+            lex_brands = []
+        for b in list(set((BRANDS or []) + lex_brands)):
             for tok in re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", b.lower()):
                 candidates.add(tok)
             candidates.add(b.lower())
@@ -187,7 +196,7 @@ def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
 
     # Fuzzy-correct likely mis-heard tokens against candidates
     try:
-        cutoff = 0.78 if not aggressive else 0.68
+        cutoff = 0.78 if not aggressive else 0.72
         tokens = re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", normalized)
         changed = False
         for tok in tokens:
@@ -995,10 +1004,10 @@ DOMAIN_DIMENSIONS_ORDER = {
     ],
 }
 
-PRESENT_THRESHOLD = 0.85
-WEAK_THRESHOLD = 0.60
-INFERRED_CONFIDENCE = 0.58
-GAP_DELTA_THRESHOLD = 0.20
+PRESENT_THRESHOLD = 0.90
+WEAK_THRESHOLD = 0.65
+INFERRED_CONFIDENCE = 0.60
+GAP_DELTA_THRESHOLD = 0.25
 
 DOMAIN_PRIORITY = {
     "mouse": {
@@ -2073,6 +2082,73 @@ def keyword_frequency_boost(text: str, keywords: List[str]) -> Dict[str, float]:
 
 
 # =========================
+# Local keyword extractor (KeyBERT -> TF-IDF -> frequency fallback)
+# =========================
+
+def _local_extract_keywords(text: str, top_k: int = 15, domain: str | None = None) -> list:
+    """Try KeyBERT if available; otherwise TF-IDF n-grams; final fallback: simple frequency.
+    Returns list of keyword strings.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    # 1) KeyBERT if installed
+    try:
+        from keybert import KeyBERT
+
+        try:
+            kb = KeyBERT()
+            kw = kb.extract_keywords(text, keyphrase_ngram_range=(1, 2), stop_words=None, top_n=top_k)
+            return [k for k, s in kw]
+        except Exception:
+            # fall through to TF-IDF
+            pass
+    except Exception:
+        pass
+
+    # 2) TF-IDF n-grams (sklearn)
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
+        # For Thai, if pythainlp tokenizer available, use it to pre-tokenize to space-separated tokens
+        try:
+            if pythai_word_tokenize:
+                tokens = pythai_word_tokenize(text)
+                text_for_tfidf = " ".join(tokens)
+            else:
+                text_for_tfidf = text
+        except Exception:
+            text_for_tfidf = text
+
+        vec = TfidfVectorizer(ngram_range=(1, 2), max_df=0.85, min_df=1)
+        X = vec.fit_transform([text_for_tfidf])
+        features = vec.get_feature_names_out()
+        scores = X.toarray().sum(axis=0)
+        paired = sorted(zip(features, scores), key=lambda x: -x[1])[:top_k]
+        return [f for f, s in paired]
+    except Exception:
+        pass
+
+    # 3) Frequency-based fallback
+    try:
+        if pythai_word_tokenize:
+            toks = pythai_word_tokenize(text)
+        else:
+            toks = re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", text)
+        freq: Dict[str, int] = {}
+        for t in toks:
+            t = t.strip().lower()
+            if not t or len(t) < 2:
+                continue
+            freq[t] = freq.get(t, 0) + 1
+        items = sorted(freq.items(), key=lambda x: (-x[1], x[0]))[:top_k]
+        return [k for k, v in items]
+    except Exception:
+        return []
+
+
+# =========================
 # Main Pipeline
 # =========================
 def analyze_video(video_path: str):
@@ -2138,12 +2214,51 @@ def analyze_video(video_path: str):
 
     keybert_candidate = []
     semantic_candidate = []
-    if use_ml_enrichment and clean and keybert_keywords and semantic_keywords:
-        print("[pipeline] extracting keywords with ML models...", flush=True)
-        keybert_candidate = keybert_keywords(clean)
-        keybert_candidate = filter_ml_keywords(keybert_candidate, domain)
-        semantic_candidate = semantic_keywords(clean, keybert_candidate, top_k=15)
-        semantic_candidate = filter_ml_keywords(semantic_candidate, domain)
+
+    # Prefer local extractor if ML models are not present to avoid heavy dependencies
+    if use_ml_enrichment and clean:
+        if keybert_keywords and semantic_keywords:
+            try:
+                print("[pipeline] extracting keywords with ML models...", flush=True)
+                keybert_candidate = keybert_keywords(clean)
+                keybert_candidate = filter_ml_keywords(keybert_candidate, domain)
+                semantic_candidate = semantic_keywords(clean, keybert_candidate, top_k=15)
+                semantic_candidate = filter_ml_keywords(semantic_candidate, domain)
+            except Exception as e:
+                print(f"[pipeline] ML keyword extraction failed: {e}, falling back to local extractor", flush=True)
+                keybert_candidate = _local_extract_keywords(clean, top_k=15, domain=domain)
+                keybert_candidate = filter_ml_keywords(keybert_candidate, domain)
+                semantic_candidate = []
+        else:
+            # Use local extractor when heavy ML not available
+            keybert_candidate = _local_extract_keywords(clean, top_k=15, domain=domain)
+            keybert_candidate = filter_ml_keywords(keybert_candidate, domain)
+            semantic_candidate = []
+
+        # Domain relevance check: if ML/local candidate set is mostly irrelevant, fallback to rule-based candidates
+        try:
+            cand = [k for k in (keybert_candidate or []) if k]
+            if semantic_candidate:
+                cand.extend([k for k in semantic_candidate if k])
+            relevant = 0
+            hint_words = set()
+            for item in {**SHARED_DOMAIN_HINTS, **SHARED_DOMAIN_BASE}.values():
+                for v in item:
+                    for tok in re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", (v or "").lower()):
+                        if tok:
+                            hint_words.add(tok)
+            for k in cand:
+                toks = set(re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", k.lower()))
+                if len(toks & hint_words) >= 1:
+                    relevant += 1
+            if cand and (relevant / max(1, len(cand))) < 0.5:
+                print("[pipeline] ML/local keywords not domain-relevant enough, falling back to rule-based candidates", flush=True)
+                keybert_candidate = []
+                semantic_candidate = []
+                use_ml_enrichment = False
+        except Exception:
+            # If any error, keep candidates as-is
+            pass
 
     # Candidate from visual captions for videos with low speech.
     visual_candidate = []

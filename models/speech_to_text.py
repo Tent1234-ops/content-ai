@@ -1,30 +1,68 @@
-from faster_whisper import WhisperModel
 import importlib
+from typing import Dict
 
-print("Loading Whisper...", flush=True)
+# Lazy model manager that loads WhisperModel per requested size
 
-# Choose a larger model for better ASR accuracy. This uses more RAM/CPU or GPU.
-# If a CUDA GPU is available, prefer float16 on GPU; otherwise use int8 on CPU.
-device = "cpu"
-compute_type = "int8"
-if importlib.util.find_spec("torch"):
-    try:
-        import torch
-        if torch.cuda.is_available():
-            device = "cuda"
-            compute_type = "float16"
-    except Exception:
-        pass
+try:
+    from faster_whisper import WhisperModel
+except Exception:
+    WhisperModel = None
 
-model = WhisperModel(
-    "medium",
-    device=device,
-    compute_type=compute_type,
-)
+# runtime config
+from app.runtime import get as runtime_get
 
-def transcribe_with_meta(audio_path, language=None):
+_MODEL_STORE: Dict[str, Dict] = {}
+
+
+def _detect_device_compute():
+    device = "cpu"
+    compute_type = "int8"
+    if importlib.util.find_spec("torch"):
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+                compute_type = "float16"
+        except Exception:
+            pass
+    return device, compute_type
+
+
+class ModelManager:
+    @staticmethod
+    def get_model(size: str):
+        """Return a WhisperModel instance for given size; load lazily and cache."""
+        size = (size or "small").lower()
+        if size in _MODEL_STORE:
+            return _MODEL_STORE[size]["model"]
+
+        if WhisperModel is None:
+            raise RuntimeError("faster_whisper not installed or failed to import")
+
+        device, compute_type = _detect_device_compute()
+        # smaller sizes can use smaller beam and int8 for CPU
+        compute = compute_type
+        try:
+            model = WhisperModel(size, device=device, compute_type=compute)
+        except Exception:
+            # fallback to CPU int8
+            model = WhisperModel(size, device="cpu", compute_type="int8")
+
+        _MODEL_STORE[size] = {
+            "model": model,
+            "device": device,
+            "compute_type": compute,
+        }
+        return model
+
+
+def transcribe_with_meta(audio_path, language=None, model_size: str = None):
+    # Decide model size from runtime if not provided
+    model_size = model_size or runtime_get("asr_model") or "small"
+    model = ModelManager.get_model(model_size)
+
     transcribe_kwargs = {
-        "beam_size": 5
+        "beam_size": 5 if model_size in {"medium", "large"} else 3
     }
     if language:
         transcribe_kwargs["language"] = language
@@ -65,6 +103,6 @@ def transcribe_with_meta(audio_path, language=None):
     }
 
 
-def transcribe(audio_path):
-    result = transcribe_with_meta(audio_path, language="th")
+def transcribe(audio_path, model_size: str = None):
+    result = transcribe_with_meta(audio_path, language="th", model_size=model_size)
     return result["text"]
