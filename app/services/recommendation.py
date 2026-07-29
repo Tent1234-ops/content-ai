@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 from statistics import median
@@ -21,6 +22,7 @@ from app.services.pipeline.core import (
 from app.services.pipeline.domain_rules import (
     DOMAIN_BASE,
     DOMAIN_DIMENSIONS_ORDER,
+    DOMAIN_HINTS,
     detect_domain,
     infer_domain_from_features,
 )
@@ -35,6 +37,75 @@ DEFAULT_DURATION_BY_DOMAIN = {
     "skincare": 75,
     "general": 60,
 }
+
+GENERIC_RECOMMENDATION_BLACKLIST = {
+    "video",
+    "clip",
+    "review",
+    "youtube",
+    "content",
+    "subscribe",
+    "follow",
+    "like",
+    "watch",
+    "new",
+    "best",
+}
+
+
+def _normalize_keyword(keyword: str) -> str:
+    return (keyword or "").strip().lower()
+
+
+def _keyword_is_domain_relevant(keyword: str, domain: str) -> bool:
+    if not keyword:
+        return False
+    if domain == "general":
+        return True
+    lower = _normalize_keyword(keyword)
+    hints = [*DOMAIN_HINTS.get(domain, []), *DOMAIN_BASE.get(domain, [])]
+    hint_words: set[str] = set()
+    for hint in hints:
+        if not hint:
+            continue
+        normalized_hint = hint.lower()
+        if normalized_hint in lower:
+            return True
+        for token in re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", normalized_hint):
+            if token:
+                hint_words.add(token)
+    keyword_tokens = set(re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", lower))
+    if len(keyword_tokens & hint_words) >= 2:
+        return True
+    return False
+
+
+def _should_recommend_keyword(keyword: str, domain: str) -> bool:
+    lower = _normalize_keyword(keyword)
+    if not lower or lower in GENERIC_RECOMMENDATION_BLACKLIST:
+        return False
+    if domain != "general" and not _keyword_is_domain_relevant(lower, domain):
+        return False
+    return True
+
+
+def _clean_profile_keywords(items: List[Dict[str, float]], domain: str, max_items: int) -> List[Dict[str, float]]:
+    cleaned: List[Dict[str, float]] = []
+    seen: set[str] = set()
+    for item in items:
+        keyword = str(item.get("keyword") or "").strip()
+        if not keyword:
+            continue
+        lower = _normalize_keyword(keyword)
+        if lower in seen:
+            continue
+        if not _should_recommend_keyword(lower, domain):
+            continue
+        seen.add(lower)
+        cleaned.append({"keyword": keyword, "score": float(item.get("score", 0.0))})
+        if len(cleaned) >= max_items:
+            break
+    return cleaned
 
 
 def _weighted_increment(counter: Dict[str, float], key: str, weight: float) -> None:
@@ -181,18 +252,27 @@ def build_dataset_profiles(
     for domain, items in grouped_rows.items():
         if not items:
             continue
-        top_keywords = [
+        raw_top_keywords = [
             {"keyword": keyword, "score": round(score, 3)}
-            for keyword, score in sorted(keyword_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:10]
+            for keyword, score in sorted(keyword_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:20]
         ]
+        top_keywords = _clean_profile_keywords(raw_top_keywords, domain, max_items=10)
+        if not top_keywords:
+            fallback_keywords = [*DOMAIN_BASE.get(domain, []), *DOMAIN_HINTS.get(domain, [])][:10]
+            top_keywords = [{"keyword": keyword, "score": 0.0} for keyword in fallback_keywords]
+
         top_dimensions = [
             {"keyword": name, "score": round(score, 3)}
             for name, score in sorted(dimension_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:8]
         ]
-        hook_keywords = [
+        raw_hook_keywords = [
             {"keyword": keyword, "score": round(score, 3)}
-            for keyword, score in sorted(hook_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:8]
+            for keyword, score in sorted(hook_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:20]
         ]
+        hook_keywords = _clean_profile_keywords(raw_hook_keywords, domain, max_items=8)
+        if not hook_keywords:
+            fallback_hooks = [*DOMAIN_HINTS.get(domain, []), *DOMAIN_BASE.get(domain, [])][:8]
+            hook_keywords = [{"keyword": keyword, "score": 0.0} for keyword in fallback_hooks]
         exemplar_titles = [item["row"].title for item in items[:3]]
         profiles.append(
             {
@@ -287,22 +367,44 @@ def build_recommendation_from_analysis_data(
     normalized_user_keywords = {keyword.lower() for keyword in user_keywords}
     missing_keywords = []
     for item in profile["top_keywords"]:
-        keyword = item["keyword"]
+        keyword = str(item["keyword"]).strip()
+        if not keyword:
+            continue
         if keyword.lower() in normalized_user_keywords:
             continue
         missing_keywords.append({"keyword": keyword, "score": round(float(item["score"]), 3)})
         if len(missing_keywords) >= 6:
             break
 
-    normalized_hook_terms = {term.lower() for term in hook_terms}
+    seen_hook_terms: set[str] = set()
     hook_keywords = []
-    for item in profile["hook_keywords"]:
-        keyword = item["keyword"]
-        if keyword.lower() in normalized_hook_terms or keyword.lower() in normalized_user_keywords:
+    for term in hook_terms:
+        normalized_term = str(term or "").strip().lower()
+        if not normalized_term or normalized_term in seen_hook_terms or normalized_term in normalized_user_keywords:
             continue
-        hook_keywords.append({"keyword": keyword, "score": round(float(item["score"]), 3)})
+        if normalized_term in GENERIC_RECOMMENDATION_BLACKLIST:
+            continue
+        if domain != "general" and not _keyword_is_domain_relevant(normalized_term, domain):
+            continue
+        seen_hook_terms.add(normalized_term)
+        hook_keywords.append({"keyword": term, "score": 0.0})
         if len(hook_keywords) >= 5:
             break
+
+    if not hook_keywords:
+        for item in profile["hook_keywords"]:
+            keyword = str(item["keyword"]).strip()
+            if not keyword:
+                continue
+            lower_keyword = keyword.lower()
+            if lower_keyword in normalized_user_keywords or lower_keyword in seen_hook_terms:
+                continue
+            if lower_keyword in GENERIC_RECOMMENDATION_BLACKLIST:
+                continue
+            seen_hook_terms.add(lower_keyword)
+            hook_keywords.append({"keyword": keyword, "score": round(float(item["score"]), 3)})
+            if len(hook_keywords) >= 5:
+                break
 
     user_dimensions = {row["name"]: row for row in dimension_status}
     missing_dimensions = []

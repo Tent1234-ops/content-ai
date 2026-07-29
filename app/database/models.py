@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, text
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -163,8 +163,10 @@ class SystemConfig(Base):
     notification_batch_size = Column(Integer, nullable=False, default=50)
     youtube_region = Column(String(2), nullable=False, default="TH")
     google_region = Column(String(2), nullable=False, default="TH")
+    tiktok_region = Column(String(2), nullable=False, default="TH")
     enable_youtube_trending = Column(Boolean, nullable=False, default=True)
     enable_google_trends = Column(Boolean, nullable=False, default=True)
+    enable_tiktok_trending = Column(Boolean, nullable=False, default=True)
     auto_scan_interval_hours = Column(Integer, nullable=False, default=6)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -190,11 +192,16 @@ class Notification(Base):
 
     notification_id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    dataset_id = Column(Integer, ForeignKey("dataset_contents.dataset_id"), nullable=True)
     title = Column(String(255), nullable=False)
     body = Column(Text)
     link = Column(String(255))
     type = Column(String(50), nullable=False, default="system")
     payload = Column(Text)  # optional JSON payload
+    message = Column(Text, nullable=False, default="", server_default=text("''"))
+    topic = Column(String(100), nullable=False, default="general", server_default=text("'general'"))
+    source_platform = Column(String(50), nullable=False, default="system", server_default=text("'system'"))
+    trend_score = Column(Float, nullable=False, default=0.0, server_default=text("0.0"))
     is_read = Column(Boolean, nullable=False, default=False)
     delivered_via_ws = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

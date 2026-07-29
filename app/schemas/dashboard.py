@@ -2,7 +2,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
-from app.schemas.trends import GoogleTrendItem, YouTubeTrendItem
+from app.schemas.trends import GoogleTrendItem, TikTokTrendItem, YouTubeTrendItem
 
 
 class DashboardMetricSummary(BaseModel):
@@ -41,6 +41,13 @@ class DashboardGoogleTrends(BaseModel):
     region: str
     total: int
     items: List[GoogleTrendItem]
+
+
+class DashboardTikTokTrends(BaseModel):
+    mode: str
+    region: str
+    total: int
+    items: List[TikTokTrendItem]
 
 
 class DashboardTopTrendItem(BaseModel):
@@ -105,6 +112,7 @@ class DashboardEmergingTopicsResponse(BaseModel):
     emerging_topics: List[DashboardTopicItem]
     youtube_trends: DashboardYouTubeTrends
     google_trends: DashboardGoogleTrends
+    tiktok_trends: DashboardTikTokTrends
 
 
 class DashboardOverviewResponse(BaseModel):
@@ -125,3 +133,4 @@ class DashboardOverviewResponse(BaseModel):
     priority_items: List[DashboardPriorityItem]
     youtube_trends: DashboardYouTubeTrends
     google_trends: DashboardGoogleTrends
+    tiktok_trends: DashboardTikTokTrends

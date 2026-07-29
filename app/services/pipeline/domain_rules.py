@@ -38,6 +38,8 @@ DOMAIN_HINTS = {
         "latency",
         "driver",
         "soundstage",
+        "sound quality",
+        "sound",
     ],
     "smartphone": [
         "smartphone",
@@ -119,7 +121,7 @@ DOMAIN_HINTS = {
 DOMAIN_BASE = {
     "mouse": ["gaming mouse", "sensor performance", "click latency", "ergonomic shape"],
     "keyboard": ["mechanical keyboard", "typing feel", "sound profile", "build quality"],
-    "audio": ["gaming audio", "microphone quality", "soundstage", "wear comfort"],
+    "audio": ["gaming audio", "microphone quality", "soundstage", "wear comfort", "sound quality"],
     "smartphone": ["camera quality", "chip performance", "battery life", "display quality"],
     "food_drink": ["taste profile", "portion size", "value for money", "service quality"],
     "fashion": ["material quality", "fit", "comfort", "durability"],

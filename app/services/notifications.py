@@ -14,6 +14,10 @@ def create_notification(
     link: Optional[str] = None,
     type: str = "system",
     payload: Optional[dict] = None,
+    message: Optional[str] = None,
+    topic: str = "general",
+    source_platform: str = "system",
+    trend_score: float = 0.0,
     delivered_via_ws: bool = False,
 ) -> Notification:
     payload_text = json.dumps(payload, ensure_ascii=False) if payload is not None else None
@@ -24,6 +28,10 @@ def create_notification(
         link=link,
         type=type,
         payload=payload_text,
+        message=message if message is not None else (body or title)[:1000],
+        topic=topic,
+        source_platform=source_platform,
+        trend_score=trend_score,
         is_read=False,
         delivered_via_ws=delivered_via_ws,
     )

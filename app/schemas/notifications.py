@@ -9,10 +9,15 @@ class NotificationItem(BaseModel):
 
     notification_id: int
     user_id: int
+    dataset_id: int | None = None
     title: str
     body: str | None = None
+    message: str
     link: str | None = None
     type: str
+    topic: str
+    source_platform: str
+    trend_score: float
     is_read: bool
     delivered_via_ws: bool
     created_at: datetime

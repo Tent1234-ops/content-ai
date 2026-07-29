@@ -11,7 +11,7 @@ from xml.etree import ElementTree as ET
 import json5
 
 from app.core.config import settings
-from app.schemas.trends import GoogleTrendItem, YouTubeCategoryItem, YouTubeTrendItem
+from app.schemas.trends import GoogleTrendItem, TikTokTrendItem, YouTubeCategoryItem, YouTubeTrendItem
 
 
 def _compute_trend_score(views: int, likes: int, comments: int) -> float:
@@ -229,6 +229,129 @@ def _mock_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
         GoogleTrendItem(**item, source=f"google_trends_mock_{region.lower()}")
         for item in seed_items[:limit]
     ]
+
+
+def _mock_tiktok_trending(region: str, limit: int) -> List[TikTokTrendItem]:
+    seed_items = [
+        {
+            "title": "Challenge สเต็ปเต้นสุดฮิต",
+            "creator": "DanceBeatTH",
+            "category": "Entertainment",
+            "published_at": datetime(2026, 5, 5, 12, 0, 0),
+            "video_url": "https://www.tiktok.com/@dancebeatth/video/mock001",
+            "thumbnail_url": "https://example.com/tiktok_mock001.jpg",
+            "views": 1250000,
+            "likes": 98000,
+            "comments": 5400,
+            "duration_seconds": 31,
+        },
+        {
+            "title": "รีวิวแก็ดเจ็ตมือถือสุดล้ำ",
+            "creator": "TechTalks",
+            "category": "Technology",
+            "published_at": datetime(2026, 5, 5, 13, 30, 0),
+            "video_url": "https://www.tiktok.com/@techtalks/video/mock002",
+            "thumbnail_url": "https://example.com/tiktok_mock002.jpg",
+            "views": 842000,
+            "likes": 75600,
+            "comments": 3100,
+            "duration_seconds": 45,
+        },
+        {
+            "title": "สูตรทำอาหารจานด่วนใน 1 นาที",
+            "creator": "ChefQuick",
+            "category": "Food",
+            "published_at": datetime(2026, 5, 5, 9, 0, 0),
+            "video_url": "https://www.tiktok.com/@chefquick/video/mock003",
+            "thumbnail_url": "https://example.com/tiktok_mock003.jpg",
+            "views": 554000,
+            "likes": 62000,
+            "comments": 2520,
+            "duration_seconds": 60,
+        },
+    ]
+    return [
+        TikTokTrendItem(**item, source=f"tiktok_mock_{region.lower()}")
+        for item in seed_items[:limit]
+    ]
+
+
+def _parse_tiktok_trending_items(page_text: str, limit: int) -> List[TikTokTrendItem]:
+    items: List[TikTokTrendItem] = []
+    try:
+        raw_json = _extract_js_object(page_text, 'window["SIGI_STATE"]')
+        payload = json5.loads(_normalize_json_like_text(raw_json))
+        item_module = payload.get("ItemModule", {}) if isinstance(payload, dict) else {}
+        if not isinstance(item_module, dict):
+            return []
+
+        for item_id, item_data in item_module.items():
+            if not isinstance(item_data, dict):
+                continue
+            title = item_data.get("desc") or item_data.get("title") or ""
+            creator = item_data.get("author") or (item_data.get("authorMeta") or {}).get("name") or ""
+            video_url = f"https://www.tiktok.com/@{item_data.get('author', '').strip('/')}/video/{item_id}" if item_id else ""
+            thumbnail_url = item_data.get("videoCover") or item_data.get("cover") or ""
+            stats = item_data.get("stats") or {}
+            views = int(stats.get("playCount", 0) or 0)
+            likes = int(stats.get("diggCount", 0) or 0)
+            comments = int(stats.get("commentCount", 0) or 0)
+            published_at = None
+            if item_data.get("createTime"):
+                try:
+                    published_at = datetime.utcfromtimestamp(int(item_data.get("createTime")))
+                except Exception:
+                    published_at = None
+            items.append(
+                TikTokTrendItem(
+                    title=title,
+                    creator=creator,
+                    category=item_data.get("challenges", [{}])[0].get("title") if item_data.get("challenges") else None,
+                    published_at=published_at,
+                    video_url=video_url,
+                    thumbnail_url=thumbnail_url,
+                    views=views,
+                    likes=likes,
+                    comments=comments,
+                    trend_score=_compute_trend_score(views, likes, comments),
+                    duration_seconds=item_data.get("video", {}).get("durationSeconds") if isinstance(item_data.get("video"), dict) else None,
+                    source="tiktok_live",
+                )
+            )
+            if len(items) >= limit:
+                break
+    except Exception:
+        pass
+    return items
+
+
+def _live_tiktok_trending(region: str, limit: int) -> List[TikTokTrendItem]:
+    url = "https://www.tiktok.com/discover?lang=en"
+    request = Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    })
+    with urlopen(request, timeout=20) as response:
+        page_text = response.read().decode("utf-8", errors="replace")
+
+    items = _parse_tiktok_trending_items(page_text, limit)
+    return items if items else _mock_tiktok_trending(region, limit)
+
+
+def get_tiktok_trending(region: str, limit: int, mode: str) -> tuple[str, List[TikTokTrendItem]]:
+    if mode == "mock":
+        return "mock", _mock_tiktok_trending(region, limit)
+
+    if mode == "live":
+        return "live", _live_tiktok_trending(region, limit)
+
+    try:
+        items = _live_tiktok_trending(region, limit)
+        if items:
+            return "live", items
+    except (ValueError, URLError, TimeoutError):
+        pass
+    return "mock", _mock_tiktok_trending(region, limit)
 
 
 def _parse_google_traffic(traffic_text: str | None) -> int:

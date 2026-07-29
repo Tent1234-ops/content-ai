@@ -34,6 +34,13 @@ class Settings:
     db_password: str = os.getenv("DB_PASSWORD", "1234")
     youtube_api_key: str = os.getenv("YOUTUBE_API_KEY", "")
     youtube_region: str = os.getenv("YOUTUBE_REGION", "TH")
+    # Added defaults for Google and TikTok regions and optional TikTok user-agent for scraping
+    google_region: str = os.getenv("GOOGLE_REGION", os.getenv("YOUTUBE_REGION", "TH"))
+    tiktok_region: str = os.getenv("TIKTOK_REGION", os.getenv("YOUTUBE_REGION", "TH"))
+    tiktok_scrape_user_agent: str = os.getenv(
+        "TIKTOK_SCRAPE_USER_AGENT",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+    )
 
 
 settings = Settings()

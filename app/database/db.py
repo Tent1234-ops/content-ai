@@ -106,7 +106,88 @@ def _ensure_mysql_schema_compat() -> None:
                 text("ALTER TABLE system_configs ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
             )
             connection.commit()
+
+        # Add tiktok region and toggle fields to system_configs if missing
+        for table_name, column_name, sql_type in [
+            ("system_configs", "tiktok_region", "VARCHAR(2) NOT NULL DEFAULT 'TH'"),
+            ("system_configs", "enable_tiktok_trending", "BOOLEAN NOT NULL DEFAULT TRUE"),
+        ]:
+            column_exists = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = :schema_name
+                      AND TABLE_NAME = :table_name
+                      AND COLUMN_NAME = :column_name
+                    """
+                ),
+                {"schema_name": settings.db_name, "table_name": table_name, "column_name": column_name},
+            ).scalar()
+            if not column_exists:
+                connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {sql_type}"))
+                connection.commit()
+
+        # Fix legacy followed_topics schema if old fields still exist from earlier versions.
+        for table_name, column_name, sql_type in [
+            ("followed_topics", "topic", "VARCHAR(255) NULL"),
+            ("followed_topics", "source_platform", "VARCHAR(50) NULL"),
+        ]:
+            column_exists = connection.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = :schema_name
+                      AND TABLE_NAME = :table_name
+                      AND COLUMN_NAME = :column_name
+                    """
+                ),
+                {"schema_name": settings.db_name, "table_name": table_name, "column_name": column_name},
+            ).scalar()
+            if column_exists:
+                connection.execute(text(f"ALTER TABLE {table_name} MODIFY COLUMN {column_name} {sql_type}"))
+                connection.commit()
     bootstrap_engine.dispose()
+
+
+def _ensure_sqlite_schema_compat() -> None:
+    sqlite_engine = create_engine(_build_database_url(), pool_pre_ping=True)
+    with sqlite_engine.connect() as connection:
+        def table_has_column(table_name: str, column_name: str) -> bool:
+            rows = connection.execute(text(f"PRAGMA table_info('{table_name}')")).fetchall()
+            return any(row[1] == column_name for row in rows)
+
+        if table_has_column("users", "user_id"):
+            if not table_has_column("users", "password_hash"):
+                connection.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NULL"))
+                connection.commit()
+            if not table_has_column("users", "role"):
+                connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'user'"))
+                connection.commit()
+            if not table_has_column("users", "is_active"):
+                connection.execute(text("ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"))
+                connection.commit()
+            if not table_has_column("users", "updated_at"):
+                connection.execute(text("ALTER TABLE users ADD COLUMN updated_at DATETIME NULL"))
+                connection.commit()
+
+        if table_has_column("dataset_contents", "dataset_id"):
+            if not table_has_column("dataset_contents", "duration_seconds"):
+                connection.execute(text("ALTER TABLE dataset_contents ADD COLUMN duration_seconds INTEGER NULL"))
+                connection.commit()
+
+        if table_has_column("system_configs", "config_id"):
+            if not table_has_column("system_configs", "updated_at"):
+                connection.execute(text("ALTER TABLE system_configs ADD COLUMN updated_at DATETIME NULL"))
+                connection.commit()
+            if not table_has_column("system_configs", "tiktok_region"):
+                connection.execute(text("ALTER TABLE system_configs ADD COLUMN tiktok_region TEXT NOT NULL DEFAULT 'TH'"))
+                connection.commit()
+            if not table_has_column("system_configs", "enable_tiktok_trending"):
+                connection.execute(text("ALTER TABLE system_configs ADD COLUMN enable_tiktok_trending INTEGER NOT NULL DEFAULT 1"))
+                connection.commit()
+    sqlite_engine.dispose()
 
 
 DATABASE_URL = _build_database_url()
@@ -118,6 +199,11 @@ if USING_MYSQL:
     try:
         _ensure_mysql_database()
         _ensure_mysql_schema_compat()
+    except Exception as exc:
+        DB_BOOTSTRAP_ERROR = f"{exc.__class__.__name__}: {exc}"
+elif IS_SQLITE:
+    try:
+        _ensure_sqlite_schema_compat()
     except Exception as exc:
         DB_BOOTSTRAP_ERROR = f"{exc.__class__.__name__}: {exc}"
 

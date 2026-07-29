@@ -63,3 +63,25 @@ class GoogleTrendingResponse(BaseModel):
     region: str
     total: int
     items: list[GoogleTrendItem]
+
+
+class TikTokTrendItem(BaseModel):
+    title: str
+    creator: Optional[str] = None
+    category: Optional[str] = None
+    published_at: Optional[datetime] = None
+    video_url: str
+    thumbnail_url: Optional[str] = None
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    trend_score: float = 0.0
+    duration_seconds: Optional[int] = None
+    source: str = "tiktok"
+
+
+class TikTokTrendingResponse(BaseModel):
+    mode: str
+    region: str
+    total: int
+    items: list[TikTokTrendItem]

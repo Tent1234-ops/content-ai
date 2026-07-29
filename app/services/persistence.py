@@ -103,6 +103,22 @@ def save_google_trends(
     )
 
 
+def save_tiktok_trends(
+    db: Session,
+    items: List[object],
+    user_id: Optional[int],
+    source_mode: str,
+) -> Dict[str, int]:
+    return _save_dataset_trends(
+        db=db,
+        items=items,
+        user_id=user_id,
+        source_mode=source_mode,
+        source_name="tiktok",
+        action_name="tiktok_trends_sync",
+    )
+
+
 def _get_or_create_keyword(db: Session, keyword_text: str) -> Keyword:
     keyword = db.query(Keyword).filter(Keyword.keyword == keyword_text).first()
     if keyword is not None:
@@ -269,6 +285,7 @@ def save_video_analysis_result(
     )
     db.add(content)
     db.flush()
+    content_id = content.content_id
 
     saved_keywords = 0
     top_keywords = nlp_result.get("top_keywords", [])
@@ -329,13 +346,17 @@ def save_video_analysis_result(
             title=f"Analysis complete: {title[:120]}",
             body=f"Your uploaded video has been analyzed. Recommended duration: {recommended_duration} seconds.",
             link=f"/analysis/{content.content_id}",
+            type="system",
+            topic="analysis",
+            source_platform="system",
+            trend_score=0.0,
         )
     except Exception:
         # non-fatal: don't break the API if notification creation fails
-        pass
+        db.rollback()
 
     return {
-        "content_id": content.content_id,
+        "content_id": content_id,
         "saved_keywords": saved_keywords,
         "recommended_keywords": recommendation_keywords,
         "recommended_duration": recommended_duration,

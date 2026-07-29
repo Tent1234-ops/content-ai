@@ -17,9 +17,9 @@ from app.database.models import (
     UserContent,
 )
 from app.services.nlp import filter_tokens, tokenize_text
-from app.services.persistence import save_google_trends, save_youtube_trends
+from app.services.persistence import save_google_trends, save_tiktok_trends, save_youtube_trends
 from app.services.recommendation import build_dataset_profiles, compare_dataset_profiles
-from app.services.trends import get_google_trending, get_youtube_trending
+from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_trending
 
 
 def _safe_scalar(query, default: int = 0) -> int:
@@ -221,6 +221,14 @@ def build_dashboard_overview(
         except Exception:
             pass
 
+    # Sync live TikTok trends into the saved dataset content whenever possible.
+    tiktok_source_mode, tiktok_items = get_tiktok_trending(region=region, limit=trend_limit, mode=trend_mode)
+    if tiktok_source_mode == "live" and tiktok_items:
+        try:
+            save_tiktok_trends(db=db, items=tiktok_items, user_id=current_user.user_id, source_mode=tiktok_source_mode)
+        except Exception:
+            pass
+
     try:
         metrics["total_users"] = _safe_scalar(db.query(func.count(User.user_id)))
         metrics["active_users"] = _safe_scalar(db.query(func.count(User.user_id)).filter(User.is_active.is_(True)))
@@ -312,6 +320,7 @@ def build_dashboard_overview(
 
         youtube_profiles = build_dataset_profiles(db, source_prefix="youtube", limit=100)
         google_profiles = build_dataset_profiles(db, source_prefix="google", limit=100)
+        tiktok_profiles = build_dataset_profiles(db, source_prefix="tiktok", limit=100)
         platform_summaries = [
             {
                 "source": "youtube",
@@ -329,6 +338,14 @@ def build_dashboard_overview(
                 "profile_count": len(google_profiles),
                 "domains": [profile["domain"] for profile in google_profiles],
             },
+            {
+                "source": "tiktok",
+                "dataset_count": _safe_scalar(
+                    db.query(func.count(DatasetContent.dataset_id)).filter(DatasetContent.source_platform.like("tiktok%"))
+                ),
+                "profile_count": len(tiktok_profiles),
+                "domains": [profile["domain"] for profile in tiktok_profiles],
+            },
         ]
 
         comparison = compare_dataset_profiles(db, left_source="youtube", right_source="google", limit=100)
@@ -343,11 +360,11 @@ def build_dashboard_overview(
             for item in comparison["comparisons"]
         ]
 
-        live_topic_scores = _build_topic_scores_from_trends(trend_items + google_items)
+        live_topic_scores = _build_topic_scores_from_trends(trend_items + google_items + tiktok_items)
         historical_counts = _build_historical_topic_counts(db)
         priority_topics = _rank_priority_topics(live_topic_scores, historical_counts, limit=10)
         emerging_topics = _rank_emerging_topics(live_topic_scores, historical_counts, limit=10)
-        priority_items = _rank_priority_items(trend_items + google_items, historical_counts, limit=trend_limit)
+        priority_items = _rank_priority_items(trend_items + google_items + tiktok_items, historical_counts, limit=trend_limit)
     except SQLAlchemyError as exc:
         db_status = "degraded"
         db_error = exc.__class__.__name__
@@ -383,6 +400,12 @@ def build_dashboard_overview(
             "total": len(google_items),
             "items": google_items,
         },
+        "tiktok_trends": {
+            "mode": tiktok_source_mode,
+            "region": region,
+            "total": len(tiktok_items),
+            "items": tiktok_items,
+        },
     }
 
 
@@ -407,10 +430,17 @@ def build_dashboard_topic_insights(
         except Exception:
             pass
 
-    live_topic_scores = _build_topic_scores_from_trends(trend_items + google_items)
+    tiktok_source_mode, tiktok_items = get_tiktok_trending(region=region, limit=trend_limit, mode=trend_mode)
+    if tiktok_source_mode == "live" and tiktok_items:
+        try:
+            save_tiktok_trends(db=db, items=tiktok_items, user_id=current_user.user_id, source_mode=tiktok_source_mode)
+        except Exception:
+            pass
+
+    live_topic_scores = _build_topic_scores_from_trends(trend_items + google_items + tiktok_items)
     historical_counts = _build_historical_topic_counts(db)
     return {
-        "priority_items": _rank_priority_items(trend_items + google_items, historical_counts, limit=trend_limit),
+        "priority_items": _rank_priority_items(trend_items + google_items + tiktok_items, historical_counts, limit=trend_limit),
         "emerging_topics": _rank_emerging_topics(live_topic_scores, historical_counts, limit=trend_limit),
         "youtube_trends": {
             "mode": trend_source_mode,
@@ -423,5 +453,11 @@ def build_dashboard_topic_insights(
             "region": region,
             "total": len(google_items),
             "items": google_items,
+        },
+        "tiktok_trends": {
+            "mode": tiktok_source_mode,
+            "region": region,
+            "total": len(tiktok_items),
+            "items": tiktok_items,
         },
     }

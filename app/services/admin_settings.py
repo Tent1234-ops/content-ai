@@ -18,8 +18,10 @@ DEFAULT_CONFIG = {
     "notification_batch_size": 50,
     "youtube_region": "TH",
     "google_region": "TH",
+    "tiktok_region": "TH",
     "enable_youtube_trending": True,
     "enable_google_trends": True,
+    "enable_tiktok_trending": True,
     "auto_scan_interval_hours": 6,
 }
 
@@ -43,8 +45,10 @@ def get_or_create_admin_config(db: Session) -> SystemConfig:
         notification_batch_size=DEFAULT_CONFIG["notification_batch_size"],
         youtube_region=DEFAULT_CONFIG["youtube_region"],
         google_region=DEFAULT_CONFIG["google_region"],
+        tiktok_region=DEFAULT_CONFIG["tiktok_region"],
         enable_youtube_trending=DEFAULT_CONFIG["enable_youtube_trending"],
         enable_google_trends=DEFAULT_CONFIG["enable_google_trends"],
+        enable_tiktok_trending=DEFAULT_CONFIG["enable_tiktok_trending"],
         auto_scan_interval_hours=DEFAULT_CONFIG["auto_scan_interval_hours"],
     )
     db.add(config)
@@ -68,8 +72,10 @@ def get_admin_config(db: Session) -> AdminConfigResponse:
         notification_batch_size=config.notification_batch_size,
         youtube_region=config.youtube_region,
         google_region=config.google_region,
+        tiktok_region=config.tiktok_region,
         enable_youtube_trending=config.enable_youtube_trending,
         enable_google_trends=config.enable_google_trends,
+        enable_tiktok_trending=config.enable_tiktok_trending,
         auto_scan_interval_hours=config.auto_scan_interval_hours,
         created_at=config.created_at,
         updated_at=getattr(config, 'updated_at', config.created_at),
@@ -101,10 +107,14 @@ def save_admin_config(db: Session, config_update: AdminConfigUpdate) -> AdminCon
                 config.youtube_region = value
             elif field == "google_region":
                 config.google_region = value
+            elif field == "tiktok_region":
+                config.tiktok_region = value
             elif field == "enable_youtube_trending":
                 config.enable_youtube_trending = value
             elif field == "enable_google_trends":
                 config.enable_google_trends = value
+            elif field == "enable_tiktok_trending":
+                config.enable_tiktok_trending = value
             elif field == "auto_scan_interval_hours":
                 config.auto_scan_interval_hours = value
     
@@ -126,8 +136,10 @@ def save_admin_config(db: Session, config_update: AdminConfigUpdate) -> AdminCon
         notification_batch_size=config.notification_batch_size,
         youtube_region=config.youtube_region,
         google_region=config.google_region,
+        tiktok_region=config.tiktok_region,
         enable_youtube_trending=config.enable_youtube_trending,
         enable_google_trends=config.enable_google_trends,
+        enable_tiktok_trending=config.enable_tiktok_trending,
         auto_scan_interval_hours=config.auto_scan_interval_hours,
         created_at=config.created_at,
         updated_at=getattr(config, 'updated_at', config.created_at),
@@ -146,8 +158,10 @@ def reset_admin_config(db: Session) -> AdminConfigResponse:
     config.notification_batch_size = DEFAULT_CONFIG["notification_batch_size"]
     config.youtube_region = DEFAULT_CONFIG["youtube_region"]
     config.google_region = DEFAULT_CONFIG["google_region"]
+    config.tiktok_region = DEFAULT_CONFIG["tiktok_region"]
     config.enable_youtube_trending = DEFAULT_CONFIG["enable_youtube_trending"]
     config.enable_google_trends = DEFAULT_CONFIG["enable_google_trends"]
+    config.enable_tiktok_trending = DEFAULT_CONFIG["enable_tiktok_trending"]
     config.auto_scan_interval_hours = DEFAULT_CONFIG["auto_scan_interval_hours"]
     
     db.commit()
@@ -168,8 +182,10 @@ def reset_admin_config(db: Session) -> AdminConfigResponse:
         notification_batch_size=config.notification_batch_size,
         youtube_region=config.youtube_region,
         google_region=config.google_region,
+        tiktok_region=config.tiktok_region,
         enable_youtube_trending=config.enable_youtube_trending,
         enable_google_trends=config.enable_google_trends,
+        enable_tiktok_trending=config.enable_tiktok_trending,
         auto_scan_interval_hours=config.auto_scan_interval_hours,
         created_at=config.created_at,
         updated_at=getattr(config, 'updated_at', config.created_at),
@@ -272,6 +288,8 @@ def get_admin_statistics(db: Session) -> Dict:
         trend_data_sources_active.append("youtube")
     if config.enable_google_trends:
         trend_data_sources_active.append("google")
+    if getattr(config, 'enable_tiktok_trending', False):
+        trend_data_sources_active.append("tiktok")
 
     avg_analyses = round(total_analyses / max(total_users, 1), 2)
 

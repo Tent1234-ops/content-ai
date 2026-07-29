@@ -41,6 +41,12 @@ class AdminConfigBase(BaseModel):
         max_length=2,
         description="Google Trends region code (e.g., TH, US, GB)"
     )
+    tiktok_region: str = Field(
+        default="TH",
+        min_length=2,
+        max_length=2,
+        description="TikTok trend region code (e.g., TH, US, GB)"
+    )
     enable_youtube_trending: bool = Field(
         default=True,
         description="Enable YouTube trending data collection"
@@ -48,6 +54,10 @@ class AdminConfigBase(BaseModel):
     enable_google_trends: bool = Field(
         default=True,
         description="Enable Google Trends data collection"
+    )
+    enable_tiktok_trending: bool = Field(
+        default=True,
+        description="Enable TikTok trending data collection"
     )
     auto_scan_interval_hours: int = Field(
         default=6,
@@ -71,8 +81,10 @@ class AdminConfigUpdate(AdminConfigBase):
     notification_batch_size: Optional[int] = None
     youtube_region: Optional[str] = None
     google_region: Optional[str] = None
+    tiktok_region: Optional[str] = None
     enable_youtube_trending: Optional[bool] = None
     enable_google_trends: Optional[bool] = None
+    enable_tiktok_trending: Optional[bool] = None
     auto_scan_interval_hours: Optional[int] = None
 
 
@@ -85,8 +97,10 @@ class AdminConfigResponse(BaseModel):
     notification_batch_size: int
     youtube_region: str
     google_region: str
+    tiktok_region: str
     enable_youtube_trending: bool
     enable_google_trends: bool
+    enable_tiktok_trending: bool
     auto_scan_interval_hours: int
     created_at: datetime
     updated_at: datetime = None

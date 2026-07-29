@@ -1,223 +1,228 @@
-# Dashboard API Payload Specification
+﻿# Dashboard API Payload Specification
 
-This document describes the API payloads and response structures for frontend integration.
+This document describes the dashboard endpoints and the expected response payloads for frontend integration.
 
-## Endpoints
+## GET /dashboard/overview
 
-### 1. GET /dashboard/overview
+Description:
+- Returns dashboard metrics, category/cluster distributions, top trend items, priority topic signals, emerging topics, and live trend snapshots.
+- Use on the main dashboard screen.
 
-Description
-- Returns dashboard overview metrics, distributions, live trend captures, and topic insights.
-- Intended for the main admin/user dashboard.
+Headers:
+- `Authorization: Bearer <access_token>`
 
-Query parameters
-- `region`: string, default from `settings.youtube_region` (e.g. `TH`). Must be 2 characters.
-- `trend_mode`: string, one of `auto`, `mock`, `live`. Default `auto`.
-- `trend_limit`: integer, default `5`, min `1`, max `10`.
+Query parameters:
+- `region`: string, 2 characters (e.g. `TH`)
+- `trend_mode`: `auto` | `mock` | `live`
+- `trend_limit`: integer, 1-10
 
-Example request
-```http
-GET /dashboard/overview?region=TH&trend_mode=live&trend_limit=5 HTTP/1.1
-Host: localhost:8000
-Authorization: Bearer <token>
-```
+Example request:
 
-Response structure
-```json
-{
-  "db_status": "ok",
-  "db_error": null,
-  "user_role": "user",
-  "metrics": {
-    "total_users": 0,
-    "active_users": 0,
-    "total_user_contents": 0,
-    "total_analysis_results": 0,
-    "total_clusters": 0,
-    "total_cluster_runs": 0,
-    "total_cluster_memberships": 0,
-    "total_dataset_contents": 0,
-    "total_system_logs": 0,
-    "my_contents": 0,
-    "my_analysis_results": 0
-  },
-  "category_distribution": [
-    { "category": "Technology", "count": 12 }
-  ],
-  "cluster_distribution": [
-    { "cluster_name": "AudioTech", "count": 8 }
-  ],
-  "top_trends": [
+    GET /dashboard/overview?region=TH&trend_mode=live&trend_limit=5 HTTP/1.1
+    Host: localhost:8000
+    Authorization: Bearer <access_token>
+
+Example response structure:
+
     {
-      "dataset_id": 1,
-      "title": "Sample Trend Video",
-      "category": "Technology",
-      "source_platform": "youtube_live",
-      "video_url": "https://www.youtube.com/watch?v=xxx",
-      "views": 123456,
-      "likes": 7890,
-      "comments": 234,
-      "trend_score": 45678.0,
-      "published_at": "2026-07-26T14:00:00"
+      "db_status": "ok",
+      "db_error": null,
+      "user_role": "user",
+      "metrics": {
+        "total_users": 10,
+        "active_users": 8,
+        "total_user_contents": 23,
+        "total_analysis_results": 23,
+        "total_clusters": 4,
+        "total_cluster_runs": 2,
+        "total_cluster_memberships": 18,
+        "total_dataset_contents": 120,
+        "total_system_logs": 50,
+        "my_contents": 8,
+        "my_analysis_results": 8
+      },
+      "category_distribution": [{ "category": "Technology", "count": 12 }],
+      "cluster_distribution": [{ "cluster_name": "Review", "count": 9 }],
+      "top_trends": [{
+        "dataset_id": 1,
+        "title": "Sample Trend Video",
+        "category": "Technology",
+        "source_platform": "youtube",
+        "video_url": "https://...",
+        "views": 123456,
+        "likes": 7890,
+        "comments": 234,
+        "trend_score": 45678.0,
+        "published_at": "2026-07-26T14:00:00"
+      }],
+      "top_categories": [{ "category": "Technology", "count": 12 }],
+      "top_keywords": [{ "keyword": "smartphone", "count": 125 }],
+      "source_distribution": [{ "source_platform": "youtube", "count": 18 }],
+      "platform_summaries": [{
+        "source": "youtube",
+        "dataset_count": 42,
+        "profile_count": 5,
+        "domains": ["audio", "smartphone"]
+      }],
+      "platform_comparison": [{
+        "domain": "audio",
+        "youtube_sample_size": 20,
+        "google_sample_size": 12,
+        "youtube_duration": "60-90 sec",
+        "google_duration": "55-85 sec"
+      }],
+      "priority_topics": [{ "keyword": "content", "score": 12.34 }],
+      "emerging_topics": [{ "keyword": "unbox", "score": 9.87 }],
+      "priority_items": [{
+        "title": "Affordable smartphone camera battle under budget",
+        "category": "Technology",
+        "source_platform": "youtube",
+        "video_url": "https://...",
+        "trend_score": 418275.0,
+        "priority_score": 419005.0,
+        "novelty_score": 6.0,
+        "views": 618000,
+        "likes": 50100,
+        "comments": 3025,
+        "published_at": "2026-04-27T12:30:00"
+      }],
+      "youtube_trends": {
+        "mode": "live",
+        "region": "TH",
+        "total": 5,
+        "items": [
+          {
+            "title": "Example YouTube Trend",
+            "channel_title": "Example Channel",
+            "category": "Technology",
+            "published_at": "2026-07-26T12:00:00",
+            "video_url": "https://...",
+            "thumbnail_url": "https://...",
+            "views": 12345,
+            "likes": 1234,
+            "comments": 123,
+            "trend_score": 4567.0,
+            "duration_seconds": 420,
+            "source": "youtube"
+          }
+        ]
+      },
+      "google_trends": {
+        "mode": "live",
+        "region": "TH",
+        "total": 5,
+        "items": [
+          {
+            "title": "Google Trend Topic",
+            "query": "example query",
+            "category": "Technology",
+            "published_at": "2026-07-26T12:00:00",
+            "video_url": "https://...",
+            "thumbnail_url": "https://...",
+            "views": 6789,
+            "likes": 234,
+            "comments": 45,
+            "trend_score": 2123.0,
+            "duration_seconds": 360,
+            "source": "google_trends",
+            "traffic_text": "Rising"
+          }
+        ]
+      },
+      "tiktok_trends": {
+        "mode": "live",
+        "region": "TH",
+        "total": 5,
+        "items": [
+          {
+            "title": "ตัวอย่าง TikTok Trend",
+            "creator": "TrendCreatorTH",
+            "category": "Entertainment",
+            "published_at": "2026-07-26T12:00:00",
+            "video_url": "https://www.tiktok.com/@trendcreatorth/video/1234567890",
+            "thumbnail_url": "https://...",
+            "views": 1250000,
+            "likes": 98000,
+            "comments": 5400,
+            "trend_score": 153400.0,
+            "duration_seconds": 30,
+            "source": "tiktok_live"
+          }
+        ]
+      }
     }
-  ],
-  "top_categories": [
-    { "category": "Technology", "count": 12 }
-  ],
-  "top_keywords": [
-    { "keyword": "smartphone", "count": 125 }
-  ],
-  "source_distribution": [
-    { "source_platform": "youtube_live", "count": 18 }
-  ],
-  "platform_summaries": [
-    {
-      "source": "youtube",
-      "dataset_count": 42,
-      "profile_count": 5,
-      "domains": ["audio", "smartphone"]
-    }
-  ],
-  "platform_comparison": [
-    {
-      "domain": "audio",
-      "youtube_sample_size": 20,
-      "google_sample_size": 12,
-      "youtube_duration": "60-90 sec",
-      "google_duration": "55-85 sec"
-    }
-  ],
-  "priority_topics": [
-    { "keyword": "content", "score": 12.34 }
-  ],
-  "emerging_topics": [
-    { "keyword": "unbox", "score": 9.87 }
-  ],
-  "priority_items": [
-    {
-      "title": "Affordable smartphone camera battle under budget",
-      "category": "28",
-      "source_platform": "youtube_mock_th",
-      "video_url": "https://www.youtube.com/watch?v=mock002",
-      "trend_score": 418275.0,
-      "priority_score": 419005.0,
-      "novelty_score": 6.0,
-      "views": 618000,
-      "likes": 50100,
-      "comments": 3025,
-      "published_at": "2026-04-27T12:30:00"
-    }
-  ],
-  "youtube_trends": {
-    "mode": "mock",
-    "region": "TH",
-    "total": 5,
-    "items": [ /* YouTubeTrendItem[] */ ]
-  },
-  "google_trends": {
-    "mode": "mock",
-    "region": "TH",
-    "total": 5,
-    "items": [ /* GoogleTrendItem[] */ ]
-  }
-}
-```
 
-Notes for frontend
-- Use `priority_items` for an item-level priority ranking panel.
-- Use `priority_topics` to display keyword-level priority signals.
-- Use `emerging_topics` to show trending keywords with low historical frequency.
-- `youtube_trends` and `google_trends` are useful for a trends summary card or chart.
+Frontend guidance:
+- Use `priority_items` for a ranked high-priority content feed.
+- Use `priority_topics` for recommend keyword signals.
+- Use `emerging_topics` for newly rising keyword panels.
+- Display `youtube_trends.items` and `google_trends.items` as live trend snapshots.
+- Use `top_trends` for deep comparison cards or examples of successful content.
 
 ---
 
-### 2. GET /dashboard/emerging-topics
+## GET /dashboard/emerging-topics
 
-Description
-- Returns trend topic insights and priority-ranked trend items.
-- Recommended for a dedicated "Emerging Topics" UI screen.
+Description:
+- Returns priority-ranked trend items and emerging topic keywords.
+- Use on a dedicated emerging topics panel.
 
-Query parameters
-- `region`: string, 2 letters.
-- `trend_mode`: `auto`, `mock`, `live`.
-- `trend_limit`: integer 1-10.
+Headers:
+- `Authorization: Bearer <access_token>`
 
-Example request
-```http
-GET /dashboard/emerging-topics?region=TH&trend_mode=live&trend_limit=5 HTTP/1.1
-Host: localhost:8000
-Authorization: Bearer <token>
-```
+Query parameters:
+- `region`: string, 2 characters
+- `trend_mode`: `auto` | `mock` | `live`
+- `trend_limit`: integer, 1-10
 
-Response structure
-```json
-{
-  "priority_items": [
+Example request:
+
+    GET /dashboard/emerging-topics?region=TH&trend_mode=live&trend_limit=5 HTTP/1.1
+    Host: localhost:8000
+    Authorization: Bearer <access_token>
+
+Example response structure:
+
     {
-      "title": "Affordable smartphone camera battle under budget",
-      "category": "28",
-      "source_platform": "youtube_mock_th",
-      "video_url": "https://www.youtube.com/watch?v=mock002",
-      "trend_score": 418275.0,
-      "priority_score": 419005.0,
-      "novelty_score": 6.0,
-      "views": 618000,
-      "likes": 50100,
-      "comments": 3025,
-      "published_at": "2026-04-27T12:30:00"
+      "priority_items": [
+        {
+          "title": "Affordable smartphone camera battle under budget",
+          "category": "Technology",
+          "source_platform": "youtube",
+          "video_url": "https://...",
+          "trend_score": 418275.0,
+          "priority_score": 419005.0,
+          "novelty_score": 6.0,
+          "views": 618000,
+          "likes": 50100,
+          "comments": 3025,
+          "published_at": "2026-04-27T12:30:00"
+        }
+      ],
+      "emerging_topics": [
+        { "keyword": "content", "score": 9.87 }
+      ],
+      "youtube_trends": {
+        "mode": "live",
+        "region": "TH",
+        "total": 5,
+        "items": []
+      },
+      "google_trends": {
+        "mode": "live",
+        "region": "TH",
+        "total": 5,
+        "items": []
+      },
+      "tiktok_trends": {
+        "mode": "live",
+        "region": "TH",
+        "total": 5,
+        "items": []
+      }
     }
-  ],
-  "emerging_topics": [
-    { "keyword": "content", "score": 9.87 }
-  ],
-  "youtube_trends": {
-    "mode": "mock",
-    "region": "TH",
-    "total": 5,
-    "items": [ /* YouTubeTrendItem[] */ ]
-  },
-  "google_trends": {
-    "mode": "mock",
-    "region": "TH",
-    "total": 5,
-    "items": [ /* GoogleTrendItem[] */ ]
-  }
-}
-```
 
-Recommendation for frontend
-- Use `priority_items` as the main ordered list of high-priority trend clips.
-- Use `emerging_topics` as a short keyword recommendation list.
-- Optionally show an alert or badge when `youtube_trends.mode` or `google_trends.mode` is `live`.
-
----
-
-## Why Postman / curl scripts matter
-
-Purpose
-- They are tools for testing and validating the backend API before frontend integration.
-- They let developers make real HTTP requests and inspect the exact JSON response.
-
-Benefits
-- verifies that the API endpoint works and returns the expected payload shape
-- catches mismatches between frontend assumptions and backend output
-- useful for debugging authentication, query parameters, and response format
-- can be used in CI, shared with teammates, or imported by non-developers
-
-Example curl script
-```bash
-curl -X GET "http://localhost:8000/dashboard/emerging-topics?region=TH&trend_mode=live&trend_limit=5" \
-  -H "Authorization: Bearer <token>" \
-  -H "Accept: application/json"
-```
-
-Example Postman usage
-- import the request in Postman
-- set the `Authorization` header or Bearer token
-- send the request and inspect the JSON body
-- save the request for repeated regression testing
-
-Use case
-- frontend developers can use it to confirm the payload fields before writing UI components
-- QA testers can verify endpoint behavior manually
-- backend developers can quickly verify live vs mock data without building the UI
+Frontend guidance:
+- Use `priority_items` for a top-priority content list.
+- Use `emerging_topics` for keyword discovery.
+- Show `youtube_trends.items` and `google_trends.items` as supporting live snapshots.

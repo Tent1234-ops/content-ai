@@ -6,9 +6,14 @@ from app.core.config import settings
 from app.database.db import get_db
 from app.database.models import User
 from app.schemas.persistence import TrendSyncResponse
-from app.schemas.trends import GoogleTrendingResponse, YouTubeCategoriesResponse, YouTubeTrendingResponse
-from app.services.trends import get_google_trending, get_youtube_categories, get_youtube_trending
-from app.services.persistence import save_google_trends, save_youtube_trends
+from app.schemas.trends import (
+    GoogleTrendingResponse,
+    TikTokTrendingResponse,
+    YouTubeCategoriesResponse,
+    YouTubeTrendingResponse,
+)
+from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_categories, get_youtube_trending
+from app.services.persistence import save_google_trends, save_tiktok_trends, save_youtube_trends
 
 router = APIRouter(prefix="/trends", tags=["trends"])
 
@@ -66,6 +71,41 @@ def youtube_trending_sync(
         video_category_id=video_category_id,
     )
     stats = save_youtube_trends(db=db, items=items, user_id=current_user.user_id, source_mode=resolved_mode)
+    return TrendSyncResponse(
+        created=stats["created"],
+        updated=stats["updated"],
+        mode=resolved_mode,
+        region=region.upper(),
+        total_fetched=len(items),
+    )
+
+
+@router.get("/tiktok", response_model=TikTokTrendingResponse)
+def tiktok_trending(
+    limit: int = Query(default=10, ge=1, le=50),
+    region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
+    mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
+    _current_user: User = Depends(require_roles("admin", "user")),
+):
+    resolved_mode, items = get_tiktok_trending(region=region.upper(), limit=limit, mode=mode)
+    return TikTokTrendingResponse(
+        mode=resolved_mode,
+        region=region.upper(),
+        total=len(items),
+        items=items,
+    )
+
+
+@router.post("/tiktok/sync", response_model=TrendSyncResponse)
+def tiktok_trending_sync(
+    limit: int = Query(default=10, ge=1, le=50),
+    region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
+    mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    resolved_mode, items = get_tiktok_trending(region=region.upper(), limit=limit, mode=mode)
+    stats = save_tiktok_trends(db=db, items=items, user_id=current_user.user_id, source_mode=resolved_mode)
     return TrendSyncResponse(
         created=stats["created"],
         updated=stats["updated"],

@@ -20,6 +20,13 @@ from app.schemas.admin_config import (
     AdminStatisticsResponse,
     BulkConfigResetResponse,
 )
+from pydantic import BaseModel
+from app.database.models import SystemLog
+
+
+class SourceUpdate(BaseModel):
+    enabled: bool | None = None
+    region: str | None = None
 from app.schemas.auth import UserResponse
 from app.services.admin_report import (
     build_admin_overview_report,
@@ -438,3 +445,102 @@ def check_admin_system_health(
             status_code=500,
             detail=f"Error checking system health: {str(exc)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Admin: Manage data sources (youtube / google / tiktok)
+# ---------------------------------------------------------------------------
+@router.get("/sources", tags=["admin-settings"])
+def get_admin_sources(
+        _current_user: User = Depends(require_roles("admin")),
+        db: Session = Depends(get_db),
+):
+        """
+        Get current data source configuration and recent scan times.
+
+        Returns per-source: enabled (bool), region (string), last_scan (datetime|null)
+        """
+        try:
+            config = get_admin_config(db)
+
+            def _last_scan_for(source_key: str):
+                row = (
+                    db.query(SystemLog.timestamp)
+                    .filter(SystemLog.action.like(f"%{source_key}_trends_sync%"))
+                    .order_by(SystemLog.timestamp.desc())
+                    .first()
+                )
+                return row[0] if row else None
+
+            sources = {
+                "youtube": {
+                    "enabled": bool(config.enable_youtube_trending),
+                    "region": config.youtube_region,
+                    "last_scan": _last_scan_for("youtube"),
+                },
+                "google": {
+                    "enabled": bool(config.enable_google_trends),
+                    "region": config.google_region,
+                    "last_scan": _last_scan_for("google"),
+                },
+                "tiktok": {
+                    "enabled": bool(getattr(config, "enable_tiktok_trending", False)),
+                    "region": getattr(config, "tiktok_region", None),
+                    "last_scan": _last_scan_for("tiktok"),
+                },
+                "auto_scan_interval_hours": config.auto_scan_interval_hours,
+            }
+
+            return {"status": "ok", "sources": sources}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Error retrieving sources: {str(exc)}")
+
+
+@router.put("/sources/{source_name}", tags=["admin-settings"])
+def update_admin_source(
+        source_name: str,
+        payload: SourceUpdate,
+        _current_user: User = Depends(require_roles("admin")),
+        db: Session = Depends(get_db),
+):
+        """
+        Update a data source configuration.
+
+        source_name: one of 'youtube', 'google', 'tiktok'
+        payload: { enabled?: bool, region?: str }
+
+        This updates the admin configuration for the selected source.
+        """
+        source_key = source_name.lower().strip()
+        if source_key not in {"youtube", "google", "tiktok"}:
+            raise HTTPException(status_code=400, detail="Unsupported source; must be one of: youtube, google, tiktok")
+
+        update_kwargs = {}
+        if payload.enabled is not None:
+            if source_key == "youtube":
+                update_kwargs["enable_youtube_trending"] = bool(payload.enabled)
+            elif source_key == "google":
+                update_kwargs["enable_google_trends"] = bool(payload.enabled)
+            elif source_key == "tiktok":
+                update_kwargs["enable_tiktok_trending"] = bool(payload.enabled)
+
+        if payload.region is not None:
+            region = payload.region.strip().upper()
+            if len(region) < 2:
+                raise HTTPException(status_code=400, detail="region must be a 2-letter code")
+            if source_key == "youtube":
+                update_kwargs["youtube_region"] = region
+            elif source_key == "google":
+                update_kwargs["google_region"] = region
+            elif source_key == "tiktok":
+                update_kwargs["tiktok_region"] = region
+
+        if not update_kwargs:
+            raise HTTPException(status_code=400, detail="No updatable fields provided")
+
+        try:
+            cfg_update = AdminConfigUpdate(**update_kwargs)
+            updated = save_admin_config(db, cfg_update)
+            return {"status": "ok", "config": updated}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Error updating source config: {str(exc)}")
