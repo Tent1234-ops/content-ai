@@ -99,6 +99,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  Future<void> _saveIdea(String title, String source) async {
+    try {
+      await _repository.saveIdea(title, source);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Saved to My Ideas!'), duration: Duration(seconds: 2)),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving idea: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  void _showTrendDetails(dynamic item, [double? maxScore]) {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        final score = (item.trendScore ?? 0).toString();
+        final platform = item.sourcePlatform ?? '-';
+        final label = _confidenceLabel(item.trendScore, maxScore ?? 0);
+        return AlertDialog(
+          title: Text(item.title ?? 'Trend'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Where: $platform'),
+              const SizedBox(height: 8),
+              Text('Strength: $label ($score)'),
+              const SizedBox(height: 12),
+              Text('Summary: This trend is detected from recent performance and engagement signals.'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _saveIdea(item.title ?? 'Trend', platform);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _logout() async {
     await AuthScope.of(context).logout();
     if (!mounted) return;
@@ -134,11 +188,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final topSources = data?.sourceDistribution ?? const [];
     final topTrends = data?.topTrends ?? const [];
 
-    final filteredTrends = _showFollowedOnly && _followedTopics.isNotEmpty
+    final liveTrendItems = (data?.liveYoutubeTrends ?? const []).take(12).toList();
+    final filteredTrendItems = _showFollowedOnly && _followedTopics.isNotEmpty
         ? topTrends.where((t) => _followedTopics.any((topic) => t.title.toLowerCase().contains(topic.toLowerCase()))).toList()
         : topTrends;
-    final maxTrendScore = filteredTrends.isNotEmpty
-        ? filteredTrends.map((t) => t.trendScore.toDouble()).reduce(math.max)
+    final maxTrendScore = filteredTrendItems.isNotEmpty
+        ? filteredTrendItems.map((t) => t.trendScore.toDouble()).reduce(math.max)
         : 0.0;
 
     return AppShell(
@@ -364,11 +419,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                       _SectionHeader(
                         title: 'Live YouTube Trends',
-                        subtitle: data.liveYoutubeTrendMode == 'live'
+                        subtitle: (data?.liveYoutubeTrendMode ?? 'unknown') == 'live'
                             ? 'Realtime trending videos from YouTube'
                             : 'YouTube trends fallback or unavailable',
                       ),
-                      if (data.liveYoutubeTrends.isEmpty)
+                      if (liveTrendItems.isEmpty)
                         Card(
                           child: Padding(
                             padding: const EdgeInsets.all(16),
@@ -385,12 +440,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           height: 280,
                           child: ListView.separated(
                             scrollDirection: Axis.horizontal,
-                            itemCount: data.liveYoutubeTrends.take(6).length,
+                            itemCount: liveTrendItems.length,
                             separatorBuilder: (_, __) => const SizedBox(width: 12),
                             padding: const EdgeInsets.symmetric(vertical: 8),
                             itemBuilder: (context, index) {
-                              final item = data.liveYoutubeTrends.take(6).toList()[index];
-                              final isLive = data.liveYoutubeTrendMode == 'live';
+                              final item = liveTrendItems[index];
+                              final isLive = (data?.liveYoutubeTrendMode ?? 'unknown') == 'live';
                               return _AnimatedEntryCard(
                                 index: index,
                                 child: SizedBox(
@@ -444,6 +499,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                 ],
                                               ),
                                               const Spacer(),
+
+                                              // Confidence pill
                                               Row(
                                                 children: [
                                                   Tooltip(
@@ -468,6 +525,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                             ),
                                                       ),
                                                     ),
+                                                  ),
+                                                ],
+                                              ),
+
+                                              const SizedBox(height: 12),
+
+                                              // Actions: Follow / Save / Details
+                                              Row(
+                                                mainAxisAlignment: MainAxisAlignment.end,
+                                                children: [
+                                                  IconButton(
+                                                    onPressed: () => _toggleFollowTopic(item.title),
+                                                    icon: Icon(
+                                                      _followedTopics.contains(item.title)
+                                                          ? Icons.bookmark
+                                                          : Icons.bookmark_outline,
+                                                      color: _followedTopics.contains(item.title)
+                                                          ? Theme.of(context).colorScheme.secondary
+                                                          : Colors.grey.shade600,
+                                                    ),
+                                                    tooltip: _followedTopics.contains(item.title) ? 'Unfollow' : 'Follow',
+                                                  ),
+                                                  IconButton(
+                                                    onPressed: () async {
+                                                      await _saveIdea(item.title, item.sourcePlatform);
+                                                    },
+                                                    icon: const Icon(Icons.save_outlined),
+                                                    tooltip: 'Save to My Ideas',
+                                                  ),
+                                                  IconButton(
+                                                    onPressed: () => _showTrendDetails(item, maxTrendScore),
+                                                    icon: const Icon(Icons.info_outline),
+                                                    tooltip: 'View details',
                                                   ),
                                                 ],
                                               ),
@@ -620,11 +710,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       // Dataset-backed trends
                       _SectionHeader(
                         title: 'Trending Now',
-                        subtitle: _showFollowedOnly && filteredTrends.length < topTrends.length
+                        subtitle: _showFollowedOnly && filteredTrendItems.length < topTrends.length
                             ? 'Saved dataset trends from analysis profiles'
                             : 'Top trends from saved dataset content',
                       ),
-                      if (filteredTrends.isEmpty)
+                      if (filteredTrendItems.isEmpty)
                         Card(
                           child: Padding(
                             padding: const EdgeInsets.all(16),
@@ -641,15 +731,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           height: 280,
                           child: ListView.separated(
                             scrollDirection: Axis.horizontal,
-                            itemCount: filteredTrends.take(8).length,
+                            itemCount: filteredTrendItems.length,
                             separatorBuilder: (_, __) => const SizedBox(width: 12),
                             padding: const EdgeInsets.symmetric(vertical: 8),
                             itemBuilder: (context, index) {
-                              final item = filteredTrends.take(8).toList()[index];
+                              final item = filteredTrendItems[index];
                               final isFollowed = _followedTopics.contains(item.title);
                               final trendScore = item.trendScore.toDouble();
                               final trendStrength = maxTrendScore > 0 ? (trendScore / maxTrendScore) * 100.0 : 0.0;
-                              final stars = (trendStrength / 20.0).round().clamp(0, 5);
                               final scoreLabel = trendStrength >= 10 ? trendStrength.toStringAsFixed(0) : trendStrength.toStringAsFixed(1);
                               final platformLabel = _formatPlatformName(item.sourcePlatform);
                               final trendLabel = trendStrength >= 75
@@ -657,7 +746,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   : trendStrength >= 40
                                       ? 'Rising topic'
                                       : 'Watch closely';
-
+ 
                               return _AnimatedEntryCard(
                                 index: index,
                                 child: SizedBox(
@@ -706,30 +795,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                       ],
                                                     ),
                                                   ),
+                                                  IconButton(
+                                                    onPressed: () => _toggleFollowTopic(item.title),
+                                                    icon: Icon(
+                                                      isFollowed ? Icons.bookmark : Icons.bookmark_outline,
+                                                      color: isFollowed ? Theme.of(context).colorScheme.secondary : Colors.grey.shade600,
+                                                    ),
+                                                    tooltip: isFollowed ? 'Unfollow' : 'Follow',
+                                                  ),
                                                 ],
                                               ),
                                               const Spacer(),
                                               Text(
-                                                'Trend score',
+                                                'What is this trend?',
                                                 style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
                                               ),
                                               const SizedBox(height: 8),
-                                              Row(
-                                                children: List.generate(
-                                                  5,
-                                                  (starIndex) => Padding(
-                                                    padding: const EdgeInsets.only(right: 4),
-                                                    child: Icon(
-                                                      starIndex < stars ? Icons.star : Icons.star_border,
-                                                      size: 18,
-                                                      color: starIndex < stars ? const Color(0xFFFF006E) : Colors.grey.shade300,
-                                                    ),
-                                                  ),
-                                                ),
+                                              Text(
+                                                'This trend is based on recent performance and engagement signals for similar content.',
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(context).textTheme.bodyMedium,
                                               ),
-                                              const SizedBox(height: 14),
+                                              const SizedBox(height: 16),
                                               Row(
                                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                crossAxisAlignment: CrossAxisAlignment.center,
                                                 children: [
                                                   Column(
                                                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -740,18 +831,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                       ),
                                                       const SizedBox(height: 4),
                                                       Text(
-                                                        'Relative trend strength',
+                                                        'Relative strength',
                                                         style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
                                                       ),
                                                     ],
                                                   ),
-                                                  IconButton(
-                                                    onPressed: () => _toggleFollowTopic(item.title),
-                                                    icon: Icon(
-                                                      isFollowed ? Icons.bookmark : Icons.bookmark_outline,
-                                                      color: isFollowed ? Theme.of(context).colorScheme.secondary : Colors.grey.shade600,
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                    decoration: BoxDecoration(
+                                                      color: _confidenceColor(
+                                                                  _confidenceLabel(item.trendScore, maxTrendScore),
+                                                                  context)
+                                                              .withOpacity(0.14),
+                                                      borderRadius: BorderRadius.circular(16),
                                                     ),
-                                                    tooltip: isFollowed ? 'Unfollow' : 'Follow',
+                                                    child: Text(
+                                                      _confidenceLabel(item.trendScore, maxTrendScore),
+                                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                            color: _confidenceColor(
+                                                                _confidenceLabel(item.trendScore, maxTrendScore),
+                                                                context),
+                                                            fontWeight: FontWeight.w700,
+                                                          ),
+                                                    ),
                                                   ),
                                                 ],
                                               ),
@@ -780,7 +882,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               );
                             },
                           ),
-                          ),
+                        ),
                       const SizedBox(height: 24),
                       // Source Distribution Chart
                       if (topSources.isNotEmpty) ...[
