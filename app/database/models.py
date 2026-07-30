@@ -94,6 +94,20 @@ class DatasetContent(Base):
     memberships = relationship("ClusterMembership", back_populates="dataset")
 
 
+class TrendingItem(Base):
+    __tablename__ = "trending_items"
+
+    item_id = Column(Integer, primary_key=True)
+    keyword = Column(String(255), nullable=False, index=True)
+    score = Column(Float, nullable=False, default=0.0)
+    source = Column(String(100), nullable=False, default="unknown")
+    domain = Column(String(100), nullable=True)
+    fetched_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    meta = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class AnalysisResult(Base):
     __tablename__ = "analysis_results"
 

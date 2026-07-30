@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -22,12 +23,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _loading = false;
   List<String> _followedTopics = [];
   bool _showFollowedOnly = false;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
     _loadFollowedTopics();
+    // Poll dashboard summary every 60s (feature-flagged on backend)
+    _pollTimer = Timer.periodic(const Duration(seconds: 60), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -95,6 +105,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
   }
 
+  String _confidenceLabel(num score, num maxScore) {
+    if (maxScore <= 0) return 'Medium';
+    final ratio = maxScore > 0 ? score / maxScore : 0;
+    if (ratio >= 0.75) return 'High';
+    if (ratio >= 0.35) return 'Medium';
+    return 'Low';
+  }
+
+  Color _confidenceColor(String label, BuildContext context) {
+    switch (label) {
+      case 'High':
+        return Colors.green.shade600;
+      case 'Medium':
+        return Colors.orange.shade700;
+      default:
+        return Colors.grey.shade600;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = AuthScope.of(context);
@@ -104,7 +133,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final comparisons = data?.platformComparison ?? const [];
     final topSources = data?.sourceDistribution ?? const [];
     final topTrends = data?.topTrends ?? const [];
-    
+
     final filteredTrends = _showFollowedOnly && _followedTopics.isNotEmpty
         ? topTrends.where((t) => _followedTopics.any((topic) => t.title.toLowerCase().contains(topic.toLowerCase()))).toList()
         : topTrends;
@@ -361,7 +390,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             padding: const EdgeInsets.symmetric(vertical: 8),
                             itemBuilder: (context, index) {
                               final item = data.liveYoutubeTrends.take(6).toList()[index];
-                              final scoreLabel = item.trendScore.toStringAsFixed(0);
                               final isLive = data.liveYoutubeTrendMode == 'live';
                               return _AnimatedEntryCard(
                                 index: index,
@@ -416,16 +444,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                 ],
                                               ),
                                               const Spacer(),
-                                              Text(
-                                                'Trend score',
-                                                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                scoreLabel,
-                                                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                                      fontWeight: FontWeight.bold,
+                                              Row(
+                                                children: [
+                                                  Tooltip(
+                                                    message:
+                                                        'Confidence: derived from dataset frequency and evidence — higher means many top clips mention this keyword.',
+                                                    child: Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                      decoration: BoxDecoration(
+                                                        color: _confidenceColor(
+                                                            _confidenceLabel(item.trendScore, maxTrendScore),
+                                                            context)
+                                                            .withOpacity(0.14),
+                                                        borderRadius: BorderRadius.circular(16),
+                                                      ),
+                                                      child: Text(
+                                                        '${_confidenceLabel(item.trendScore, maxTrendScore)} confidence',
+                                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                              color: _confidenceColor(
+                                                                  _confidenceLabel(item.trendScore, maxTrendScore),
+                                                                  context),
+                                                              fontWeight: FontWeight.w600,
+                                                            ),
+                                                      ),
                                                     ),
+                                                  ),
+                                                ],
                                               ),
                                             ],
                                           ),
@@ -660,15 +704,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                                           ],
                                                         ),
                                                       ],
-                                                    ),
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  CircleAvatar(
-                                                    radius: 20,
-                                                    backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-                                                    child: Icon(
-                                                      _getPlatformIcon(item.sourcePlatform),
-                                                      color: Theme.of(context).colorScheme.primary,
                                                     ),
                                                   ),
                                                 ],

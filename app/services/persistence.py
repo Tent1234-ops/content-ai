@@ -15,6 +15,7 @@ from app.database.models import (
     Recommendation,
     Keyword,
     SystemLog,
+    TrendingItem,
     User,
     UserContent,
 )
@@ -117,6 +118,48 @@ def save_tiktok_trends(
         source_name="tiktok",
         action_name="tiktok_trends_sync",
     )
+
+
+def save_trending_items(
+    db: Session,
+    items: List[Dict[str, object]],
+    user_id: Optional[int],
+    action_name: str = "trending_items_sync",
+) -> Dict[str, int]:
+    created = 0
+    updated = 0
+
+    for payload in items:
+        keyword = payload.get("keyword")
+        source = payload.get("source")
+        domain = payload.get("domain")
+        existing = (
+            db.query(TrendingItem)
+            .filter(
+                TrendingItem.keyword == keyword,
+                TrendingItem.source == source,
+                TrendingItem.domain == domain,
+            )
+            .first()
+        )
+        if existing:
+            existing.score = float(payload.get("score", existing.score))
+            existing.fetched_at = payload.get("fetched_at", existing.fetched_at)
+            existing.meta = payload.get("meta", existing.meta)
+            updated += 1
+        else:
+            db.add(TrendingItem(**payload))
+            created += 1
+
+    log_system_event(
+        db,
+        user_id=user_id,
+        action=action_name,
+        status="success",
+        detail=f"created={created}, updated={updated}",
+    )
+    db.commit()
+    return {"created": created, "updated": updated}
 
 
 def _get_or_create_keyword(db: Session, keyword_text: str) -> Keyword:

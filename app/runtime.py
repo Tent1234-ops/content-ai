@@ -4,6 +4,8 @@ _runtime = {
     "enable_model_toggle": True,
     "job_backend": "inprocess",  # inprocess | rq | celery
     "redis_url": None,
+    # Feature flags
+    "dashboard_live": True,
 }
 
 

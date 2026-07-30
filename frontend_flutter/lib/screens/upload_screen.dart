@@ -29,6 +29,8 @@ class _UploadScreenState extends State<UploadScreen> {
   int _uploadProgress = 0;
   String _statusMessage = '';
   Timer? _progressTimer;
+  String? _suggestedTopic;
+  bool _hasReadRouteArgs = false;
 
   Future<void> _pickFile() async {
     try {
@@ -193,9 +195,21 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+   super.didChangeDependencies();
+   if (!_hasReadRouteArgs) {
+     final args = ModalRoute.of(context)?.settings.arguments;
+     if (args is Map<String, dynamic>) {
+       _suggestedTopic = args['suggestedTopic']?.toString();
+     }
+     _hasReadRouteArgs = true;
+   }
+  }
+
+  @override
   void dispose() {
-    _progressTimer?.cancel();
-    super.dispose();
+   _progressTimer?.cancel();
+   super.dispose();
   }
 
   @override
@@ -294,7 +308,29 @@ class _UploadScreenState extends State<UploadScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-
+              if (_suggestedTopic != null)
+                Card(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Suggested trend to analyze',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Upload a clip related to "$_suggestedTopic" to get recommendations that match this trend.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (_suggestedTopic != null) const SizedBox(height: 16),
+ 
               // Upload Section
               if (!hasFile) ...[
                 FilledButton.icon(

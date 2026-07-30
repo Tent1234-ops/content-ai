@@ -11,7 +11,7 @@ class DashboardRepository {
 
   Future<DashboardOverview> getOverview() async {
     final response =
-        await _client.get('/dashboard/overview?trend_mode=auto&trend_limit=5');
+        await _client.get('/dashboard/summary?trend_mode=auto&trend_limit=8');
     return DashboardOverview.fromJson(
       Map<String, dynamic>.from(response as Map),
     );

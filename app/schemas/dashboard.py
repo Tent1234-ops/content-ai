@@ -50,6 +50,13 @@ class DashboardTikTokTrends(BaseModel):
     items: List[TikTokTrendItem]
 
 
+class DashboardRefreshResponse(BaseModel):
+    job_id: str
+    status: str
+    rate_limited: bool = False
+    next_allowed_at: Optional[str] = None
+
+
 class DashboardTopTrendItem(BaseModel):
     dataset_id: int
     title: str

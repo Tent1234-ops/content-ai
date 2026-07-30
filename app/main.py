@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.config import settings
 from app.database.db import Base, DB_BOOTSTRAP_ERROR, engine
 from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends, notifications, follows
+from app.services.trending_fetcher import start_trending_fetcher, stop_trending_fetcher
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 
@@ -35,7 +36,14 @@ def preload_ai_models():
 async def startup_event():
     # Skipping AI model preload for faster testing
     # await asyncio.to_thread(preload_ai_models)
-    pass
+    start_trending_fetcher()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    stop_trending_fetcher()
+
+
 # Configure CORS for Flutter Web & Mobile
 app.add_middleware(
     CORSMiddleware,
