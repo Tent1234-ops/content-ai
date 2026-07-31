@@ -22,7 +22,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 def dashboard_overview(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
     trend_mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
-    trend_limit: int = Query(default=5, ge=1, le=12),
+    trend_limit: int = Query(default=5, ge=1, le=20),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -41,7 +41,7 @@ def dashboard_overview(
 def dashboard_summary(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
     trend_mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
-    trend_limit: int = Query(default=3, ge=1, le=12),
+    trend_limit: int = Query(default=3, ge=1, le=20),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -134,7 +134,7 @@ def dashboard_refresh(
 def dashboard_emerging_topics(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
     trend_mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
-    trend_limit: int = Query(default=5, ge=1, le=12),
+    trend_limit: int = Query(default=5, ge=1, le=20),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):

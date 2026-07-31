@@ -26,6 +26,8 @@ class DurationRecommendation(BaseModel):
 class DatasetProfileResponseItem(BaseModel):
     domain: str
     sample_size: int
+    source: str = "youtube"
+    source_platform_counts: dict[str, int] = Field(default_factory=dict)
     top_keywords: list[RecommendationKeywordItem]
     top_dimensions: list[RecommendationKeywordItem]
     hook_keywords: list[RecommendationKeywordItem]
@@ -55,6 +57,7 @@ class RecommendationAnalysisResponse(BaseModel):
     missing_dimensions: list[RecommendationDimensionItem]
     recommended_duration: DurationRecommendation
     dataset_profile: DatasetProfileResponseItem
+    evidence: dict[str, object] = Field(default_factory=dict)
 
 
 class ProfileComparisonItem(BaseModel):

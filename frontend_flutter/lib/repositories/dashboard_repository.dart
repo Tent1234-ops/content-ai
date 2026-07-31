@@ -12,7 +12,7 @@ class DashboardRepository {
 
   Future<DashboardOverview> getOverview() async {
     final response =
-        await _client.get('/dashboard/summary?trend_mode=auto&trend_limit=12');
+        await _client.get('/dashboard/summary?trend_mode=auto&trend_limit=20');
     return DashboardOverview.fromJson(
       Map<String, dynamic>.from(response as Map),
     );

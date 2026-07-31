@@ -97,23 +97,32 @@ class MissingDimension {
 class RecommendationResult {
   const RecommendationResult({
     required this.domain,
+    required this.userKeywords,
     required this.missingKeywords,
     required this.hookKeywords,
     required this.missingDimensions,
     required this.duration,
+    required this.datasetProfile,
+    required this.evidence,
     this.classification,
   });
 
   final String domain;
+  final List<String> userKeywords;
   final List<KeywordScore> missingKeywords;
   final List<KeywordScore> hookKeywords;
   final List<MissingDimension> missingDimensions;
   final DurationRecommendation duration;
+  final DatasetProfile datasetProfile;
+  final RecommendationEvidence evidence;
   final ClassificationResult? classification;
 
   factory RecommendationResult.fromJson(Map<String, dynamic> json) {
     return RecommendationResult(
       domain: json['domain']?.toString() ?? '-',
+      userKeywords: (json['user_keywords'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
       missingKeywords: (json['missing_keywords'] as List<dynamic>? ?? const [])
           .map((item) =>
               KeywordScore.fromJson(Map<String, dynamic>.from(item as Map)))
@@ -131,6 +140,12 @@ class RecommendationResult {
         Map<String, dynamic>.from(
             (json['recommended_duration'] as Map?) ?? const {}),
       ),
+      datasetProfile: DatasetProfile.fromJson(
+        Map<String, dynamic>.from((json['dataset_profile'] as Map?) ?? const {}),
+      ),
+      evidence: RecommendationEvidence.fromJson(
+        Map<String, dynamic>.from((json['evidence'] as Map?) ?? const {}),
+      ),
       classification: json['classification'] is Map
           ? ClassificationResult.fromJson(
               Map<String, dynamic>.from(json['classification'] as Map),
@@ -142,17 +157,21 @@ class RecommendationResult {
 
 class AnalysisResultViewData {
   const AnalysisResultViewData({
+    this.contentId,
     required this.title,
     required this.transcript,
     required this.recommendation,
     required this.fallbackDomain,
+    required this.saved,
     required this.raw,
   });
 
+  final int? contentId;
   final String title;
   final String transcript;
   final RecommendationResult recommendation;
   final String fallbackDomain;
+  final bool saved;
   final Map<String, dynamic> raw;
 
   factory AnalysisResultViewData.fromJson(Map<String, dynamic> json) {
@@ -161,15 +180,129 @@ class AnalysisResultViewData {
     final analysis = Map<String, dynamic>.from(
         (analysisRoot['analysis'] as Map?) ?? const {});
     return AnalysisResultViewData(
+      contentId: (json['content_id'] as num?)?.toInt(),
       title: json['title']?.toString() ??
           analysis['title']?.toString() ??
           'Result',
-      transcript: json['transcript']?.toString() ?? '',
+      transcript: json['transcript']?.toString() ??
+          analysisRoot['transcript']?.toString() ??
+          '',
       recommendation: RecommendationResult.fromJson(
         Map<String, dynamic>.from((json['recommendation'] as Map?) ?? const {}),
       ),
       fallbackDomain: analysis['domain']?.toString() ?? '-',
+      saved: json['saved'] == true || json['content_id'] != null,
       raw: json,
+    );
+  }
+}
+
+class DatasetProfile {
+  const DatasetProfile({
+    required this.domain,
+    required this.sampleSize,
+    required this.source,
+    required this.sourcePlatformCounts,
+    required this.exemplarTitles,
+  });
+
+  final String domain;
+  final int sampleSize;
+  final String source;
+  final Map<String, int> sourcePlatformCounts;
+  final List<String> exemplarTitles;
+
+  factory DatasetProfile.fromJson(Map<String, dynamic> json) {
+    final rawCounts = json['source_platform_counts'];
+    return DatasetProfile(
+      domain: json['domain']?.toString() ?? '-',
+      sampleSize: (json['sample_size'] as num?)?.toInt() ?? 0,
+      source: json['source']?.toString() ?? '-',
+      sourcePlatformCounts: rawCounts is Map
+          ? rawCounts.map(
+              (key, value) =>
+                  MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+            )
+          : const {},
+      exemplarTitles: (json['exemplar_titles'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+    );
+  }
+}
+
+class RecommendationEvidence {
+  const RecommendationEvidence({
+    required this.source,
+    required this.dataSourceLabel,
+    required this.datasetSampleSize,
+    required this.sourcePlatformCounts,
+    required this.durationSource,
+    required this.durationSampleSize,
+    required this.exemplarTitles,
+    required this.keywordScoreExplanation,
+    required this.durationExplanation,
+  });
+
+  final String source;
+  final String dataSourceLabel;
+  final int datasetSampleSize;
+  final Map<String, int> sourcePlatformCounts;
+  final String durationSource;
+  final int durationSampleSize;
+  final List<String> exemplarTitles;
+  final String keywordScoreExplanation;
+  final String durationExplanation;
+
+  factory RecommendationEvidence.fromJson(Map<String, dynamic> json) {
+    final rawCounts = json['source_platform_counts'];
+    return RecommendationEvidence(
+      source: json['source']?.toString() ?? '-',
+      dataSourceLabel: json['data_source_label']?.toString() ?? '-',
+      datasetSampleSize: (json['dataset_sample_size'] as num?)?.toInt() ?? 0,
+      sourcePlatformCounts: rawCounts is Map
+          ? rawCounts.map(
+              (key, value) =>
+                  MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+            )
+          : const {},
+      durationSource: json['duration_source']?.toString() ?? '-',
+      durationSampleSize: (json['duration_sample_size'] as num?)?.toInt() ?? 0,
+      exemplarTitles: (json['exemplar_titles'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      keywordScoreExplanation:
+          json['keyword_score_explanation']?.toString() ?? '',
+      durationExplanation: json['duration_explanation']?.toString() ?? '',
+    );
+  }
+}
+
+class AnalysisJobStatus {
+  const AnalysisJobStatus({
+    required this.status,
+    this.result,
+    this.error,
+  });
+
+  final String status;
+  final AnalysisResultViewData? result;
+  final String? error;
+
+  bool get isComplete => status == 'completed';
+  bool get isFailed => status == 'failed' || status == 'error';
+
+  factory AnalysisJobStatus.fromJson(Map<String, dynamic> json) {
+    final status = json['status']?.toString() ?? 'unknown';
+    final rawResult = json['result'];
+    return AnalysisJobStatus(
+      status: status,
+      result: rawResult is Map
+          ? AnalysisResultViewData.fromJson(
+              Map<String, dynamic>.from(rawResult),
+            )
+          : null,
+      error: json['error']?.toString(),
     );
   }
 }

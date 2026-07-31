@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../models/dashboard_overview.dart';
 import '../repositories/dashboard_repository.dart';
 import '../state/auth_scope.dart';
+import '../state/theme_controller.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
 
@@ -188,7 +189,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final topSources = data?.sourceDistribution ?? const [];
     final topTrends = data?.topTrends ?? const [];
 
-    final liveTrendItems = (data?.liveYoutubeTrends ?? const []).take(12).toList();
+    final liveTrendItems = (data?.liveYoutubeTrends ?? const []).take(20).toList();
     final filteredTrendItems = _showFollowedOnly && _followedTopics.isNotEmpty
         ? topTrends.where((t) => _followedTopics.any((topic) => t.title.toLowerCase().contains(topic.toLowerCase()))).toList()
         : topTrends;
@@ -251,22 +252,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         runSpacing: 12,
                         children: [
                           _MetricCard(
-                            title: 'Datasets',
+                            title: 'ข้อมูลชุด',
                             value: '${metrics?.totalDatasetContents ?? 0}',
                             icon: Icons.dataset,
                           ),
                           _MetricCard(
-                            title: 'Users',
+                            title: 'ผู้ใช้',
                             value: '${metrics?.totalUsers ?? 0}',
                             icon: Icons.people,
                           ),
                           _MetricCard(
-                            title: 'Cluster Runs',
+                            title: 'รอบคลัสเตอร์',
                             value: '${metrics?.totalClusterRuns ?? 0}',
                             icon: Icons.bubble_chart,
                           ),
                           _MetricCard(
-                            title: 'My Analyses',
+                            title: 'การวิเคราะห์ของฉัน',
                             value: '${metrics?.myAnalysisResults ?? 0}',
                             icon: Icons.assessment,
                           ),
@@ -276,14 +277,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
                       // Followed Topics Section
                       _SectionHeader(
-                        title: 'Followed Topics',
-                        subtitle: 'Topics you\'re tracking for trends',
+                        title: 'หัวข้อที่ติดตาม',
+                        subtitle: 'ติดตามเทรนด์ในหมวดที่คุณสนใจ',
                         action: _followedTopics.isEmpty
                             ? null
                             : IconButton(
                                 icon: Icon(_showFollowedOnly ? Icons.check_box : Icons.check_box_outline_blank),
                                 onPressed: () => setState(() => _showFollowedOnly = !_showFollowedOnly),
-                                tooltip: 'Filter by followed topics',
+                                tooltip: 'กรองตามหัวข้อที่ติดตาม',
                               ),
                       ),
                       if (_followedTopics.isEmpty)
@@ -294,10 +295,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               children: [
                                 Icon(Icons.bookmark_outline, size: 32, color: Colors.grey.shade400),
                                 const SizedBox(height: 8),
-                                const Text('No topics followed yet'),
+                                const Text('ยังไม่ได้ติดตามหัวข้อใด'),
                                 const SizedBox(height: 8),
                                 const Text(
-                                  'Click the bookmark icon next to trends to follow them',
+                                  'แตะไอคอนรูปบุ๊กมาร์กติดกับเทรนด์เพื่อเพิ่มหัวข้อที่สนใจ',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(fontSize: 12, color: Colors.grey),
                                 ),
@@ -319,102 +320,128 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                       const SizedBox(height: 24),
 
-                      // Platform Summary - ปรับให้เข้าใจง่าย
-                      const _SectionHeader(
-                        title: 'Data Sources',
-                        subtitle: 'Where your content analysis data comes from',
+                      _SectionHeader(
+                        title: 'แหล่งข้อมูล',
+                        subtitle: 'ข้อมูลที่นำมาวิเคราะห์มาจากแพลตฟอร์มต่าง ๆ',
                       ),
                       if (data.platformSummaries.isEmpty)
                         Card(
                           child: Padding(
                             padding: const EdgeInsets.all(16),
                             child: Text(
-                              'No data sources connected yet',
+                              'ยังไม่มีข้อมูลจากแหล่งใดในระบบ',
                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey),
                             ),
                           ),
                         )
                       else
-                        ...data.platformSummaries.take(6).map((item) {
-                          final totalProfiles = item.profileCount;
-                          final totalDatasets = item.datasetCount;
-                           
-                          return Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(_getPlatformIcon(item.source), color: Theme.of(context).colorScheme.primary),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                        SizedBox(
+                          height: 200,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            separatorBuilder: (_, __) => const SizedBox(width: 12),
+                            itemCount: data.platformSummaries.length,
+                            itemBuilder: (context, index) {
+                              final item = data.platformSummaries[index];
+                              final totalProfiles = item.profileCount;
+                              final totalDatasets = item.datasetCount;
+                              final domainPreview = item.domains.isEmpty
+                                  ? 'ยังไม่มีหมวดข้อมูล'
+                                  : item.domains.length <= 3
+                                      ? item.domains.join(', ')
+                                      : '${item.domains.take(3).join(', ')} +${item.domains.length - 3}';
+
+                              return SizedBox(
+                                width: 280,
+                                child: Card(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(14),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
                                           children: [
-                                            Text(
-                                              item.source,
-                                              style: Theme.of(context).textTheme.titleSmall,
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              '${item.domains.length} categories',
-                                              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                            Icon(_getPlatformIcon(item.source), color: Theme.of(context).colorScheme.primary),
+                                            const SizedBox(width: 12),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    _formatPlatformName(item.source),
+                                                    style: Theme.of(context).textTheme.titleSmall,
+                                                  ),
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    '${item.domains.length} หมวดหมู่',
+                                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                                  ),
+                                                ],
+                                              ),
                                             ),
                                           ],
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                    children: [
-                                      Column(
-                                        children: [
-                                          Text(
-                                            totalDatasets.toString(),
-                                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                                  color: Theme.of(context).primaryColor,
-                                                  fontWeight: FontWeight.bold,
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          'ตัวอย่างหมวดข้อมูล',
+                                          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          domainPreview,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context).textTheme.bodyMedium,
+                                        ),
+                                        const Spacer(),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  totalDatasets.toString(),
+                                                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                                        color: Theme.of(context).primaryColor,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
                                                 ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'Datasets',
-                                            style: Theme.of(context).textTheme.labelSmall,
-                                          ),
-                                        ],
-                                      ),
-                                      Container(
-                                        width: 1,
-                                        height: 40,
-                                        color: Colors.grey.shade300,
-                                      ),
-                                      Column(
-                                        children: [
-                                          Text(
-                                            totalProfiles.toString(),
-                                            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                                  color: Theme.of(context).colorScheme.secondary,
-                                                  fontWeight: FontWeight.bold,
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'รายการข้อมูล',
+                                                  style: Theme.of(context).textTheme.labelSmall,
                                                 ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            'Profiles',
-                                            style: Theme.of(context).textTheme.labelSmall,
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                              ],
+                                            ),
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  totalProfiles.toString(),
+                                                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                                        color: Theme.of(context).colorScheme.secondary,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Text(
+                                                  'โปรไฟล์ (หมวด)',
+                                                  style: Theme.of(context).textTheme.labelSmall,
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
                       const SizedBox(height: 24),
 
                       _SectionHeader(
@@ -446,6 +473,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             itemBuilder: (context, index) {
                               final item = liveTrendItems[index];
                               final isLive = (data?.liveYoutubeTrendMode ?? 'unknown') == 'live';
+                              final sourceLabel = _formatPlatformName(item.sourcePlatform);
+                              final strengthLabel = _confidenceLabel(item.trendScore, maxTrendScore);
+                              final strengthPercent = maxTrendScore > 0 ? ((item.trendScore.toDouble() / maxTrendScore) * 100).clamp(0.0, 100.0) : 0.0;
+                              final strengthPercentLabel = strengthPercent >= 10
+                                  ? '${strengthPercent.toStringAsFixed(0)}%'
+                                  : '${strengthPercent.toStringAsFixed(1)}%';
                               return _AnimatedEntryCard(
                                 index: index,
                                 child: SizedBox(
@@ -462,106 +495,113 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                           child: Column(
                                             crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Row(
-                                                children: [
-                                                  Expanded(
-                                                    child: Column(
-                                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                                      children: [
-                                                        Text(
-                                                          item.title,
-                                                          maxLines: 3,
-                                                          overflow: TextOverflow.ellipsis,
-                                                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                                                fontWeight: FontWeight.bold,
-                                                              ),
-                                                        ),
-                                                        const SizedBox(height: 10),
-                                                        Wrap(
-                                                          spacing: 8,
-                                                          runSpacing: 8,
-                                                          children: [
-                                                            _ChipLabel(
-                                                              label: isLive ? 'LIVE' : 'FALLBACK',
-                                                              color: isLive
-                                                                  ? Theme.of(context).colorScheme.primary
-                                                                  : Colors.grey.shade400,
-                                                            ),
-                                                            _ChipLabel(
-                                                              label: item.sourcePlatform,
-                                                              color: Theme.of(context).colorScheme.secondary,
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ],
+                                              Text(
+                                                item.title,
+                                                maxLines: 4,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                      fontWeight: FontWeight.bold,
                                                     ),
-                                                  ),
-                                                ],
                                               ),
-                                              const Spacer(),
-
-                                              // Confidence pill
-                                              Row(
-                                                children: [
-                                                  Tooltip(
-                                                    message:
-                                                        'Confidence: derived from dataset frequency and evidence — higher means many top clips mention this keyword.',
-                                                    child: Container(
-                                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                                      decoration: BoxDecoration(
-                                                        color: _confidenceColor(
-                                                            _confidenceLabel(item.trendScore, maxTrendScore),
-                                                            context)
-                                                            .withOpacity(0.14),
-                                                        borderRadius: BorderRadius.circular(16),
-                                                      ),
-                                                      child: Text(
-                                                        '${_confidenceLabel(item.trendScore, maxTrendScore)} confidence',
-                                                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                                              color: _confidenceColor(
-                                                                  _confidenceLabel(item.trendScore, maxTrendScore),
-                                                                  context),
-                                                              fontWeight: FontWeight.w600,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-
                                               const SizedBox(height: 12),
-
-                                              // Actions: Follow / Save / Details
-                                              Row(
-                                                mainAxisAlignment: MainAxisAlignment.end,
+                                              Wrap(
+                                                spacing: 8,
+                                                runSpacing: 8,
                                                 children: [
-                                                  IconButton(
-                                                    onPressed: () => _toggleFollowTopic(item.title),
-                                                    icon: Icon(
-                                                      _followedTopics.contains(item.title)
-                                                          ? Icons.bookmark
-                                                          : Icons.bookmark_outline,
-                                                      color: _followedTopics.contains(item.title)
-                                                          ? Theme.of(context).colorScheme.secondary
-                                                          : Colors.grey.shade600,
-                                                    ),
-                                                    tooltip: _followedTopics.contains(item.title) ? 'Unfollow' : 'Follow',
+                                                  _ChipLabel(
+                                                    label: isLive ? 'LIVE' : 'FALLBACK',
+                                                    color: isLive
+                                                        ? Theme.of(context).colorScheme.primary
+                                                        : Colors.grey.shade400,
                                                   ),
-                                                  IconButton(
+                                                  _ChipLabel(
+                                                    label: sourceLabel,
+                                                    color: Theme.of(context).colorScheme.secondary,
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 16),
+                                              Text(
+                                                'What is this trend?',
+                                                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                'เทรนด์นี้มาจากวิดีโอที่มีสัญญาณการมีส่วนร่วมสูงในแพลตฟอร์มนี้',
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(context).textTheme.bodyMedium,
+                                              ),
+                                              const SizedBox(height: 14),
+                                              Row(
+                                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                children: [
+                                                  Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text('Where', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+                                                      const SizedBox(height: 4),
+                                                      Text(sourceLabel, style: Theme.of(context).textTheme.bodyMedium),
+                                                    ],
+                                                  ),
+                                                  Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                                    children: [
+                                                      Text('How strong', style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+                                                      const SizedBox(height: 4),
+                                                      Text(strengthPercentLabel, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold)),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 14),
+                                              LinearProgressIndicator(
+                                                value: strengthPercent / 100.0,
+                                                minHeight: 8,
+                                                color: _confidenceColor(strengthLabel, context),
+                                                backgroundColor: Colors.grey.shade300,
+                                              ),
+                                              const SizedBox(height: 14),
+                                              Wrap(
+                                                alignment: WrapAlignment.spaceBetween,
+                                                spacing: 8,
+                                                runSpacing: 8,
+                                                children: [
+                                                  _MiniActionButton(
+                                                    label: _followedTopics.contains(item.title) ? 'เลิกติดตาม' : 'ติดตาม',
+                                                    icon: _followedTopics.contains(item.title) ? Icons.bookmark : Icons.bookmark_outline,
+                                                    onPressed: () => _toggleFollowTopic(item.title),
+                                                  ),
+                                                  _MiniActionButton(
+                                                    label: 'เก็บ',
+                                                    icon: Icons.save_outlined,
                                                     onPressed: () async {
                                                       await _saveIdea(item.title, item.sourcePlatform);
                                                     },
-                                                    icon: const Icon(Icons.save_outlined),
-                                                    tooltip: 'Save to My Ideas',
                                                   ),
-                                                  IconButton(
+                                                  _MiniActionButton(
+                                                    label: 'รายละเอียด',
+                                                    icon: Icons.info_outline,
                                                     onPressed: () => _showTrendDetails(item, maxTrendScore),
-                                                    icon: const Icon(Icons.info_outline),
-                                                    tooltip: 'View details',
                                                   ),
                                                 ],
                                               ),
                                             ],
+                                          ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        right: 18,
+                                        top: 18,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: Theme.of(context).colorScheme.onPrimary.withOpacity(0.07),
+                                            borderRadius: BorderRadius.circular(14),
+                                          ),
+                                          child: Text(
+                                            '${index + 1}',
+                                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.bold),
                                           ),
                                         ),
                                       ),
@@ -974,6 +1014,36 @@ class _AnimatedEntryCard extends StatelessWidget {
         );
       },
       child: child,
+    );
+  }
+}
+
+class _MiniActionButton extends StatelessWidget {
+  const _MiniActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 36,
+      child: FilledButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16),
+        label: Text(label, style: const TextStyle(fontSize: 13)),
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.08),
+          foregroundColor: Theme.of(context).colorScheme.primary,
+          elevation: 0,
+        ),
+      ),
     );
   }
 }

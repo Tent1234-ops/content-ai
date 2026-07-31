@@ -9,7 +9,7 @@ class AnalysisRepository {
 
   final ApiClient _client;
 
-  Future<AnalysisResultViewData> analyzeAndSaveVideo({
+  Future<String> startAnalyzeAndSaveVideo({
     String? filePath,
     Uint8List? fileBytes,
     Stream<List<int>>? fileStream,
@@ -24,7 +24,17 @@ class AnalysisRepository {
       fileStream: fileStream,
       fileSize: fileSize,
     );
-    return AnalysisResultViewData.fromJson(
+    final payload = Map<String, dynamic>.from(response as Map);
+    final jobId = payload['job_id']?.toString();
+    if (jobId == null || jobId.isEmpty) {
+      throw Exception('Backend did not return a job id.');
+    }
+    return jobId;
+  }
+
+  Future<AnalysisJobStatus> getAnalysisJob(String jobId) async {
+    final response = await _client.get('/jobs/$jobId');
+    return AnalysisJobStatus.fromJson(
       Map<String, dynamic>.from(response as Map),
     );
   }
