@@ -1,10 +1,13 @@
 import re
+import os
 from collections import Counter
 from typing import Dict, List
 
 from app.services.pipeline.domain_rules import domain_phrase_lexicon
 from app.services.pipeline.core import normalize_asr_terms, normalize_space
 from utils.text_clean import clean_text
+
+USE_PYTHAINLP = os.getenv("NLP_USE_PYTHAINLP", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 try:
     from pythainlp.tokenize import word_tokenize
@@ -78,7 +81,7 @@ def normalize_text_for_nlp(text: str) -> str:
 
 def tokenize_text(text: str) -> List[str]:
     normalized = normalize_text_for_nlp(text)
-    if word_tokenize is not None:
+    if USE_PYTHAINLP and word_tokenize is not None:
         raw_tokens: List[str] = []
         for chunk in normalized.lower().split():
             if re.search(r"[\u0E00-\u0E7F]", chunk):

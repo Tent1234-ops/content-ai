@@ -12,10 +12,8 @@ from app.database.models import (
     ClusterRun,
     ContentKeyword,
     DatasetContent,
-    FollowedTopic,
     Recommendation,
     Keyword,
-    Notification,
     SystemLog,
     TrendingItem,
     User,
@@ -65,55 +63,6 @@ def _save_dataset_trends(
             db.add(existing)
             created += 1
         db.flush()
-
-        title_text = str(item.title or "").lower()
-        category_text = str(getattr(item, "category", None) or "").lower()
-        searchable_text = f"{title_text} {category_text}".strip()
-        trend_link = item.video_url or f"{source_name}:{item.title}"
-        followed_topics = db.query(FollowedTopic).all()
-        for follow in followed_topics:
-            followed_value = str(follow.value or "").strip().lower()
-            if not followed_value:
-                continue
-            if follow.match_type == "domain":
-                is_match = followed_value == category_text
-            else:
-                is_match = followed_value in searchable_text
-            if not is_match:
-                continue
-
-            duplicate = (
-                db.query(Notification)
-                .filter(
-                    Notification.user_id == follow.user_id,
-                    Notification.link == trend_link,
-                    Notification.topic == followed_value,
-                )
-                .first()
-            )
-            if duplicate is not None:
-                continue
-
-            create_notification(
-                db=db,
-                user_id=follow.user_id,
-                dataset_id=existing.dataset_id,
-                title=f"New {source_name.title()} trend: {item.title}",
-                body=f"Matched your followed {follow.match_type}: {follow.value}",
-                link=trend_link,
-                type="trend",
-                topic=follow.value,
-                source_platform=f"{source_name}_{source_mode}",
-                trend_score=float(item.trend_score or 0.0),
-                payload={
-                    "source": source_name,
-                    "mode": source_mode,
-                    "match_type": follow.match_type,
-                    "matched_value": follow.value,
-                    "category": getattr(item, "category", None),
-                },
-            )
-            notifications_created += 1
 
     log_system_event(
         db,

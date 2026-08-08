@@ -160,7 +160,7 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<AnalysisResultViewData> _pollAnalysisJob(String jobId) async {
-    for (var attempt = 0; attempt < 180; attempt++) {
+    for (var attempt = 0; attempt < 600; attempt++) {
       final job = await _repository.getAnalysisJob(jobId);
       if (!mounted) {
         throw Exception('Upload screen was closed.');
@@ -192,7 +192,7 @@ class _UploadScreenState extends State<UploadScreen> {
 
       await Future.delayed(const Duration(seconds: 2));
     }
-    throw Exception('Analysis timed out. Please check History or try again.');
+    throw Exception('Analysis is still running. Please check History later or try a shorter clip.');
   }
 
   void _startProgressTimer() {
@@ -216,11 +216,11 @@ class _UploadScreenState extends State<UploadScreen> {
         } else if (_uploadProgress < 90) {
           _uploadProgress = 90;
           _statusMessage = 'Processing AI analysis...';
-        } else if (_uploadProgress < 95) {
-          _uploadProgress = 95;
+        } else if (_uploadProgress < 92) {
+          _uploadProgress = 92;
           _statusMessage = 'Finishing up report...';
-        } else if (_uploadProgress < 98) {
-          _uploadProgress = 98;
+        } else if (_uploadProgress < 94) {
+          _uploadProgress = 94;
           _statusMessage = 'Still processing analysis...';
         }
       });

@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS system_configs (
   enable_google_trends BOOLEAN NOT NULL DEFAULT TRUE,
   enable_tiktok_trending BOOLEAN NOT NULL DEFAULT TRUE,
   auto_scan_interval_hours INT NOT NULL DEFAULT 6,
-  asr_model_default VARCHAR(20) NOT NULL DEFAULT 'small',
+  asr_model_default VARCHAR(20) NOT NULL DEFAULT 'tiny',
   enable_model_toggle BOOLEAN NOT NULL DEFAULT TRUE,
   job_backend VARCHAR(20) NOT NULL DEFAULT 'inprocess',
   redis_url VARCHAR(255) NULL,
@@ -208,6 +208,21 @@ CREATE TABLE IF NOT EXISTS notifications (
   CONSTRAINT fk_notifications_dataset
     FOREIGN KEY (dataset_id) REFERENCES dataset_contents(dataset_id)
     ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_trend_snapshots (
+  snapshot_id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  platform VARCHAR(50) NOT NULL,
+  item_keys TEXT NOT NULL,
+  snapshot_payload TEXT NOT NULL,
+  last_checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_user_trend_snapshot_user_platform (user_id, platform),
+  CONSTRAINT fk_user_trend_snapshots_user
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS followed_topics (

@@ -8,8 +8,16 @@ class DashboardRepository {
 
   Future<DashboardOverview> getOverview() async {
     final response =
-        await _client.get('/dashboard/summary?trend_mode=live&trend_limit=20');
+        await _client.get('/dashboard/summary?trend_mode=live&trend_limit=50');
     return DashboardOverview.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
+
+  Future<LiveTrendSnapshot> getLiveTrendSnapshot({int limit = 50}) async {
+    final response =
+        await _client.get('/dashboard/live-trends/snapshot?trend_limit=$limit');
+    return LiveTrendSnapshot.fromJson(
       Map<String, dynamic>.from(response as Map),
     );
   }
@@ -59,7 +67,7 @@ class DashboardRepository {
     await _client.post('/notifications/mark_read', {'ids': ids});
   }
 
-  Future<List<TrendSyncResult>> syncAllTrendsLive({int limit = 20}) async {
+  Future<List<TrendSyncResult>> syncAllTrendsLive({int limit = 50}) async {
     final platforms = ['youtube', 'google', 'tiktok'];
     final results = <TrendSyncResult>[];
     for (final platform in platforms) {

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter, defaultdict
 from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent
-from app.services.nlp import filter_tokens, normalize_text_for_nlp, tokenize_text
-from app.services.pipeline.core import normalize_asr_terms
+from app.services.nlp import filter_tokens
+from app.services.pipeline.core import normalize_space
 from app.services.pipeline.domain_rules import DOMAIN_BASE, DOMAIN_HINTS, detect_domain
 
 
@@ -23,8 +24,9 @@ def _weighted_dataset_rows(db: Session, source_prefix: str, limit: int) -> List[
 
 
 def _token_counter(text: str) -> Counter[str]:
-    normalized = normalize_text_for_nlp(normalize_asr_terms(text or ""))
-    return Counter(filter_tokens(tokenize_text(normalized)))
+    normalized = normalize_space(text or "").lower()
+    tokens = re.findall(r"[\u0E00-\u0E7Fa-z0-9][\u0E00-\u0E7Fa-z0-9\-]*", normalized)
+    return Counter(filter_tokens(tokens))
 
 
 def _cosine(left: Counter[str] | Dict[str, float], right: Counter[str] | Dict[str, float]) -> float:

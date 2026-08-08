@@ -1,6 +1,6 @@
 # Runtime configuration store for in-memory settings that mirror admin DB settings
 _runtime = {
-    "asr_model": "small",  # default runtime model
+    "asr_model": "tiny",  # demo-friendly default ASR model
     "enable_model_toggle": True,
     "job_backend": "inprocess",  # inprocess | rq | celery
     "redis_url": None,

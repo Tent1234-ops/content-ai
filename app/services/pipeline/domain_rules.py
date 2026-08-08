@@ -28,6 +28,8 @@ DOMAIN_HINTS = {
         "75%",
     ],
     "audio": [
+        "headphone",
+        "headphones",
         "headset",
         "หูฟัง",
         "earbuds",

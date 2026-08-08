@@ -12,7 +12,9 @@ from app.schemas.dashboard import (
     DashboardOverviewResponse,
     DashboardRefreshResponse,
 )
+from app.schemas.notifications import NotificationItem
 from app.services.dashboard import build_dashboard_overview, build_dashboard_topic_insights
+from app.services.live_trend_notifications import compare_live_trend_snapshot
 from app.services.trending_fetcher import RateLimitedError, trigger_trending_refresh
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -22,7 +24,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 def dashboard_overview(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
     trend_mode: str = Query(default="live", pattern="^(auto|mock|live)$"),
-    trend_limit: int = Query(default=5, ge=1, le=20),
+    trend_limit: int = Query(default=50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -41,7 +43,7 @@ def dashboard_overview(
 def dashboard_summary(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
     trend_mode: str = Query(default="live", pattern="^(auto|mock|live)$"),
-    trend_limit: int = Query(default=3, ge=1, le=20),
+    trend_limit: int = Query(default=50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -112,6 +114,28 @@ def dashboard_summary(
     return result
 
 
+@router.get("/live-trends/snapshot")
+def dashboard_live_trends_snapshot(
+    region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
+    trend_limit: int = Query(default=50, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = compare_live_trend_snapshot(
+        db=db,
+        user=current_user,
+        region=region.upper(),
+        limit=trend_limit,
+    )
+    return {
+        **result,
+        "new_notifications": [
+            NotificationItem.model_validate(item).model_dump(mode="json")
+            for item in result.get("new_notifications", [])
+        ],
+    }
+
+
 @router.post("/refresh", response_model=DashboardRefreshResponse)
 def dashboard_refresh(
     current_user: User = Depends(get_current_user),
@@ -129,7 +153,7 @@ def dashboard_refresh(
 def dashboard_emerging_topics(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
     trend_mode: str = Query(default="live", pattern="^(auto|mock|live)$"),
-    trend_limit: int = Query(default=5, ge=1, le=20),
+    trend_limit: int = Query(default=50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):

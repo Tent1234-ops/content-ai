@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+import time
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from statistics import median
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent, UserContent
@@ -18,6 +20,7 @@ from app.services.pipeline.core import (
     extract_features,
     feature_to_keywords,
     normalize_asr_terms,
+    normalize_space,
 )
 from app.services.pipeline.domain_rules import (
     DOMAIN_BASE,
@@ -51,6 +54,9 @@ GENERIC_RECOMMENDATION_BLACKLIST = {
     "new",
     "best",
 }
+
+PROFILE_CACHE_TTL_SECONDS = 300
+_PROFILE_CACHE: Dict[Tuple[object, ...], Tuple[float, List[Dict[str, object]]]] = {}
 
 
 def _normalize_keyword(keyword: str) -> str:
@@ -112,6 +118,63 @@ def _weighted_increment(counter: Dict[str, float], key: str, weight: float) -> N
     if not key:
         return
     counter[key] = counter.get(key, 0.0) + weight
+
+
+def _fast_dataset_tokens(text: str) -> List[str]:
+    normalized = normalize_space(text or "").lower()
+    tokens = re.findall(r"[\u0E00-\u0E7Fa-z0-9][\u0E00-\u0E7Fa-z0-9\-]*", normalized)
+    return filter_tokens(tokens)
+
+
+def _fast_keyword_items(text: str, domain: str, max_keywords: int) -> List[Dict[str, float]]:
+    normalized = normalize_space(text or "").lower()
+    token_counts = Counter(_fast_dataset_tokens(normalized))
+    scores: Dict[str, float] = {}
+
+    for phrase in [*DOMAIN_BASE.get(domain, []), *DOMAIN_HINTS.get(domain, [])]:
+        phrase_text = str(phrase or "").strip().lower()
+        if not phrase_text:
+            continue
+        if phrase_text in normalized:
+            scores[phrase_text] = max(scores.get(phrase_text, 0.0), 2.5 + len(phrase_text.split()) * 0.3)
+
+    for token, count in token_counts.items():
+        scores[token] = max(scores.get(token, 0.0), float(count))
+
+    ranked = [
+        {"keyword": keyword, "score": round(score, 3)}
+        for keyword, score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    return ranked[:max_keywords]
+
+
+def _analyze_dataset_profile_snapshot(
+    text: str,
+    title: str | None = None,
+    category: str | None = None,
+    max_keywords: int = 12,
+    hook_duration: int = 60,
+) -> Dict[str, object]:
+    merged_text = " ".join(part for part in [title or "", text or "", category or ""] if part).strip()
+    detected = detect_domain(f"{merged_text} {category or ''}")
+    domain = detected if detected != "general" else detect_domain(category or "")
+    if domain == "general" and category:
+        domain = str(category).strip().lower() or "general"
+    if domain not in DEFAULT_DURATION_BY_DOMAIN:
+        domain = detected if detected in DEFAULT_DURATION_BY_DOMAIN else "general"
+
+    ranked_keywords = _fast_keyword_items(merged_text, domain, max_keywords)
+    tokens = _fast_dataset_tokens(merged_text)
+    hook_term_limit = min(12, max(4, int(hook_duration / 15)))
+    return {
+        "domain": domain,
+        "nlp_result": {"top_keywords": ranked_keywords},
+        "comparison_dimensions": [
+            {"name": name, "confidence": 1.0}
+            for name in DOMAIN_DIMENSIONS_ORDER.get(domain, [])[:8]
+        ],
+        "hook_terms": tokens[:hook_term_limit],
+    }
 
 
 def analyze_text_snapshot(
@@ -206,6 +269,31 @@ def build_dataset_profiles(
         return []
 
     min_date = datetime.utcnow() - timedelta(days=admin_config.analysis_time_range_days)
+    row_count, newest_created_at, max_trend_score = (
+        db.query(
+            func.count(DatasetContent.dataset_id),
+            func.max(DatasetContent.created_at),
+            func.max(DatasetContent.trend_score),
+        )
+        .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
+        .filter(DatasetContent.created_at >= min_date)
+        .one()
+    )
+    cache_key = (
+        source_prefix,
+        int(limit),
+        int(row_count or 0),
+        str(newest_created_at or ""),
+        round(float(max_trend_score or 0.0), 3),
+        int(admin_config.analysis_time_range_days),
+        int(admin_config.max_keywords_display),
+        int(admin_config.hook_analysis_duration),
+    )
+    cached = _PROFILE_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and now - cached[0] <= PROFILE_CACHE_TTL_SECONDS:
+        return cached[1]
+
     rows = (
         db.query(DatasetContent)
         .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
@@ -225,9 +313,10 @@ def build_dataset_profiles(
         base_text = " ".join(part for part in [row.title or "", row.transcript or "", row.category or ""] if part).strip()
         if not base_text:
             continue
-        snapshot = analyze_text_snapshot(
+        snapshot = _analyze_dataset_profile_snapshot(
             base_text,
-            row.title,
+            title=row.title,
+            category=row.category,
             max_keywords=admin_config.max_keywords_display,
             hook_duration=admin_config.hook_analysis_duration,
         )
@@ -287,6 +376,8 @@ def build_dataset_profiles(
         )
 
     profiles.sort(key=lambda item: (item["domain"] == "general", -item["sample_size"], item["domain"]))
+    _PROFILE_CACHE.clear()
+    _PROFILE_CACHE[cache_key] = (now, profiles)
     return profiles
 
 

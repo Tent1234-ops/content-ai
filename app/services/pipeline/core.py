@@ -1,5 +1,7 @@
+import os
 import re
 import subprocess
+import tempfile
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -31,26 +33,34 @@ def convert_numpy(obj):
     return obj
 
 
-def extract_audio(video_path: str, audio_path: str = "temp.wav"):
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            video_path,
-            "-vn",
-            "-acodec",
-            "pcm_s16le",
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            audio_path,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+def extract_audio(video_path: str, audio_path: str, max_seconds: int = 90) -> bool:
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        video_path,
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+    ]
+    if max_seconds > 0:
+        command.extend(["-t", str(max_seconds)])
+    command.append(audio_path)
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=max(30, max_seconds + 45),
+        )
+        return result.returncode == 0 and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0
+    except Exception:
+        return False
 
 
 def simple_summarize(text: str):
@@ -306,6 +316,8 @@ DOMAIN_HINTS = {
         "75%",
     ],
     "audio": [
+        "headphone",
+        "headphones",
         "headset",
         "หูฟัง",
         "เฮดเซต",
@@ -700,7 +712,7 @@ def extract_features(text: str) -> Dict[str, object]:
     if "fixy" in low or "fixed rgb" in low:
         features["lighting_mode"] = "fixed_rgb"
 
-    if "headset" in low or "earphone" in low or "earbuds" in low or "iem" in low or "หูฟัง" in low:
+    if "headphone" in low or "headset" in low or "earphone" in low or "earbuds" in low or "iem" in low or "หูฟัง" in low:
         features["audio_product"] = True
     if "mic" in low or "microphone" in low or "ไมโครโฟน" in low or "ไมค์" in low:
         features["mic_focus"] = True
@@ -2037,6 +2049,8 @@ def extract_rule_keywords_from_text(text: str) -> List[str]:
 # Visual Fallback
 # =========================
 def visual_context(video_path: str, max_frames: int = 6) -> Tuple[str, List[str]]:
+    if os.getenv("ANALYZE_ENABLE_VISUAL", "0").strip().lower() not in {"1", "true", "yes"}:
+        return "", []
     if detect_scenes is None:
         return "", []
 
@@ -2151,7 +2165,7 @@ def _local_extract_keywords(text: str, top_k: int = 15, domain: str | None = Non
 # =========================
 # Main Pipeline
 # =========================
-def analyze_video(video_path: str):
+def analyze_video(video_path: str, display_name: str | None = None):
     print(f"[pipeline] analyze_video start: {video_path}", flush=True)
     # Lazy import heavy NLP models to avoid failing app startup
     # when model files are not cached yet.
@@ -2162,21 +2176,62 @@ def analyze_video(video_path: str):
     semantic_keywords = None
     ml_import_ok = True
 
+    enable_ml_keywords = os.getenv("ANALYZE_ENABLE_ML_KEYWORDS", "0").strip().lower() in {"1", "true", "yes"}
     try:
-        print("[pipeline] loading ML keyword models...", flush=True)
-        from models.keyword_ai import extract_keywords as keybert_keywords
-        from models.keyword_ranker import rank_keywords
-        from models.semantic_keyword import semantic_keywords
+        if enable_ml_keywords:
+            print("[pipeline] loading ML keyword models...", flush=True)
+            from models.keyword_ai import extract_keywords as keybert_keywords
+            from models.keyword_ranker import rank_keywords
+            from models.semantic_keyword import semantic_keywords
+        else:
+            print("[pipeline] ML keyword models disabled; using fast rule/local analysis", flush=True)
+            ml_import_ok = False
     except Exception as exc:
         print(f"[pipeline] ML model import failed: {exc}", flush=True)
         ml_import_ok = False
 
-    print("[pipeline] extracting audio...", flush=True)
-    extract_audio(video_path)
+    max_audio_seconds = int(os.getenv("ANALYZE_MAX_AUDIO_SECONDS", "90") or "90")
+    audio_path = tempfile.NamedTemporaryFile(prefix="content_ai_", suffix=".wav", delete=False).name
+    try:
+        print(f"[pipeline] extracting audio first {max_audio_seconds}s...", flush=True)
+        audio_ok = extract_audio(video_path, audio_path, max_seconds=max_audio_seconds)
 
-    print("[pipeline] transcribing audio...", flush=True)
-    stt = transcribe_with_meta("temp.wav")
+        print("[pipeline] transcribing audio...", flush=True)
+        if audio_ok:
+            try:
+                stt = transcribe_with_meta(audio_path)
+            except Exception as exc:
+                print(f"[pipeline] STT failed: {exc}", flush=True)
+                stt = {
+                    "text": "",
+                    "language": None,
+                    "language_probability": None,
+                    "segment_count": 0,
+                    "avg_no_speech_prob": 1.0,
+                    "segments": [],
+                    "fallback_reason": str(exc),
+                }
+        else:
+            stt = {
+                "text": "",
+                "language": None,
+                "language_probability": None,
+                "segment_count": 0,
+                "avg_no_speech_prob": 1.0,
+                "segments": [],
+                "fallback_reason": "audio_extraction_failed",
+            }
+    finally:
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
+
     transcript = stt.get("text", "")
+    if not transcript:
+        fallback_source = display_name or os.path.basename(video_path)
+        fallback_title = os.path.splitext(os.path.basename(fallback_source))[0].replace("_", " ").replace("-", " ")
+        transcript = fallback_title
 
     # Decide whether to use aggressive correction based on segment-level confidence
     avg_no_speech = stt.get("avg_no_speech_prob")

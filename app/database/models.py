@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -23,6 +23,7 @@ class User(Base):
     configs = relationship("SystemConfig", back_populates="user")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     followed_topics = relationship("FollowedTopic", back_populates="user", cascade="all, delete-orphan")
+    trend_snapshots = relationship("UserTrendSnapshot", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserContent(Base):
@@ -183,7 +184,7 @@ class SystemConfig(Base):
     enable_tiktok_trending = Column(Boolean, nullable=False, default=True)
     auto_scan_interval_hours = Column(Integer, nullable=False, default=6)
     # New runtime/admin-configurable fields
-    asr_model_default = Column(String(20), nullable=False, default='small')
+    asr_model_default = Column(String(20), nullable=False, default='tiny')
     enable_model_toggle = Column(Boolean, nullable=False, default=True)
     job_backend = Column(String(20), nullable=False, default='inprocess')
     redis_url = Column(String(255), nullable=True)
@@ -239,3 +240,21 @@ class FollowedTopic(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="followed_topics")
+
+
+class UserTrendSnapshot(Base):
+    __tablename__ = "user_trend_snapshots"
+    __table_args__ = (
+        UniqueConstraint("user_id", "platform", name="uq_user_trend_snapshot_user_platform"),
+    )
+
+    snapshot_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    platform = Column(String(50), nullable=False)
+    item_keys = Column(Text, nullable=False, default="[]")
+    snapshot_payload = Column(Text, nullable=False, default="[]")
+    last_checked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    user = relationship("User", back_populates="trend_snapshots")

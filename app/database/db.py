@@ -51,6 +51,28 @@ def _ensure_mysql_database() -> None:
 def _ensure_mysql_schema_compat() -> None:
     bootstrap_engine = create_engine(_mysql_database_url(), pool_pre_ping=True)
     with bootstrap_engine.connect() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS user_trend_snapshots (
+                  snapshot_id INT AUTO_INCREMENT PRIMARY KEY,
+                  user_id INT NOT NULL,
+                  platform VARCHAR(50) NOT NULL,
+                  item_keys TEXT NOT NULL,
+                  snapshot_payload TEXT NOT NULL,
+                  last_checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  UNIQUE KEY uq_user_trend_snapshot_user_platform (user_id, platform),
+                  CONSTRAINT fk_user_trend_snapshots_user
+                    FOREIGN KEY (user_id) REFERENCES users(user_id)
+                    ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        connection.commit()
+
         # Add duration_seconds if missing (older schema compatibility)
         column_exists = connection.execute(
             text(
@@ -109,9 +131,17 @@ def _ensure_mysql_schema_compat() -> None:
 
         # Add new admin config fields to system_configs if missing
         for table_name, column_name, sql_type in [
+            ("content_keywords", "score", "FLOAT NOT NULL DEFAULT 0"),
+            ("analysis_results", "cluster_id", "INT NULL"),
+            ("analysis_results", "dataset_id", "INT NULL"),
+            ("notifications", "dataset_id", "INT NULL"),
+            ("notifications", "message", "TEXT NULL"),
+            ("notifications", "topic", "VARCHAR(100) NOT NULL DEFAULT 'general'"),
+            ("notifications", "source_platform", "VARCHAR(50) NOT NULL DEFAULT 'system'"),
+            ("notifications", "trend_score", "FLOAT NOT NULL DEFAULT 0"),
             ("system_configs", "tiktok_region", "VARCHAR(2) NOT NULL DEFAULT 'TH'"),
             ("system_configs", "enable_tiktok_trending", "BOOLEAN NOT NULL DEFAULT TRUE"),
-            ("system_configs", "asr_model_default", "VARCHAR(20) NOT NULL DEFAULT 'small'"),
+            ("system_configs", "asr_model_default", "VARCHAR(20) NOT NULL DEFAULT 'tiny'"),
             ("system_configs", "enable_model_toggle", "BOOLEAN NOT NULL DEFAULT TRUE"),
             ("system_configs", "job_backend", "VARCHAR(20) NOT NULL DEFAULT 'inprocess'"),
             ("system_configs", "redis_url", "VARCHAR(255) NULL"),
@@ -176,9 +206,59 @@ def _ensure_sqlite_schema_compat() -> None:
                 connection.execute(text("ALTER TABLE users ADD COLUMN updated_at DATETIME NULL"))
                 connection.commit()
 
+        connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS user_trend_snapshots (
+                  snapshot_id INTEGER PRIMARY KEY,
+                  user_id INTEGER NOT NULL,
+                  platform VARCHAR(50) NOT NULL,
+                  item_keys TEXT NOT NULL DEFAULT '[]',
+                  snapshot_payload TEXT NOT NULL DEFAULT '[]',
+                  last_checked_at DATETIME NOT NULL,
+                  created_at DATETIME NOT NULL,
+                  updated_at DATETIME NULL,
+                  UNIQUE(user_id, platform),
+                  FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+                """
+            )
+        )
+        connection.commit()
+
         if table_has_column("dataset_contents", "dataset_id"):
             if not table_has_column("dataset_contents", "duration_seconds"):
                 connection.execute(text("ALTER TABLE dataset_contents ADD COLUMN duration_seconds INTEGER NULL"))
+                connection.commit()
+
+        if table_has_column("content_keywords", "content_id"):
+            if not table_has_column("content_keywords", "score"):
+                connection.execute(text("ALTER TABLE content_keywords ADD COLUMN score FLOAT NOT NULL DEFAULT 0"))
+                connection.commit()
+
+        if table_has_column("analysis_results", "result_id"):
+            if not table_has_column("analysis_results", "cluster_id"):
+                connection.execute(text("ALTER TABLE analysis_results ADD COLUMN cluster_id INTEGER NULL"))
+                connection.commit()
+            if not table_has_column("analysis_results", "dataset_id"):
+                connection.execute(text("ALTER TABLE analysis_results ADD COLUMN dataset_id INTEGER NULL"))
+                connection.commit()
+
+        if table_has_column("notifications", "notification_id"):
+            if not table_has_column("notifications", "dataset_id"):
+                connection.execute(text("ALTER TABLE notifications ADD COLUMN dataset_id INTEGER NULL"))
+                connection.commit()
+            if not table_has_column("notifications", "message"):
+                connection.execute(text("ALTER TABLE notifications ADD COLUMN message TEXT NOT NULL DEFAULT ''"))
+                connection.commit()
+            if not table_has_column("notifications", "topic"):
+                connection.execute(text("ALTER TABLE notifications ADD COLUMN topic VARCHAR(100) NOT NULL DEFAULT 'general'"))
+                connection.commit()
+            if not table_has_column("notifications", "source_platform"):
+                connection.execute(text("ALTER TABLE notifications ADD COLUMN source_platform VARCHAR(50) NOT NULL DEFAULT 'system'"))
+                connection.commit()
+            if not table_has_column("notifications", "trend_score"):
+                connection.execute(text("ALTER TABLE notifications ADD COLUMN trend_score FLOAT NOT NULL DEFAULT 0"))
                 connection.commit()
 
         if table_has_column("system_configs", "config_id"):
@@ -192,7 +272,7 @@ def _ensure_sqlite_schema_compat() -> None:
                 connection.execute(text("ALTER TABLE system_configs ADD COLUMN enable_tiktok_trending INTEGER NOT NULL DEFAULT 1"))
                 connection.commit()
             if not table_has_column("system_configs", "asr_model_default"):
-                connection.execute(text("ALTER TABLE system_configs ADD COLUMN asr_model_default TEXT NOT NULL DEFAULT 'small'"))
+                connection.execute(text("ALTER TABLE system_configs ADD COLUMN asr_model_default TEXT NOT NULL DEFAULT 'tiny'"))
                 connection.commit()
             if not table_has_column("system_configs", "enable_model_toggle"):
                 connection.execute(text("ALTER TABLE system_configs ADD COLUMN enable_model_toggle INTEGER NOT NULL DEFAULT 1"))

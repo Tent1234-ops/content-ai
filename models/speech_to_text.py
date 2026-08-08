@@ -1,4 +1,5 @@
 import importlib
+import os
 from typing import Dict
 
 # Lazy model manager that loads WhisperModel per requested size
@@ -42,11 +43,23 @@ class ModelManager:
         device, compute_type = _detect_device_compute()
         # smaller sizes can use smaller beam and int8 for CPU
         compute = compute_type
+        model_kwargs = {
+            "device": device,
+            "compute_type": compute,
+        }
+        if os.getenv("ASR_LOCAL_FILES_ONLY", "1").strip().lower() not in {"0", "false", "no"}:
+            model_kwargs["local_files_only"] = True
+
         try:
+            model = WhisperModel(size, **model_kwargs)
+        except TypeError:
             model = WhisperModel(size, device=device, compute_type=compute)
         except Exception:
             # fallback to CPU int8
-            model = WhisperModel(size, device="cpu", compute_type="int8")
+            fallback_kwargs = {"device": "cpu", "compute_type": "int8"}
+            if "local_files_only" in model_kwargs:
+                fallback_kwargs["local_files_only"] = True
+            model = WhisperModel(size, **fallback_kwargs)
 
         _MODEL_STORE[size] = {
             "model": model,
@@ -58,11 +71,12 @@ class ModelManager:
 
 def transcribe_with_meta(audio_path, language=None, model_size: str = None):
     # Decide model size from runtime if not provided
-    model_size = model_size or runtime_get("asr_model") or "small"
+    model_size = model_size or runtime_get("asr_model") or "tiny"
     model = ModelManager.get_model(model_size)
 
     transcribe_kwargs = {
-        "beam_size": 5 if model_size in {"medium", "large"} else 3
+        "beam_size": 5 if model_size in {"medium", "large"} else 1,
+        "vad_filter": True,
     }
     if language:
         transcribe_kwargs["language"] = language
