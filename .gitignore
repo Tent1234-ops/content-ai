@@ -7,17 +7,34 @@ __pycache__/
 temp.wav
 temp_*
 tmp_*
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*_output.json
+output*.json
 test_app*.db
 test_*.db
 *.wav
 *.mp3
 *.mp4
 *.json.tmp
+*.tmp
 
 # Local uploads / media outputs
 videos/
 artifacts/
 artifacts_*/
+runtime_artifacts/
+
+# Archived demo artifacts kept out of root intentionally
+!archive/runtime_artifacts/
+!archive/runtime_artifacts/app.db
+!archive/runtime_artifacts/temp.wav
+!archive/manual_tests/
+!archive/manual_tests/frontend_flutter/
+!archive/manual_tests/frontend_flutter/tmp_test.txt
+!archive/manual_tests/frontend_flutter/tmp_token.txt
 
 # Environment / OS
 .env

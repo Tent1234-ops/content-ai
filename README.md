@@ -55,7 +55,16 @@ Backend จะเปิดที่ `http://127.0.0.1:8000`
 
 ### SQLite Demo
 
-ไม่ต้องติดตั้ง database เพิ่ม ตั้ง `DATABASE_URL=sqlite:///./app.db` แล้วรัน backend ได้เลย ระบบจะสร้าง/ปรับ schema ให้อัตโนมัติจาก SQLAlchemy model
+เพื่อให้ root โปรเจคสะอาด จะไม่เก็บ `app.db` ไว้ใน root repository แล้ว ให้ตั้ง
+`DATABASE_URL=sqlite:///./app.db` แล้วรัน backend หนึ่งครั้งเพื่อให้ SQLAlchemy
+สร้าง/ปรับ schema อัตโนมัติ จากนั้นรัน seed script เพื่อเติมข้อมูล demo
+
+```powershell
+uvicorn app.main:app --reload
+python scripts/seed_demo_dataset.py
+```
+
+ถ้าต้องอ้างอิงฐานข้อมูล demo เดิม ไฟล์ถูกย้ายไปที่ `archive/runtime_artifacts/app.db`
 
 ### MySQL
 
