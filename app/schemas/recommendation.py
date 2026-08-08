@@ -44,7 +44,7 @@ class DatasetProfilesResponse(BaseModel):
 class RecommendationTextRequest(BaseModel):
     title: Optional[str] = Field(default=None, max_length=255)
     text: str = Field(..., min_length=1)
-    source: str = Field(default="youtube", pattern="^(youtube|google)$")
+    source: str = Field(default="youtube", pattern="^(youtube|google|tiktok)$")
     profile_limit: int = Field(default=100, ge=10, le=500)
 
 
@@ -85,6 +85,7 @@ class RecommendationAdminDatasetHealth(BaseModel):
     total_dataset_contents: int
     youtube_dataset_contents: int
     google_dataset_contents: int
+    tiktok_dataset_contents: int = 0
     duration_coverage_count: int
     duration_coverage_ratio: float
 
@@ -92,8 +93,10 @@ class RecommendationAdminDatasetHealth(BaseModel):
 class RecommendationAdminProfileHealth(BaseModel):
     youtube_profiles: int
     google_profiles: int
+    tiktok_profiles: int = 0
     youtube_domains: list[str]
     google_domains: list[str]
+    tiktok_domains: list[str] = Field(default_factory=list)
 
 
 class RecommendationAdminReportResponse(BaseModel):
@@ -102,3 +105,4 @@ class RecommendationAdminReportResponse(BaseModel):
     recent_source_activity: list[SourceActivityItem]
     youtube_profiles: list[DatasetProfileResponseItem]
     google_profiles: list[DatasetProfileResponseItem]
+    tiktok_profiles: list[DatasetProfileResponseItem] = Field(default_factory=list)

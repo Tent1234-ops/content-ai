@@ -1,5 +1,5 @@
 import 'common_models.dart';
-import 'recommendation_result.dart';
+import 'recommendation_result.dart' hide DatasetProfile;
 
 class AdminOverviewReport {
   const AdminOverviewReport({
@@ -45,11 +45,17 @@ class AdminOverviewReport {
 class DatasetHealth {
   const DatasetHealth({
     required this.totalDatasetContents,
+    required this.youtubeDatasetContents,
+    required this.googleDatasetContents,
+    required this.tiktokDatasetContents,
     required this.durationCoverageCount,
     required this.durationCoverageRatio,
   });
 
   final int totalDatasetContents;
+  final int youtubeDatasetContents;
+  final int googleDatasetContents;
+  final int tiktokDatasetContents;
   final int durationCoverageCount;
   final double durationCoverageRatio;
 
@@ -57,6 +63,12 @@ class DatasetHealth {
     return DatasetHealth(
       totalDatasetContents:
           (json['total_dataset_contents'] as num?)?.toInt() ?? 0,
+      youtubeDatasetContents:
+          (json['youtube_dataset_contents'] as num?)?.toInt() ?? 0,
+      googleDatasetContents:
+          (json['google_dataset_contents'] as num?)?.toInt() ?? 0,
+      tiktokDatasetContents:
+          (json['tiktok_dataset_contents'] as num?)?.toInt() ?? 0,
       durationCoverageCount:
           (json['duration_coverage_count'] as num?)?.toInt() ?? 0,
       durationCoverageRatio:
@@ -69,23 +81,31 @@ class ProfileHealth {
   const ProfileHealth({
     required this.youtubeProfiles,
     required this.googleProfiles,
+    required this.tiktokProfiles,
     required this.youtubeDomains,
     required this.googleDomains,
+    required this.tiktokDomains,
   });
 
   final int youtubeProfiles;
   final int googleProfiles;
+  final int tiktokProfiles;
   final List<String> youtubeDomains;
   final List<String> googleDomains;
+  final List<String> tiktokDomains;
 
   factory ProfileHealth.fromJson(Map<String, dynamic> json) {
     return ProfileHealth(
       youtubeProfiles: (json['youtube_profiles'] as num?)?.toInt() ?? 0,
       googleProfiles: (json['google_profiles'] as num?)?.toInt() ?? 0,
+      tiktokProfiles: (json['tiktok_profiles'] as num?)?.toInt() ?? 0,
       youtubeDomains: (json['youtube_domains'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
           .toList(),
       googleDomains: (json['google_domains'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      tiktokDomains: (json['tiktok_domains'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
           .toList(),
     );
@@ -121,12 +141,14 @@ class RecommendationAdminReport {
     required this.profileHealth,
     required this.youtubeProfiles,
     required this.googleProfiles,
+    required this.tiktokProfiles,
   });
 
   final DatasetHealth datasetHealth;
   final ProfileHealth profileHealth;
   final List<DatasetProfile> youtubeProfiles;
   final List<DatasetProfile> googleProfiles;
+  final List<DatasetProfile> tiktokProfiles;
 
   factory RecommendationAdminReport.fromJson(Map<String, dynamic> json) {
     return RecommendationAdminReport(
@@ -144,6 +166,51 @@ class RecommendationAdminReport {
           .map((item) =>
               DatasetProfile.fromJson(Map<String, dynamic>.from(item as Map)))
           .toList(),
+      tiktokProfiles: (json['tiktok_profiles'] as List<dynamic>? ?? const [])
+          .map((item) =>
+              DatasetProfile.fromJson(Map<String, dynamic>.from(item as Map)))
+          .toList(),
+    );
+  }
+}
+
+class AdminSettings {
+  const AdminSettings({
+    required this.maxKeywordsDisplay,
+    required this.hookAnalysisDuration,
+    required this.autoScanIntervalHours,
+    required this.youtubeRegion,
+    required this.googleRegion,
+    required this.tiktokRegion,
+    required this.enableYoutubeTrending,
+    required this.enableGoogleTrends,
+    required this.enableTiktokTrending,
+  });
+
+  final int maxKeywordsDisplay;
+  final int hookAnalysisDuration;
+  final int autoScanIntervalHours;
+  final String youtubeRegion;
+  final String googleRegion;
+  final String tiktokRegion;
+  final bool enableYoutubeTrending;
+  final bool enableGoogleTrends;
+  final bool enableTiktokTrending;
+
+  factory AdminSettings.fromJson(Map<String, dynamic> json) {
+    return AdminSettings(
+      maxKeywordsDisplay:
+          (json['max_keywords_display'] as num?)?.toInt() ?? 10,
+      hookAnalysisDuration:
+          (json['hook_analysis_duration'] as num?)?.toInt() ?? 60,
+      autoScanIntervalHours:
+          (json['auto_scan_interval_hours'] as num?)?.toInt() ?? 6,
+      youtubeRegion: json['youtube_region']?.toString() ?? 'TH',
+      googleRegion: json['google_region']?.toString() ?? 'TH',
+      tiktokRegion: json['tiktok_region']?.toString() ?? 'TH',
+      enableYoutubeTrending: json['enable_youtube_trending'] != false,
+      enableGoogleTrends: json['enable_google_trends'] != false,
+      enableTiktokTrending: json['enable_tiktok_trending'] != false,
     );
   }
 }
@@ -151,6 +218,8 @@ class RecommendationAdminReport {
 class ProfileComparison {
   const ProfileComparison({
     required this.domain,
+    required this.leftSource,
+    required this.rightSource,
     required this.leftSampleSize,
     required this.rightSampleSize,
     required this.leftDuration,
@@ -160,6 +229,8 @@ class ProfileComparison {
   });
 
   final String domain;
+  final String leftSource;
+  final String rightSource;
   final int leftSampleSize;
   final int rightSampleSize;
   final DurationRecommendation leftDuration;
@@ -167,9 +238,15 @@ class ProfileComparison {
   final List<KeywordScore> leftTopKeywords;
   final List<KeywordScore> rightTopKeywords;
 
-  factory ProfileComparison.fromJson(Map<String, dynamic> json) {
+  factory ProfileComparison.fromJson(
+    Map<String, dynamic> json, {
+    String leftSource = 'youtube',
+    String rightSource = 'google',
+  }) {
     return ProfileComparison(
       domain: json['domain']?.toString() ?? '-',
+      leftSource: leftSource,
+      rightSource: rightSource,
       leftSampleSize: (json['left_sample_size'] as num?)?.toInt() ?? 0,
       rightSampleSize: (json['right_sample_size'] as num?)?.toInt() ?? 0,
       leftDuration: DurationRecommendation.fromJson(

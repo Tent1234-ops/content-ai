@@ -21,7 +21,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 @router.get("/overview", response_model=DashboardOverviewResponse)
 def dashboard_overview(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
-    trend_mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
+    trend_mode: str = Query(default="live", pattern="^(auto|mock|live)$"),
     trend_limit: int = Query(default=5, ge=1, le=20),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -40,20 +40,15 @@ def dashboard_overview(
 @router.get("/summary")
 def dashboard_summary(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
-    trend_mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
+    trend_mode: str = Query(default="live", pattern="^(auto|mock|live)$"),
     trend_limit: int = Query(default=3, ge=1, le=20),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Lightweight dashboard summary for frontend cards. Respects runtime.dashboard_live flag and caches result for 60s."""
-    from app.runtime import get as runtime_get
-    from app.services.simple_cache import get as cache_get, invalidate_prefix as cache_invalidate_prefix, set as cache_set
+    """Lightweight live dashboard summary for frontend cards."""
+    from app.services.simple_cache import get as cache_get, set as cache_set
 
-    # Feature-flag: force mock mode if dashboard_live disabled
-    if not runtime_get("dashboard_live", False):
-        effective_mode = "mock"
-    else:
-        effective_mode = trend_mode
+    effective_mode = "live" if trend_mode == "live" else trend_mode
 
     cache_key = f"dashboard_summary:{current_user.user_id}:{region}:{effective_mode}:{trend_limit}"
     cached = cache_get(cache_key)
@@ -133,7 +128,7 @@ def dashboard_refresh(
 @router.get("/emerging-topics", response_model=DashboardEmergingTopicsResponse)
 def dashboard_emerging_topics(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
-    trend_mode: str = Query(default="auto", pattern="^(auto|mock|live)$"),
+    trend_mode: str = Query(default="live", pattern="^(auto|mock|live)$"),
     trend_limit: int = Query(default=5, ge=1, le=20),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

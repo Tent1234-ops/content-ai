@@ -2,6 +2,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.models import Cluster, ClusterMembership, ClusterRun, DatasetContent, SystemLog
+from app.schemas.admin_report import AdminDatasetCreate, AdminDatasetUpdate
+from app.services.persistence import log_system_event
 
 
 def list_admin_datasets(
@@ -31,6 +33,52 @@ def list_admin_datasets(
         .all()
     )
     return total, items
+
+
+def create_admin_dataset(
+    db: Session,
+    *,
+    payload: AdminDatasetCreate,
+    user_id: int | None = None,
+) -> DatasetContent:
+    item = DatasetContent(**payload.model_dump())
+    db.add(item)
+    db.flush()
+    log_system_event(
+        db,
+        user_id=user_id,
+        action="admin_dataset_create",
+        status="success",
+        detail=f"dataset_id={item.dataset_id}, source={item.source_platform}",
+    )
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def update_admin_dataset(
+    db: Session,
+    *,
+    dataset_id: int,
+    payload: AdminDatasetUpdate,
+    user_id: int | None = None,
+) -> DatasetContent | None:
+    item = db.query(DatasetContent).filter(DatasetContent.dataset_id == dataset_id).first()
+    if item is None:
+        return None
+    update_data = payload.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(item, key, value)
+    log_system_event(
+        db,
+        user_id=user_id,
+        action="admin_dataset_update",
+        status="success",
+        detail=f"dataset_id={dataset_id}, fields={list(update_data.keys())}",
+    )
+    db.commit()
+    db.refresh(item)
+    return item
 
 
 def list_admin_cluster_runs(

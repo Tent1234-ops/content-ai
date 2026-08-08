@@ -39,6 +39,23 @@ class ApiClient {
     return _decode(response);
   }
 
+  Future<dynamic> put(String path, Map<String, dynamic> body) async {
+    final response = await http.put(
+      Uri.parse(baseUrl + path),
+      headers: await _headers(),
+      body: jsonEncode(body),
+    );
+    return _decode(response);
+  }
+
+  Future<dynamic> delete(String path) async {
+    final response = await http.delete(
+      Uri.parse(baseUrl + path),
+      headers: await _headers(json: false),
+    );
+    return _decode(response);
+  }
+
   Future<dynamic> postMultipart(
     String path, {
     String? filePath,

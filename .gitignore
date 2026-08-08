@@ -5,9 +5,19 @@ __pycache__/
 
 # Runtime temp artifacts
 temp.wav
+temp_*
+tmp_*
+test_app*.db
+test_*.db
+*.wav
+*.mp3
+*.mp4
+*.json.tmp
 
 # Local uploads / media outputs
 videos/
+artifacts/
+artifacts_*/
 
 # Environment / OS
 .env

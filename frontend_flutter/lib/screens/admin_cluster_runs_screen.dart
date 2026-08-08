@@ -181,6 +181,8 @@ class _AdminClusterRunsScreenState extends State<AdminClusterRunsScreen> {
                                       value: 'youtube', child: Text('YouTube')),
                                   DropdownMenuItem(
                                       value: 'google', child: Text('Google')),
+                                  DropdownMenuItem(
+                                      value: 'tiktok', child: Text('TikTok')),
                                 ],
                                 onChanged: (value) {
                                   if (value == null) return;

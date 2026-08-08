@@ -7,8 +7,10 @@ from app.database.models import User
 from app.schemas.admin_report import (
     AdminClusterRunListResponse,
     AdminClusterRunDetailResponse,
+    AdminDatasetCreate,
     AdminDatasetItem,
     AdminDatasetListResponse,
+    AdminDatasetUpdate,
     AdminOverviewReportResponse,
     AdminSystemLogItem,
     AdminSystemLogListResponse,
@@ -30,10 +32,12 @@ class SourceUpdate(BaseModel):
 from app.schemas.auth import UserResponse
 from app.services.admin_report import (
     build_admin_overview_report,
+    create_admin_dataset,
     get_admin_cluster_run_detail,
     list_admin_cluster_runs,
     list_admin_datasets,
     list_admin_logs,
+    update_admin_dataset,
 )
 from app.services.admin_settings import (
     get_admin_config,
@@ -79,6 +83,34 @@ def admin_datasets(
         total=total,
         items=[AdminDatasetItem.model_validate(item, from_attributes=True) for item in items],
     )
+
+
+@router.post("/datasets", response_model=AdminDatasetItem)
+def admin_dataset_create(
+    payload: AdminDatasetCreate,
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    item = create_admin_dataset(db, payload=payload, user_id=current_user.user_id)
+    return AdminDatasetItem.model_validate(item, from_attributes=True)
+
+
+@router.put("/datasets/{dataset_id}", response_model=AdminDatasetItem)
+def admin_dataset_update(
+    dataset_id: int,
+    payload: AdminDatasetUpdate,
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    item = update_admin_dataset(
+        db,
+        dataset_id=dataset_id,
+        payload=payload,
+        user_id=current_user.user_id,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return AdminDatasetItem.model_validate(item, from_attributes=True)
 
 
 @router.get("/clusters/runs", response_model=AdminClusterRunListResponse)

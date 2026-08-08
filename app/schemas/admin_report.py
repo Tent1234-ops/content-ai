@@ -1,12 +1,14 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AdminDatasetItem(BaseModel):
     dataset_id: int
     title: str
+    video_url: Optional[str] = None
+    transcript: Optional[str] = None
     category: Optional[str] = None
     source_platform: str
     trend_score: float
@@ -16,6 +18,34 @@ class AdminDatasetItem(BaseModel):
     duration_seconds: Optional[int] = None
     published_at: Optional[datetime] = None
     created_at: datetime
+
+
+class AdminDatasetCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    video_url: Optional[str] = None
+    transcript: Optional[str] = None
+    category: Optional[str] = None
+    source_platform: str = Field(default="youtube_admin", min_length=1, max_length=50)
+    views: int = Field(default=0, ge=0)
+    likes: int = Field(default=0, ge=0)
+    comments: int = Field(default=0, ge=0)
+    trend_score: float = Field(default=0.0, ge=0)
+    duration_seconds: Optional[int] = Field(default=None, ge=0)
+    published_at: Optional[datetime] = None
+
+
+class AdminDatasetUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    video_url: Optional[str] = None
+    transcript: Optional[str] = None
+    category: Optional[str] = None
+    source_platform: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    views: Optional[int] = Field(default=None, ge=0)
+    likes: Optional[int] = Field(default=None, ge=0)
+    comments: Optional[int] = Field(default=None, ge=0)
+    trend_score: Optional[float] = Field(default=None, ge=0)
+    duration_seconds: Optional[int] = Field(default=None, ge=0)
+    published_at: Optional[datetime] = None
 
 
 class AdminDatasetListResponse(BaseModel):

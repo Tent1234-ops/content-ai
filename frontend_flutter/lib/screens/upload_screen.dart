@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../models/recommendation_result.dart';
 import '../repositories/analysis_repository.dart';
 import '../state/auth_scope.dart';
 import '../widgets/app_shell.dart';
@@ -111,13 +112,21 @@ class _UploadScreenState extends State<UploadScreen> {
 
     _startProgressTimer();
     try {
-      final response = await _repository.analyzeAndSaveVideo(
+      final jobId = await _repository.startAnalyzeAndSaveVideo(
         fileName: _selectedFileName!,
         filePath: _selectedFilePath,
         fileBytes: _selectedFileBytes,
         fileStream: _selectedFileStream,
         fileSize: _selectedFileSize,
       );
+
+      if (!mounted) return;
+      setState(() {
+        _uploadProgress = 20;
+        _statusMessage = 'Queued job $jobId';
+      });
+
+      final response = await _pollAnalysisJob(jobId);
 
       if (!mounted) return;
 
@@ -148,6 +157,42 @@ class _UploadScreenState extends State<UploadScreen> {
         setState(() => _loading = false);
       }
     }
+  }
+
+  Future<AnalysisResultViewData> _pollAnalysisJob(String jobId) async {
+    for (var attempt = 0; attempt < 180; attempt++) {
+      final job = await _repository.getAnalysisJob(jobId);
+      if (!mounted) {
+        throw Exception('Upload screen was closed.');
+      }
+
+      setState(() {
+        if (job.status == 'queued') {
+          _uploadProgress = _uploadProgress < 30 ? 30 : _uploadProgress;
+          _statusMessage = 'Queued for analysis...';
+        } else if (job.status == 'running') {
+          _uploadProgress = _uploadProgress < 85 ? 85 : _uploadProgress;
+          _statusMessage = 'Analyzing video...';
+        } else {
+          _statusMessage = 'Job status: ${job.status}';
+        }
+      });
+
+      if (job.isComplete) {
+        final result = job.result;
+        if (result == null) {
+          throw Exception('Analysis completed but no result was returned.');
+        }
+        return result;
+      }
+
+      if (job.isFailed) {
+        throw Exception(job.error ?? 'Analysis failed.');
+      }
+
+      await Future.delayed(const Duration(seconds: 2));
+    }
+    throw Exception('Analysis timed out. Please check History or try again.');
   }
 
   void _startProgressTimer() {

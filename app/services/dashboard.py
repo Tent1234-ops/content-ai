@@ -264,6 +264,20 @@ def _build_summary_trends(
     trend_mode: str,
     limit: int,
 ) -> tuple[str, list[Dict[str, object]]]:
+    if trend_mode == "live":
+        try:
+            if source_prefix == "youtube":
+                source_mode, items = get_youtube_trending(region=region, limit=limit, mode="live")
+            elif source_prefix == "google":
+                source_mode, items = get_google_trending(region=region, limit=limit, mode="live")
+            elif source_prefix == "tiktok":
+                source_mode, items = get_tiktok_trending(region=region, limit=limit, mode="live")
+            else:
+                return "live_error", []
+        except Exception:
+            return "live_error", []
+        return source_mode, [_normalize_trend_item(item) for item in items]
+
     if trend_mode == "mock":
         if source_prefix == "youtube":
             return get_youtube_trending(region=region, limit=limit, mode="mock")
@@ -522,6 +536,7 @@ def build_dashboard_summary(
     database_analytics = {
         "total_users": _safe_scalar(db.query(func.count(User.user_id))),
         "total_dataset_contents": _safe_scalar(db.query(func.count(DatasetContent.dataset_id))),
+        "total_cluster_runs": _safe_scalar(db.query(func.count(ClusterRun.run_id))),
         "my_contents": _safe_scalar(
             db.query(func.count(UserContent.content_id)).filter(UserContent.user_id == current_user.user_id)
         ),

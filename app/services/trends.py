@@ -335,7 +335,7 @@ def _live_tiktok_trending(region: str, limit: int) -> List[TikTokTrendItem]:
         page_text = response.read().decode("utf-8", errors="replace")
 
     items = _parse_tiktok_trending_items(page_text, limit)
-    return items if items else _mock_tiktok_trending(region, limit)
+    return items
 
 
 def get_tiktok_trending(region: str, limit: int, mode: str) -> tuple[str, List[TikTokTrendItem]]:

@@ -14,6 +14,7 @@ from app.schemas.trends import (
 )
 from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_categories, get_youtube_trending
 from app.services.persistence import save_google_trends, save_tiktok_trends, save_youtube_trends
+from app.services.simple_cache import invalidate_prefix as cache_invalidate_prefix
 
 router = APIRouter(prefix="/trends", tags=["trends"])
 
@@ -71,9 +72,11 @@ def youtube_trending_sync(
         video_category_id=video_category_id,
     )
     stats = save_youtube_trends(db=db, items=items, user_id=current_user.user_id, source_mode=resolved_mode)
+    cache_invalidate_prefix("dashboard_summary:")
     return TrendSyncResponse(
         created=stats["created"],
         updated=stats["updated"],
+        notifications=stats.get("notifications", 0),
         mode=resolved_mode,
         region=region.upper(),
         total_fetched=len(items),
@@ -106,9 +109,11 @@ def tiktok_trending_sync(
 ):
     resolved_mode, items = get_tiktok_trending(region=region.upper(), limit=limit, mode=mode)
     stats = save_tiktok_trends(db=db, items=items, user_id=current_user.user_id, source_mode=resolved_mode)
+    cache_invalidate_prefix("dashboard_summary:")
     return TrendSyncResponse(
         created=stats["created"],
         updated=stats["updated"],
+        notifications=stats.get("notifications", 0),
         mode=resolved_mode,
         region=region.upper(),
         total_fetched=len(items),
@@ -141,9 +146,11 @@ def google_trending_sync(
 ):
     resolved_mode, items = get_google_trending(region=region.upper(), limit=limit, mode=mode)
     stats = save_google_trends(db=db, items=items, user_id=current_user.user_id, source_mode=resolved_mode)
+    cache_invalidate_prefix("dashboard_summary:")
     return TrendSyncResponse(
         created=stats["created"],
         updated=stats["updated"],
+        notifications=stats.get("notifications", 0),
         mode=resolved_mode,
         region=region.upper(),
         total_fetched=len(items),

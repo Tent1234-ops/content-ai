@@ -508,11 +508,13 @@ def compare_dataset_profiles(
 def build_recommendation_admin_report(db: Session, *, profile_limit: int = 150) -> Dict[str, object]:
     youtube_profiles = build_dataset_profiles(db, source_prefix="youtube", limit=profile_limit)
     google_profiles = build_dataset_profiles(db, source_prefix="google", limit=profile_limit)
+    tiktok_profiles = build_dataset_profiles(db, source_prefix="tiktok", limit=profile_limit)
 
     total_datasets = db.query(DatasetContent).count()
     with_duration = db.query(DatasetContent).filter(DatasetContent.duration_seconds.isnot(None)).count()
     youtube_count = db.query(DatasetContent).filter(DatasetContent.source_platform.like("youtube%")).count()
     google_count = db.query(DatasetContent).filter(DatasetContent.source_platform.like("google%")).count()
+    tiktok_count = db.query(DatasetContent).filter(DatasetContent.source_platform.like("tiktok%")).count()
 
     recent_sources = (
         db.query(DatasetContent.source_platform)
@@ -529,14 +531,17 @@ def build_recommendation_admin_report(db: Session, *, profile_limit: int = 150) 
             "total_dataset_contents": total_datasets,
             "youtube_dataset_contents": youtube_count,
             "google_dataset_contents": google_count,
+            "tiktok_dataset_contents": tiktok_count,
             "duration_coverage_count": with_duration,
             "duration_coverage_ratio": round((with_duration / total_datasets), 3) if total_datasets else 0.0,
         },
         "profile_health": {
             "youtube_profiles": len(youtube_profiles),
             "google_profiles": len(google_profiles),
+            "tiktok_profiles": len(tiktok_profiles),
             "youtube_domains": [profile["domain"] for profile in youtube_profiles],
             "google_domains": [profile["domain"] for profile in google_profiles],
+            "tiktok_domains": [profile["domain"] for profile in tiktok_profiles],
         },
         "recent_source_activity": [
             {"source_platform": key, "count": value}
@@ -544,4 +549,5 @@ def build_recommendation_admin_report(db: Session, *, profile_limit: int = 150) 
         ],
         "youtube_profiles": youtube_profiles,
         "google_profiles": google_profiles,
+        "tiktok_profiles": tiktok_profiles,
     }

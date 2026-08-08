@@ -38,6 +38,19 @@ class AdminRepository {
     );
   }
 
+  Future<DatasetItem> createDataset(Map<String, dynamic> payload) async {
+    final response = await _client.post('/admin/datasets', payload);
+    return DatasetItem.fromJson(Map<String, dynamic>.from(response as Map));
+  }
+
+  Future<DatasetItem> updateDataset(
+    int datasetId,
+    Map<String, dynamic> payload,
+  ) async {
+    final response = await _client.put('/admin/datasets/$datasetId', payload);
+    return DatasetItem.fromJson(Map<String, dynamic>.from(response as Map));
+  }
+
   Future<PaginatedResult<ClusterRunSummary>> listClusterRuns({
     required int limit,
     required int offset,
@@ -88,15 +101,37 @@ class AdminRepository {
   }
 
   Future<List<ProfileComparison>> compareProfiles() async {
-    final response = Map<String, dynamic>.from(
-      await _client.get(
-        '/recommendations/profiles/compare?left_source=youtube&right_source=google&limit=100',
-      ) as Map,
-    );
-    return (response['comparisons'] as List<dynamic>? ?? const [])
-        .map((item) =>
-            ProfileComparison.fromJson(Map<String, dynamic>.from(item as Map)))
-        .toList();
+    final pairs = [
+      ['youtube', 'google'],
+      ['youtube', 'tiktok'],
+      ['google', 'tiktok'],
+    ];
+    final items = <ProfileComparison>[];
+    for (final pair in pairs) {
+      final response = Map<String, dynamic>.from(
+        await _client.get(
+          '/recommendations/profiles/compare?left_source=${pair[0]}&right_source=${pair[1]}&limit=100',
+        ) as Map,
+      );
+      items.addAll((response['comparisons'] as List<dynamic>? ?? const [])
+          .map((item) => ProfileComparison.fromJson(
+                Map<String, dynamic>.from(item as Map),
+                leftSource: pair[0],
+                rightSource: pair[1],
+              ))
+          .toList());
+    }
+    return items;
+  }
+
+  Future<AdminSettings> getSettings() async {
+    final response = await _client.get('/admin/settings');
+    return AdminSettings.fromJson(Map<String, dynamic>.from(response as Map));
+  }
+
+  Future<AdminSettings> updateSettings(Map<String, dynamic> payload) async {
+    final response = await _client.put('/admin/settings', payload);
+    return AdminSettings.fromJson(Map<String, dynamic>.from(response as Map));
   }
 
   Future<PaginatedResult<SystemLogItem>> listLogs({

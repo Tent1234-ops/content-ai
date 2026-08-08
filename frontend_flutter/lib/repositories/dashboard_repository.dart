@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../models/dashboard_overview.dart';
 import '../services/api_client.dart';
 
@@ -8,71 +5,79 @@ class DashboardRepository {
   DashboardRepository({ApiClient? client}) : _client = client ?? ApiClient();
 
   final ApiClient _client;
-  static const _followedTopicsKey = 'followed_topics';
 
   Future<DashboardOverview> getOverview() async {
     final response =
-        await _client.get('/dashboard/summary?trend_mode=auto&trend_limit=20');
+        await _client.get('/dashboard/summary?trend_mode=live&trend_limit=20');
     return DashboardOverview.fromJson(
       Map<String, dynamic>.from(response as Map),
     );
   }
 
-  /// Get list of followed topics from local storage
-  Future<List<String>> getFollowedTopics() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getStringList(_followedTopicsKey) ?? [];
+  Future<List<FollowedTopicItem>> getFollowedTopics() async {
+    final response = await _client.get('/follows/topics?limit=100');
+    final items = (response['items'] as List<dynamic>? ?? const [])
+        .map((item) => FollowedTopicItem.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ))
+        .toList();
+    return items;
   }
 
-  /// Follow a topic (save to local storage)
-  Future<void> followTopic(String topic) async {
-    final prefs = await SharedPreferences.getInstance();
-    final topics = prefs.getStringList(_followedTopicsKey) ?? [];
-    if (!topics.contains(topic)) {
-      topics.add(topic);
-      await prefs.setStringList(_followedTopicsKey, topics);
-    }
+  Future<FollowedTopicItem> followTopic(
+    String value, {
+    String matchType = 'keyword',
+  }) async {
+    final response = await _client.post('/follows/topic', {
+      'match_type': matchType,
+      'value': value,
+    });
+    return FollowedTopicItem.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
   }
 
-  /// Unfollow a topic (remove from local storage)
-  Future<void> unfollowTopic(String topic) async {
-    final prefs = await SharedPreferences.getInstance();
-    final topics = prefs.getStringList(_followedTopicsKey) ?? [];
-    topics.remove(topic);
-    await prefs.setStringList(_followedTopicsKey, topics);
+  Future<void> unfollowTopic(int id) async {
+    await _client.delete('/follows/topic/$id');
   }
 
-  /// Clear all followed topics
-  Future<void> clearFollowedTopics() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_followedTopicsKey);
+  Future<List<NotificationItem>> getNotifications({
+    bool unreadOnly = false,
+    int limit = 20,
+  }) async {
+    final response = await _client.get(
+      '/notifications/?unread_only=$unreadOnly&limit=$limit',
+    );
+    return (response['items'] as List<dynamic>? ?? const [])
+        .map((item) => NotificationItem.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ))
+        .toList();
   }
 
-  /// Save a trend as an idea (stored locally). Stores JSON strings with title, source, and saved_at
-  Future<void> saveIdea(String title, String source) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'saved_ideas';
-    final existing = prefs.getStringList(key) ?? [];
-    final entry = {
-      'title': title,
-      'source': source,
-      'saved_at': DateTime.now().toIso8601String(),
-    };
-    existing.add(jsonEncode(entry));
-    await prefs.setStringList(key, existing);
+  Future<void> markNotificationsRead(List<int> ids) async {
+    await _client.post('/notifications/mark_read', {'ids': ids});
   }
 
-  /// Get saved ideas
-  Future<List<Map<String, dynamic>>> getSavedIdeas() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'saved_ideas';
-    final existing = prefs.getStringList(key) ?? [];
-    return existing.map((s) {
+  Future<List<TrendSyncResult>> syncAllTrendsLive({int limit = 20}) async {
+    final platforms = ['youtube', 'google', 'tiktok'];
+    final results = <TrendSyncResult>[];
+    for (final platform in platforms) {
       try {
-        return Map<String, dynamic>.from(jsonDecode(s) as Map);
-      } catch (_) {
-        return {'title': s};
+        final response = await _client.post(
+          '/trends/$platform/sync?mode=live&limit=$limit',
+          <String, dynamic>{},
+        );
+        results.add(
+          TrendSyncResult.fromJson(
+            platform,
+            Map<String, dynamic>.from(response as Map),
+          ),
+        );
+      } catch (error) {
+        results.add(TrendSyncResult.failed(platform, error));
       }
-    }).toList();
+    }
+    return results;
   }
 }

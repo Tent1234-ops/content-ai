@@ -75,7 +75,7 @@ class HDBSCANSaveResponse(BaseModel):
 
 
 class DatasetKMeansRequest(BaseModel):
-    source: str = Field(default="youtube", pattern="^(youtube|google)$")
+    source: str = Field(default="youtube", pattern="^(youtube|google|tiktok)$")
     category: str | None = None
     limit: int = Field(default=30, ge=2, le=100)
     offset: int = Field(default=0, ge=0)

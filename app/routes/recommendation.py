@@ -24,7 +24,7 @@ router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
 @router.get("/profiles", response_model=DatasetProfilesResponse)
 def get_dataset_profiles(
-    source: str = Query(default="youtube", pattern="^(youtube|google)$"),
+    source: str = Query(default="youtube", pattern="^(youtube|google|tiktok)$"),
     limit: int = Query(default=150, ge=10, le=500),
     _current_user: User = Depends(require_roles("admin", "user")),
     db: Session = Depends(get_db),
@@ -39,8 +39,8 @@ def get_dataset_profiles(
 
 @router.get("/profiles/compare", response_model=ProfileComparisonResponse)
 def compare_profiles(
-    left_source: str = Query(default="youtube", pattern="^(youtube|google)$"),
-    right_source: str = Query(default="google", pattern="^(youtube|google)$"),
+    left_source: str = Query(default="youtube", pattern="^(youtube|google|tiktok)$"),
+    right_source: str = Query(default="google", pattern="^(youtube|google|tiktok)$"),
     limit: int = Query(default=150, ge=10, le=500),
     _current_user: User = Depends(require_roles("admin", "user")),
     db: Session = Depends(get_db),
@@ -75,7 +75,7 @@ def recommend_from_text(
 @router.get("/from-content/{content_id}", response_model=RecommendationAnalysisResponse)
 def recommend_from_content(
     content_id: int,
-    source: str = Query(default="youtube", pattern="^(youtube|google)$"),
+    source: str = Query(default="youtube", pattern="^(youtube|google|tiktok)$"),
     profile_limit: int = Query(default=150, ge=10, le=500),
     current_user: User = Depends(require_roles("admin", "user")),
     db: Session = Depends(get_db),

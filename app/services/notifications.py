@@ -10,6 +10,7 @@ def create_notification(
     *,
     user_id: int,
     title: str,
+    dataset_id: Optional[int] = None,
     body: Optional[str] = None,
     link: Optional[str] = None,
     type: str = "system",
@@ -23,6 +24,7 @@ def create_notification(
     payload_text = json.dumps(payload, ensure_ascii=False) if payload is not None else None
     n = Notification(
         user_id=user_id,
+        dataset_id=dataset_id,
         title=title[:255],
         body=body,
         link=link,
