@@ -98,6 +98,8 @@ class RecommendationResult {
   const RecommendationResult({
     required this.domain,
     required this.userKeywords,
+    required this.contentKeywords,
+    required this.hookTerms,
     required this.missingKeywords,
     required this.hookKeywords,
     required this.missingDimensions,
@@ -109,6 +111,8 @@ class RecommendationResult {
 
   final String domain;
   final List<String> userKeywords;
+  final List<String> contentKeywords;
+  final List<String> hookTerms;
   final List<KeywordScore> missingKeywords;
   final List<KeywordScore> hookKeywords;
   final List<MissingDimension> missingDimensions;
@@ -121,6 +125,12 @@ class RecommendationResult {
     return RecommendationResult(
       domain: json['domain']?.toString() ?? '-',
       userKeywords: (json['user_keywords'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      contentKeywords: (json['content_keywords'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      hookTerms: (json['hook_terms'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
           .toList(),
       missingKeywords: (json['missing_keywords'] as List<dynamic>? ?? const [])
@@ -242,6 +252,9 @@ class RecommendationEvidence {
     required this.exemplarTitles,
     required this.keywordScoreExplanation,
     required this.durationExplanation,
+    required this.transcriptSource,
+    this.hookSecondsAnalyzed,
+    this.sttFallbackReason,
   });
 
   final String source;
@@ -253,6 +266,9 @@ class RecommendationEvidence {
   final List<String> exemplarTitles;
   final String keywordScoreExplanation;
   final String durationExplanation;
+  final String transcriptSource;
+  final int? hookSecondsAnalyzed;
+  final String? sttFallbackReason;
 
   factory RecommendationEvidence.fromJson(Map<String, dynamic> json) {
     final rawCounts = json['source_platform_counts'];
@@ -274,6 +290,10 @@ class RecommendationEvidence {
       keywordScoreExplanation:
           json['keyword_score_explanation']?.toString() ?? '',
       durationExplanation: json['duration_explanation']?.toString() ?? '',
+      transcriptSource: json['transcript_source']?.toString() ?? 'unknown',
+      hookSecondsAnalyzed:
+          (json['hook_seconds_analyzed'] as num?)?.toInt(),
+      sttFallbackReason: json['stt_fallback_reason']?.toString(),
     );
   }
 }
@@ -281,11 +301,17 @@ class RecommendationEvidence {
 class AnalysisJobStatus {
   const AnalysisJobStatus({
     required this.status,
+    required this.stage,
+    required this.progress,
+    required this.message,
     this.result,
     this.error,
   });
 
   final String status;
+  final String stage;
+  final int progress;
+  final String message;
   final AnalysisResultViewData? result;
   final String? error;
 
@@ -297,6 +323,9 @@ class AnalysisJobStatus {
     final rawResult = json['result'];
     return AnalysisJobStatus(
       status: status,
+      stage: json['stage']?.toString() ?? status,
+      progress: (json['progress'] as num?)?.toInt() ?? 0,
+      message: json['message']?.toString() ?? '',
       result: rawResult is Map
           ? AnalysisResultViewData.fromJson(
               Map<String, dynamic>.from(rawResult),

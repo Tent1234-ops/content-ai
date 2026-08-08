@@ -151,6 +151,8 @@ def classify_text_domain(
     confidence = top_score / score_total if score_total > 0 else 0.0
     if candidates[0]["domain"] == rule_domain and rule_domain != "general":
         confidence = min(1.0, confidence + 0.08)
+        if int(candidates[0].get("sample_size", 0) or 0) > 0:
+            confidence = max(confidence, 0.72)
 
     return {
         "domain": candidates[0]["domain"],

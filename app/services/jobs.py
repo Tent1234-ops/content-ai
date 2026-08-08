@@ -1,6 +1,7 @@
 import threading
 import uuid
 import time
+from datetime import datetime
 from typing import Dict, Callable
 
 from app.runtime import get as runtime_get
@@ -10,6 +11,7 @@ _queue = []
 _queue_lock = threading.Lock()
 _worker_thread = None
 _worker_stop = threading.Event()
+_job_context = threading.local()
 
 # Optional RQ support
 try:
@@ -34,13 +36,25 @@ def _worker_loop():
         args = job.get("args", [])
         kwargs = job.get("kwargs", {})
         try:
+            _job_context.job_id = job_id
             _jobs[job_id]["status"] = "running"
+            update_job(job_id, stage="running", progress=10, message="Starting analysis")
             result = func(*args, **kwargs)
             _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["stage"] = "completed"
+            _jobs[job_id]["progress"] = 100
+            _jobs[job_id]["message"] = "Analysis completed"
+            _jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
             _jobs[job_id]["result"] = result
         except Exception as e:
             _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["stage"] = "failed"
+            _jobs[job_id]["progress"] = _jobs[job_id].get("progress", 0)
+            _jobs[job_id]["message"] = "Analysis failed"
+            _jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
             _jobs[job_id]["error"] = str(e)
+        finally:
+            _job_context.job_id = None
 
 
 def start_worker():
@@ -61,7 +75,15 @@ def stop_worker():
 
 def _enqueue_inprocess(func: Callable, *args, **kwargs) -> str:
     job_id = str(uuid.uuid4())
-    _jobs[job_id] = {"status": "queued", "result": None}
+    _jobs[job_id] = {
+        "status": "queued",
+        "stage": "queued",
+        "progress": 0,
+        "message": "Queued for analysis",
+        "result": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
     with _queue_lock:
         _queue.append({"job_id": job_id, "func": func, "args": args, "kwargs": kwargs})
     start_worker()
@@ -102,6 +124,23 @@ def enqueue(func: Callable, *args, **kwargs) -> str:
         return _enqueue_rq(func, *args, redis_url=redis_url, **kwargs)
     else:
         raise RuntimeError(f"Background backend '{backend}' not implemented")
+
+
+def update_job(job_id: str, *, stage: str, progress: int, message: str | None = None) -> None:
+    job = _jobs.get(job_id)
+    if job is None:
+        return
+    job["stage"] = stage
+    job["progress"] = max(0, min(100, int(progress)))
+    if message is not None:
+        job["message"] = message
+    job["updated_at"] = datetime.utcnow().isoformat()
+
+
+def update_current_job(*, stage: str, progress: int, message: str | None = None) -> None:
+    job_id = getattr(_job_context, "job_id", None)
+    if job_id:
+        update_job(job_id, stage=stage, progress=progress, message=message)
 
 
 def get_status(job_id: str) -> Dict:

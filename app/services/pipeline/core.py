@@ -12,6 +12,7 @@ from app.services.pipeline.domain_rules import (
     DOMAIN_HINTS as SHARED_DOMAIN_HINTS,
     DOMAIN_BASE as SHARED_DOMAIN_BASE,
 )
+from app.services.jobs import update_current_job
 from utils.text_clean import clean_text
 
 try:
@@ -2190,13 +2191,20 @@ def analyze_video(video_path: str, display_name: str | None = None):
         print(f"[pipeline] ML model import failed: {exc}", flush=True)
         ml_import_ok = False
 
-    max_audio_seconds = int(os.getenv("ANALYZE_MAX_AUDIO_SECONDS", "90") or "90")
+    max_audio_seconds = int(os.getenv("ANALYZE_MAX_AUDIO_SECONDS", "120") or "120")
+    hook_seconds = max(15, min(max_audio_seconds, 180))
     audio_path = tempfile.NamedTemporaryFile(prefix="content_ai_", suffix=".wav", delete=False).name
     try:
-        print(f"[pipeline] extracting audio first {max_audio_seconds}s...", flush=True)
-        audio_ok = extract_audio(video_path, audio_path, max_seconds=max_audio_seconds)
+        print(f"[pipeline] extracting audio first {hook_seconds}s...", flush=True)
+        update_current_job(
+            stage="extracting_audio",
+            progress=24,
+            message=f"Extracting first {hook_seconds}s hook audio",
+        )
+        audio_ok = extract_audio(video_path, audio_path, max_seconds=hook_seconds)
 
         print("[pipeline] transcribing audio...", flush=True)
+        update_current_job(stage="transcribing", progress=38, message="Generating transcript")
         if audio_ok:
             try:
                 stt = transcribe_with_meta(audio_path)
@@ -2232,6 +2240,9 @@ def analyze_video(video_path: str, display_name: str | None = None):
         fallback_source = display_name or os.path.basename(video_path)
         fallback_title = os.path.splitext(os.path.basename(fallback_source))[0].replace("_", " ").replace("-", " ")
         transcript = fallback_title
+        stt["transcript_source"] = "fallback_filename"
+    else:
+        stt["transcript_source"] = "speech_to_text"
 
     # Decide whether to use aggressive correction based on segment-level confidence
     avg_no_speech = stt.get("avg_no_speech_prob")
@@ -2251,6 +2262,7 @@ def analyze_video(video_path: str, display_name: str | None = None):
     raw = normalize_asr_terms(remove_asr_noise(transcript), aggressive=aggressive)
     clean = clean_text(raw)
 
+    update_current_job(stage="classifying", progress=55, message="Extracting keywords and content signals")
     visual_text, captions = visual_context(video_path)
     combined_for_domain = f"{raw} {visual_text}".strip()
 
@@ -2491,6 +2503,9 @@ def analyze_video(video_path: str, display_name: str | None = None):
                     "segment_count": stt.get("segment_count"),
                     "avg_no_speech_prob": stt.get("avg_no_speech_prob"),
                     "weak_audio": weak_audio,
+                    "transcript_source": stt.get("transcript_source"),
+                    "fallback_reason": stt.get("fallback_reason"),
+                    "hook_seconds_analyzed": hook_seconds,
                 },
             },
         }

@@ -24,7 +24,7 @@ def ensure_sqlite_demo_columns() -> None:
         additions = [
             ("tiktok_region", "TEXT NOT NULL DEFAULT 'TH'"),
             ("enable_tiktok_trending", "INTEGER NOT NULL DEFAULT 1"),
-            ("asr_model_default", "TEXT NOT NULL DEFAULT 'small'"),
+            ("asr_model_default", "TEXT NOT NULL DEFAULT 'tiny'"),
             ("enable_model_toggle", "INTEGER NOT NULL DEFAULT 1"),
             ("job_backend", "TEXT NOT NULL DEFAULT 'inprocess'"),
             ("redis_url", "TEXT NULL"),

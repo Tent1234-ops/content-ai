@@ -30,6 +30,7 @@ class _UploadScreenState extends State<UploadScreen> {
   int _uploadProgress = 0;
   String _statusMessage = '';
   Timer? _progressTimer;
+  bool _hasBackendProgress = false;
   String? _suggestedTopic;
   bool _hasReadRouteArgs = false;
 
@@ -108,6 +109,7 @@ class _UploadScreenState extends State<UploadScreen> {
       _error = null;
       _uploadProgress = 5;
       _statusMessage = 'Uploading video...';
+      _hasBackendProgress = false;
     });
 
     _startProgressTimer();
@@ -160,19 +162,27 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<AnalysisResultViewData> _pollAnalysisJob(String jobId) async {
-    for (var attempt = 0; attempt < 600; attempt++) {
+    for (var attempt = 0; attempt < 900; attempt++) {
       final job = await _repository.getAnalysisJob(jobId);
       if (!mounted) {
         throw Exception('Upload screen was closed.');
       }
 
       setState(() {
-        if (job.status == 'queued') {
-          _uploadProgress = _uploadProgress < 30 ? 30 : _uploadProgress;
+        if (job.progress > 0) {
+          _hasBackendProgress = true;
+          _uploadProgress = job.progress > _uploadProgress
+              ? job.progress
+              : _uploadProgress;
+        }
+        if (job.message.isNotEmpty) {
+          _statusMessage = job.message;
+        } else if (job.status == 'queued') {
+          _uploadProgress = _uploadProgress < 20 ? 20 : _uploadProgress;
           _statusMessage = 'Queued for analysis...';
         } else if (job.status == 'running') {
-          _uploadProgress = _uploadProgress < 85 ? 85 : _uploadProgress;
-          _statusMessage = 'Analyzing video...';
+          _uploadProgress = _uploadProgress < 45 ? 45 : _uploadProgress;
+          _statusMessage = _messageForStage(job.stage);
         } else {
           _statusMessage = 'Job status: ${job.status}';
         }
@@ -192,7 +202,26 @@ class _UploadScreenState extends State<UploadScreen> {
 
       await Future.delayed(const Duration(seconds: 2));
     }
-    throw Exception('Analysis is still running. Please check History later or try a shorter clip.');
+    throw Exception(
+      'Analysis is still running. Please check History later or try a shorter clip.',
+    );
+  }
+
+  String _messageForStage(String stage) {
+    switch (stage) {
+      case 'extracting_audio':
+        return 'Extracting hook audio...';
+      case 'transcribing':
+        return 'Generating transcript...';
+      case 'classifying':
+        return 'Classifying content type...';
+      case 'recommending':
+        return 'Building recommendations...';
+      case 'saving':
+        return 'Saving to My Ideas...';
+      default:
+        return 'Analyzing video...';
+    }
   }
 
   void _startProgressTimer() {
@@ -204,7 +233,13 @@ class _UploadScreenState extends State<UploadScreen> {
       }
 
       setState(() {
-        if (_uploadProgress < 25) {
+        if (_hasBackendProgress) {
+          return;
+        }
+        if (_uploadProgress < 18) {
+          _uploadProgress = 18;
+          _statusMessage = 'Preparing analysis...';
+        } else if (_uploadProgress < 25) {
           _uploadProgress = 25;
           _statusMessage = 'Extracting audio...';
         } else if (_uploadProgress < 50) {
@@ -233,8 +268,11 @@ class _UploadScreenState extends State<UploadScreen> {
       _selectedFileName = null;
       _selectedFilePath = null;
       _selectedFileBytes = null;
+      _selectedFileStream = null;
+      _selectedFileSize = null;
       _uploadProgress = 0;
       _statusMessage = '';
+      _hasBackendProgress = false;
       _error = null;
     });
   }

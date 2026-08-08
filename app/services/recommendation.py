@@ -256,6 +256,47 @@ def _duration_summary(durations: List[int], domain: str) -> Dict[str, object]:
     }
 
 
+def _source_label(source_prefix: str, sample_size: int) -> str:
+    if sample_size <= 0:
+        return f"{source_prefix} dataset: no same-type samples found; using fallback rules"
+    if source_prefix == "youtube":
+        return f"YouTube high-engagement dataset ({sample_size} same-type clips)"
+    if source_prefix == "google":
+        return f"Google Trends dataset ({sample_size} same-type items)"
+    if source_prefix == "tiktok":
+        return f"TikTok live/dataset trends ({sample_size} same-type items)"
+    return f"{source_prefix} dataset ({sample_size} same-type samples)"
+
+
+def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[str, object]:
+    duration = profile.get("recommended_duration")
+    if not isinstance(duration, dict):
+        duration = {}
+    sample_size = int(profile.get("sample_size") or 0)
+    duration_sample_size = int(duration.get("sample_size") or 0)
+    duration_source = str(duration.get("source") or "default")
+    return {
+        "source": source_prefix,
+        "data_source_label": _source_label(source_prefix, sample_size),
+        "dataset_sample_size": sample_size,
+        "source_platform_counts": profile.get("source_platform_counts") or {},
+        "duration_source": duration_source,
+        "duration_sample_size": duration_sample_size,
+        "exemplar_titles": profile.get("exemplar_titles") or [],
+        "keyword_score_explanation": (
+            "Keyword gap is computed from high-engagement clips in the same classified content type. "
+            "Scores combine keyword frequency with trend and engagement weight."
+            if sample_size > 0
+            else "No same-type dataset samples were available, so keyword suggestions use domain fallback rules."
+        ),
+        "duration_explanation": (
+            f"Recommended duration uses {duration_sample_size} same-type duration samples from the {source_prefix} dataset."
+            if duration_sample_size > 0
+            else "Recommended duration falls back to the default range for this content type because no same-type duration samples were available."
+        ),
+    }
+
+
 def build_dataset_profiles(
     db: Session,
     *,
@@ -308,6 +349,7 @@ def build_dataset_profiles(
     dimension_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
     hook_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
     domain_durations: Dict[str, List[int]] = defaultdict(list)
+    source_counts: Dict[str, Counter[str]] = defaultdict(Counter)
 
     for row in rows:
         base_text = " ".join(part for part in [row.title or "", row.transcript or "", row.category or ""] if part).strip()
@@ -323,6 +365,7 @@ def build_dataset_profiles(
         domain = str(snapshot["domain"])
         weight = 1.0 + min(float(row.trend_score or 0.0) / 500000.0, 5.0)
         grouped_rows[domain].append({"row": row, "snapshot": snapshot, "weight": weight})
+        source_counts[domain][str(row.source_platform or source_prefix)] += 1
 
         for item in snapshot["nlp_result"].get("top_keywords", []):
             _weighted_increment(keyword_scores[domain], item["keyword"], weight * float(item["score"]))
@@ -372,6 +415,8 @@ def build_dataset_profiles(
                 "hook_keywords": hook_keywords,
                 "recommended_duration": _duration_summary(domain_durations[domain], domain),
                 "exemplar_titles": exemplar_titles,
+                "source": source_prefix,
+                "source_platform_counts": dict(source_counts[domain]),
             }
         )
 
@@ -399,6 +444,8 @@ def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[st
         "hook_keywords": [],
         "recommended_duration": _duration_summary([], domain),
         "exemplar_titles": [],
+        "source": "fallback",
+        "source_platform_counts": {},
     }
 
 
@@ -531,6 +578,7 @@ def build_recommendation_from_analysis_data(
         "missing_dimensions": missing_dimensions,
         "recommended_duration": profile["recommended_duration"],
         "dataset_profile": profile,
+        "evidence": _build_evidence(profile, source_prefix=source_prefix),
     }
 
 

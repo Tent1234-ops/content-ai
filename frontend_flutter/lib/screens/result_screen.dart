@@ -102,6 +102,9 @@ class _ResultScreenState extends State<ResultScreen> {
     final domain =
         classification?.domain ?? recommendation?.domain ?? data?.fallbackDomain ?? '-';
     final userKeywords = recommendation?.userKeywords ?? const <String>[];
+    final contentKeywords =
+        recommendation?.contentKeywords ?? const <String>[];
+    final hookTerms = recommendation?.hookTerms ?? const <String>[];
     final missingKeywords = recommendation?.missingKeywords ?? const <KeywordScore>[];
     final hookKeywords = recommendation?.hookKeywords ?? const <KeywordScore>[];
     final duration = recommendation?.duration;
@@ -232,6 +235,28 @@ class _ResultScreenState extends State<ResultScreen> {
                         emptyMessage: 'No keywords were detected from this clip.',
                       ),
                       const SizedBox(height: 24),
+                      if (contentKeywords.isNotEmpty) ...[
+                        _SectionHeader(
+                          title: 'Content Keywords',
+                          icon: Icons.article_outlined,
+                        ),
+                        _StringKeywordCard(
+                          keywords: contentKeywords,
+                          emptyMessage: 'No content keywords were detected.',
+                        ),
+                        const SizedBox(height: 24),
+                      ],
+                      if (hookTerms.isNotEmpty) ...[
+                        _SectionHeader(
+                          title: 'Hook Terms From Opening Segment',
+                          icon: Icons.bolt_outlined,
+                        ),
+                        _StringKeywordCard(
+                          keywords: hookTerms,
+                          emptyMessage: 'No hook terms were detected.',
+                        ),
+                        const SizedBox(height: 24),
+                      ],
                       if (missingKeywords.isNotEmpty) ...[
                         _SectionHeader(
                           title: 'Keyword Gap From High-Engagement Clips',
@@ -417,6 +442,12 @@ class _EvidenceCard extends StatelessWidget {
               icon: Icons.source_outlined,
               label: 'Data source type',
               value: evidence.dataSourceLabel,
+            ),
+            const Divider(height: 20),
+            _SummaryRow(
+              icon: Icons.subtitles_outlined,
+              label: 'Transcript source',
+              value: _transcriptSourceText(evidence),
             ),
             const Divider(height: 20),
             _SummaryRow(
@@ -759,4 +790,19 @@ class _SectionHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+String _transcriptSourceText(RecommendationEvidence evidence) {
+  final source = evidence.transcriptSource;
+  final seconds = evidence.hookSecondsAnalyzed;
+  final suffix = seconds == null ? '' : ' | first ${seconds}s analyzed';
+  if (source == 'speech_to_text') {
+    return 'Speech-to-text$suffix';
+  }
+  if (source == 'fallback_filename') {
+    final reason = evidence.sttFallbackReason;
+    final reasonText = reason == null || reason.isEmpty ? '' : ' ($reason)';
+    return 'Fallback from filename$reasonText$suffix';
+  }
+  return '$source$suffix';
 }

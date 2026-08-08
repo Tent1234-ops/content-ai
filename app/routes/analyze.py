@@ -9,7 +9,7 @@ from app.database.db import SessionLocal
 from app.database.models import User
 from app.services.ai_pipeline import analyze_video as pipeline_analyze
 from app.services.classification import classify_text_domain
-from app.services.jobs import enqueue
+from app.services.jobs import enqueue, update_current_job
 from app.services.nlp import run_nlp_pipeline
 from app.services.persistence import save_video_analysis_result
 from app.services.recommendation import build_recommendation_from_analysis_data
@@ -27,6 +27,7 @@ def _save_upload(file: UploadFile) -> str:
 
 
 def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dict]:
+    update_current_job(stage="classifying", progress=62, message="Classifying clip type")
     transcript = str(result.get("transcript") or "")
     nlp_result = run_nlp_pipeline(transcript or filename, 10)
     analysis = result.get("analysis", {})
@@ -45,6 +46,7 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
     if not user_keywords:
         user_keywords = [item["keyword"] for item in nlp_result.get("top_keywords", [])]
 
+    update_current_job(stage="recommending", progress=76, message="Comparing with high-engagement dataset")
     recommendation = build_recommendation_from_analysis_data(
         db,
         domain=selected_domain,
@@ -55,12 +57,22 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
         profile_limit=80,
     )
     recommendation["classification"] = classification
+    recommendation["content_keywords"] = [
+        item["keyword"] for item in nlp_result.get("top_keywords", [])
+    ][:12]
+    recommendation["hook_terms"] = nlp_result.get("filtered_tokens", [])[:8]
+    stt_meta = analysis.get("stt_meta", {})
+    if isinstance(recommendation.get("evidence"), dict):
+        recommendation["evidence"]["transcript_source"] = stt_meta.get("transcript_source") or "unknown"
+        recommendation["evidence"]["hook_seconds_analyzed"] = stt_meta.get("hook_seconds_analyzed")
+        recommendation["evidence"]["stt_fallback_reason"] = stt_meta.get("fallback_reason")
     return recommendation, nlp_result
 
 
 def analyze_video_job(file_path: str, filename: str, user_id: int | None = None) -> dict:
     db = SessionLocal()
     try:
+        update_current_job(stage="extracting_audio", progress=18, message="Extracting hook audio segment")
         result = pipeline_analyze(file_path, display_name=filename)
         recommendation, _nlp_result = _build_recommendation(db, filename=filename, result=result)
         result["recommendation"] = recommendation
@@ -76,9 +88,11 @@ def analyze_and_save_video_job(file_path: str, filename: str, user_id: int) -> d
         if user is None:
             raise RuntimeError("User not found for analysis job.")
 
+        update_current_job(stage="extracting_audio", progress=18, message="Extracting hook audio segment")
         result = pipeline_analyze(file_path, display_name=filename)
         transcript = str(result.get("transcript") or "")
         recommendation, nlp_result = _build_recommendation(db, filename=filename, result=result)
+        update_current_job(stage="saving", progress=90, message="Saving analysis to My Ideas")
         saved = save_video_analysis_result(
             db,
             user=user,
