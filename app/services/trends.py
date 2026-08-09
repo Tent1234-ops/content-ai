@@ -331,7 +331,7 @@ def _live_tiktok_trending(region: str, limit: int) -> List[TikTokTrendItem]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
     })
-    with urlopen(request, timeout=20) as response:
+    with urlopen(request, timeout=settings.live_trend_provider_timeout_seconds) as response:
         page_text = response.read().decode("utf-8", errors="replace")
 
     items = _parse_tiktok_trending_items(page_text, limit)
@@ -403,7 +403,7 @@ def _live_youtube_categories(region: str) -> List[YouTubeCategoryItem]:
         "key": settings.youtube_api_key,
     }
     url = f"https://www.googleapis.com/youtube/v3/videoCategories?{urlencode(params)}"
-    with urlopen(url, timeout=20) as response:
+    with urlopen(url, timeout=settings.live_trend_provider_timeout_seconds) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
     items: List[YouTubeCategoryItem] = []
@@ -436,7 +436,7 @@ def _live_youtube_trending(region: str, limit: int, video_category_id: Optional[
         if video_category_id:
             params["videoCategoryId"] = video_category_id
         url = f"https://www.googleapis.com/youtube/v3/videos?{urlencode(params)}"
-        with urlopen(url, timeout=20) as response:
+        with urlopen(url, timeout=settings.live_trend_provider_timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
         items: List[YouTubeTrendItem] = []
@@ -477,7 +477,7 @@ def _live_youtube_trending_web_fallback(
     request = Request(url, headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
     })
-    with urlopen(request, timeout=20) as response:
+    with urlopen(request, timeout=settings.live_trend_provider_timeout_seconds) as response:
         page_text = response.read().decode("utf-8", errors="replace")
 
     marker = "ytInitialData"
@@ -536,7 +536,7 @@ def _live_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
     try:
         url = f"https://trends.google.com/trends/trendingsearches/daily?geo={region.upper()}"
         request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urlopen(request, timeout=20) as response:
+        with urlopen(request, timeout=settings.live_trend_provider_timeout_seconds) as response:
             page_text = response.read().decode("utf-8", errors="replace")
 
         blocks = re.findall(r"AF_initDataCallback\((\{.*?\})\);", page_text, flags=re.S)
@@ -578,9 +578,9 @@ def _live_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
                 )
             if items:
                 return items
-    except Exception:
-        pass
-    return _mock_google_trending(region, limit)
+    except Exception as exc:
+        raise ValueError(f"Google Trends live fetch failed: {exc}") from exc
+    raise ValueError("Google Trends live fetch returned no parseable items")
 
 
 def get_youtube_categories(region: str, mode: str) -> tuple[str, List[YouTubeCategoryItem]]:

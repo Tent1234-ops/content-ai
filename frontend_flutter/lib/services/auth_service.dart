@@ -36,6 +36,6 @@ class AuthService {
   }
 
   Future<void> logout() async {
-    await _repository.clearSession();
+    await _repository.logout();
   }
 }

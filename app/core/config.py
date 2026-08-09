@@ -41,6 +41,16 @@ class Settings:
         "TIKTOK_SCRAPE_USER_AGENT",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
     )
+    live_trend_refresh_seconds: int = max(30, int(os.getenv("LIVE_TREND_REFRESH_SECONDS", "60")))
+    live_trend_limit: int = min(100, max(1, int(os.getenv("LIVE_TREND_LIMIT", "50"))))
+    live_trend_provider_timeout_seconds: float = max(
+        1.0,
+        float(os.getenv("LIVE_TREND_PROVIDER_TIMEOUT_SECONDS", "8")),
+    )
+    live_trend_snapshot_retention_runs: int = max(
+        2,
+        int(os.getenv("LIVE_TREND_SNAPSHOT_RETENTION_RUNS", "120")),
+    )
 
 
 settings = Settings()

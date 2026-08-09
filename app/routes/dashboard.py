@@ -3,10 +3,10 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_current_watch_session
 from app.core.config import settings
 from app.database.db import get_db
-from app.database.models import User, UserContent
+from app.database.models import User, UserContent, UserTrendWatchSession
 from app.schemas.dashboard import (
     DashboardEmergingTopicsResponse,
     DashboardOverviewResponse,
@@ -119,11 +119,13 @@ def dashboard_live_trends_snapshot(
     region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
     trend_limit: int = Query(default=50, ge=1, le=100),
     current_user: User = Depends(get_current_user),
+    watch_session: UserTrendWatchSession = Depends(get_current_watch_session),
     db: Session = Depends(get_db),
 ):
     result = compare_live_trend_snapshot(
         db=db,
         user=current_user,
+        watch_session=watch_session,
         region=region.upper(),
         limit=trend_limit,
     )

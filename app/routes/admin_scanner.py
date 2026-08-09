@@ -19,7 +19,7 @@ def admin_scan_youtube(
     db: Session = Depends(get_db),
 ):
     stats = scan_youtube_trends(db=db, region=region, limit=limit, mode=mode)
-    return {"status": "ok", "stats": stats}
+    return {"status": "disabled", "stats": stats}
 
 
 @router.post("/tiktok")
@@ -31,7 +31,7 @@ def admin_scan_tiktok(
     db: Session = Depends(get_db),
 ):
     stats = scan_tiktok_trends(db=db, region=region, limit=limit, mode=mode)
-    return {"status": "ok", "stats": stats}
+    return {"status": "disabled", "stats": stats}
 
 
 @router.post("/google")
@@ -43,4 +43,4 @@ def admin_scan_google(
     db: Session = Depends(get_db),
 ):
     stats = scan_google_trends(db=db, region=region, limit=limit, mode=mode)
-    return {"status": "ok", "stats": stats}
+    return {"status": "disabled", "stats": stats}

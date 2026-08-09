@@ -3,12 +3,15 @@ import importlib
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
-from app.database.db import Base, DB_BOOTSTRAP_ERROR, engine
+from app.database.db import Base, DB_BOOTSTRAP_ERROR, SessionLocal, engine
+from app.database.migrations import archive_phase10_notification_tables
 from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends, notifications, follows
 from app.services.trending_fetcher import start_trending_fetcher, stop_trending_fetcher
+from app.services.live_trend_snapshots import get_live_provider_health
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 
@@ -63,7 +66,9 @@ app.add_middleware(
 
 # Keep startup simple for Phase 1 so the API is ready after boot.
 db_init_status = "ok"
+phase11_migration_status = {}
 try:
+    phase11_migration_status = archive_phase10_notification_tables(engine)
     Base.metadata.create_all(bind=engine)
 except (SQLAlchemyError, Exception) as exc:
     db_init_status = f"degraded: {exc.__class__.__name__}"
@@ -96,4 +101,49 @@ def root():
         "version": settings.app_version,
         "status": "ok",
         "db_init": db_init_status,
+    }
+
+
+@app.get("/health", tags=["health"])
+def health():
+    db = SessionLocal()
+    database = {
+        "status": "ok",
+        "init": db_init_status,
+        "phase11_archived_tables": phase11_migration_status,
+    }
+    live_trends = {
+        "run_id": None,
+        "snapshot_status": "unavailable",
+        "generated_at": None,
+        "providers": {},
+    }
+    try:
+        db.execute(text("SELECT 1"))
+        live_trends = get_live_provider_health(db, region=settings.youtube_region)
+    except Exception as exc:
+        database = {
+            "status": "error",
+            "init": db_init_status,
+            "phase11_archived_tables": phase11_migration_status,
+            "error": f"{exc.__class__.__name__}: {exc}",
+        }
+    finally:
+        db.close()
+
+    provider_states = [
+        str(item.get("status") or "pending")
+        for item in live_trends.get("providers", {}).values()
+    ]
+    if database["status"] != "ok":
+        status = "unhealthy"
+    elif not provider_states or any(item in {"error", "pending"} for item in provider_states):
+        status = "degraded"
+    else:
+        status = "ok"
+
+    return {
+        "status": status,
+        "database": database,
+        "live_trends": live_trends,
     }

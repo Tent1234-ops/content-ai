@@ -38,9 +38,12 @@ class AuthRepository {
   Future<AuthSession?> restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('access_token');
+    final sessionKey = prefs.getString('trend_session_key');
     final userJson = prefs.getString('auth_user');
     if (token == null ||
         token.isEmpty ||
+        sessionKey == null ||
+        sessionKey.isEmpty ||
         userJson == null ||
         userJson.isEmpty) {
       return null;
@@ -48,7 +51,11 @@ class AuthRepository {
     try {
       final user = AppUser.fromJson(
           Map<String, dynamic>.from(jsonDecode(userJson) as Map));
-      return AuthSession(accessToken: token, user: user);
+      return AuthSession(
+        accessToken: token,
+        sessionKey: sessionKey,
+        user: user,
+      );
     } catch (_) {
       await clearSession();
       return null;
@@ -68,6 +75,7 @@ class AuthRepository {
   Future<void> persistSession(AuthSession session) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('access_token', session.accessToken);
+    await prefs.setString('trend_session_key', session.sessionKey);
     await prefs.setString('auth_user', jsonEncode(session.user.toJson()));
     await prefs.setString('user_role', session.user.role);
     await prefs.setString('username', session.user.username);
@@ -76,8 +84,17 @@ class AuthRepository {
   Future<void> clearSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('access_token');
+    await prefs.remove('trend_session_key');
     await prefs.remove('auth_user');
     await prefs.remove('user_role');
     await prefs.remove('username');
+  }
+
+  Future<void> logout() async {
+    try {
+      await _client.post('/auth/logout', const <String, dynamic>{});
+    } finally {
+      await clearSession();
+    }
   }
 }

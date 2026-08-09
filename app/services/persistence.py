@@ -20,7 +20,6 @@ from app.database.models import (
     UserContent,
 )
 from app.services.nlp import filter_tokens, tokenize_text
-from app.services.notifications import create_notification
 
 
 def log_system_event(db: Session, user_id: Optional[int], action: str, status: str, detail: Optional[str] = None) -> None:
@@ -383,23 +382,6 @@ def save_video_analysis_result(
         detail=f"content_id={content.content_id}, keywords={saved_keywords}",
     )
     db.commit()
-
-    # Create a user notification that analysis is complete
-    try:
-        create_notification(
-            db=db,
-            user_id=user.user_id,
-            title=f"Analysis complete: {title[:120]}",
-            body=f"Your uploaded video has been analyzed. Recommended duration: {recommended_duration} seconds.",
-            link=f"/analysis/{content.content_id}",
-            type="system",
-            topic="analysis",
-            source_platform="system",
-            trend_score=0.0,
-        )
-    except Exception:
-        # non-fatal: don't break the API if notification creation fails
-        db.rollback()
 
     return {
         "content_id": content_id,

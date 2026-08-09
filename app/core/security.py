@@ -34,10 +34,17 @@ def verify_password(password: str, password_hash: str) -> bool:
     return hmac.compare_digest(digest.hex(), expected)
 
 
-def create_access_token(subject: str, role: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    subject: str,
+    role: str,
+    expires_delta: Optional[timedelta] = None,
+    session_key: str | None = None,
+) -> str:
     expire_at = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.jwt_expire_minutes))
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {"sub": subject, "role": role, "exp": int(expire_at.timestamp())}
+    if session_key:
+        payload["sid"] = session_key
 
     header_segment = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
     payload_segment = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))

@@ -20,7 +20,7 @@ from app.database.models import (
     UserContent,
 )
 from app.services.nlp import EN_STOPWORDS, THAI_STOPWORDS, filter_tokens, tokenize_text
-from app.services.persistence import save_google_trends, save_tiktok_trends, save_youtube_trends
+from app.services.live_trend_snapshots import load_latest_live_snapshot
 from app.services.recommendation import (
     GENERIC_RECOMMENDATION_BLACKLIST,
     build_dataset_profiles,
@@ -265,18 +265,11 @@ def _build_summary_trends(
     limit: int,
 ) -> tuple[str, list[Dict[str, object]]]:
     if trend_mode == "live":
-        try:
-            if source_prefix == "youtube":
-                source_mode, items = get_youtube_trending(region=region, limit=limit, mode="live")
-            elif source_prefix == "google":
-                source_mode, items = get_google_trending(region=region, limit=limit, mode="live")
-            elif source_prefix == "tiktok":
-                source_mode, items = get_tiktok_trending(region=region, limit=limit, mode="live")
-            else:
-                return "live_error", []
-        except Exception:
-            return "live_error", []
-        return source_mode, [_normalize_trend_item(item) for item in items]
+        snapshot = load_latest_live_snapshot(db, region=region, limit=limit)
+        platform = snapshot.get("platforms", {}).get(source_prefix, {})
+        return str(platform.get("mode") or "pending"), [
+            dict(item) for item in platform.get("items", [])
+        ]
 
     if trend_mode == "mock":
         if source_prefix == "youtube":
@@ -673,59 +666,27 @@ def build_dashboard_overview(
     emerging_topics: List[Dict[str, object]] = []
     priority_items: List[Dict[str, object]] = []
 
-    # Sync live YouTube trends into the saved dataset content whenever possible.
-    trend_source_mode, trend_items = get_youtube_trending(region=region, limit=trend_limit, mode=trend_mode)
-    if trend_source_mode == "live" and trend_items:
-        try:
-            save_youtube_trends(db=db, items=trend_items, user_id=current_user.user_id, source_mode=trend_source_mode)
-        except Exception:
-            pass
-    if trend_source_mode != "live" or not trend_items:
-        saved_youtube_items = _load_saved_trends(db=db, source_prefix="youtube", limit=trend_limit)
-        if saved_youtube_items:
-            trend_source_mode = "saved"
-            trend_items = saved_youtube_items
-        elif not trend_items:
-            fallback_youtube_items = _load_trending_items(db=db, source_prefix="youtube", limit=trend_limit)
-            if fallback_youtube_items:
-                trend_source_mode = "saved"
-                trend_items = fallback_youtube_items
-
-    # Sync live Google Trends into the saved dataset content whenever possible.
-    google_source_mode, google_items = get_google_trending(region=region, limit=trend_limit, mode=trend_mode)
-    if google_source_mode == "live" and google_items:
-        try:
-            save_google_trends(db=db, items=google_items, user_id=current_user.user_id, source_mode=google_source_mode)
-        except Exception:
-            pass
-    if google_source_mode != "live" or not google_items:
-        saved_google_items = _load_saved_trends(db=db, source_prefix="google", limit=trend_limit)
-        if saved_google_items:
-            google_source_mode = "saved"
-            google_items = saved_google_items
-        elif not google_items:
-            fallback_google_items = _load_trending_items(db=db, source_prefix="google", limit=trend_limit)
-            if fallback_google_items:
-                google_source_mode = "saved"
-                google_items = fallback_google_items
-
-    # Sync live TikTok trends into the saved dataset content whenever possible.
-    tiktok_source_mode, tiktok_items = get_tiktok_trending(region=region, limit=trend_limit, mode=trend_mode)
-    if tiktok_source_mode == "live" and tiktok_items:
-        try:
-            save_tiktok_trends(db=db, items=tiktok_items, user_id=current_user.user_id, source_mode=tiktok_source_mode)
-        except Exception:
-            pass
-    if tiktok_source_mode != "live" or not tiktok_items:
-        saved_tiktok_items = _load_saved_trends(db=db, source_prefix="tiktok", limit=trend_limit)
-        if saved_tiktok_items:
-            tiktok_source_mode = "saved"
-            tiktok_items = saved_tiktok_items
-        elif not tiktok_items:
-            fallback_tiktok_items = _load_trending_items(db=db, source_prefix="tiktok", limit=trend_limit)
-            if fallback_tiktok_items:
-                tiktok_source_mode = "saved"
-                tiktok_items = fallback_tiktok_items
+    trend_source_mode, trend_items = _build_summary_trends(
+        db=db,
+        source_prefix="youtube",
+        region=region,
+        trend_mode=trend_mode,
+        limit=trend_limit,
+    )
+    google_source_mode, google_items = _build_summary_trends(
+        db=db,
+        source_prefix="google",
+        region=region,
+        trend_mode=trend_mode,
+        limit=trend_limit,
+    )
+    tiktok_source_mode, tiktok_items = _build_summary_trends(
+        db=db,
+        source_prefix="tiktok",
+        region=region,
+        trend_mode=trend_mode,
+        limit=trend_limit,
+    )
 
     try:
         metrics["total_users"] = _safe_scalar(db.query(func.count(User.user_id)))
@@ -934,56 +895,27 @@ def build_dashboard_topic_insights(
     trend_mode: str,
     trend_limit: int,
 ) -> Dict[str, object]:
-    trend_source_mode, trend_items = get_youtube_trending(region=region, limit=trend_limit, mode=trend_mode)
-    if trend_source_mode == "live" and trend_items:
-        try:
-            save_youtube_trends(db=db, items=trend_items, user_id=current_user.user_id, source_mode=trend_source_mode)
-        except Exception:
-            pass
-    if trend_source_mode != "live" or not trend_items:
-        saved_youtube_items = _load_saved_trends(db=db, source_prefix="youtube", limit=trend_limit)
-        if saved_youtube_items:
-            trend_source_mode = "saved"
-            trend_items = saved_youtube_items
-        elif not trend_items:
-            fallback_youtube_items = _load_trending_items(db=db, source_prefix="youtube", limit=trend_limit)
-            if fallback_youtube_items:
-                trend_source_mode = "saved"
-                trend_items = fallback_youtube_items
-
-    google_source_mode, google_items = get_google_trending(region=region, limit=trend_limit, mode=trend_mode)
-    if google_source_mode == "live" and google_items:
-        try:
-            save_google_trends(db=db, items=google_items, user_id=current_user.user_id, source_mode=google_source_mode)
-        except Exception:
-            pass
-    if google_source_mode != "live" or not google_items:
-        saved_google_items = _load_saved_trends(db=db, source_prefix="google", limit=trend_limit)
-        if saved_google_items:
-            google_source_mode = "saved"
-            google_items = saved_google_items
-        elif not google_items:
-            fallback_google_items = _load_trending_items(db=db, source_prefix="google", limit=trend_limit)
-            if fallback_google_items:
-                google_source_mode = "saved"
-                google_items = fallback_google_items
-
-    tiktok_source_mode, tiktok_items = get_tiktok_trending(region=region, limit=trend_limit, mode=trend_mode)
-    if tiktok_source_mode == "live" and tiktok_items:
-        try:
-            save_tiktok_trends(db=db, items=tiktok_items, user_id=current_user.user_id, source_mode=tiktok_source_mode)
-        except Exception:
-            pass
-    if tiktok_source_mode != "live" or not tiktok_items:
-        saved_tiktok_items = _load_saved_trends(db=db, source_prefix="tiktok", limit=trend_limit)
-        if saved_tiktok_items:
-            tiktok_source_mode = "saved"
-            tiktok_items = saved_tiktok_items
-        elif not tiktok_items:
-            fallback_tiktok_items = _load_trending_items(db=db, source_prefix="tiktok", limit=trend_limit)
-            if fallback_tiktok_items:
-                tiktok_source_mode = "saved"
-                tiktok_items = fallback_tiktok_items
+    trend_source_mode, trend_items = _build_summary_trends(
+        db=db,
+        source_prefix="youtube",
+        region=region,
+        trend_mode=trend_mode,
+        limit=trend_limit,
+    )
+    google_source_mode, google_items = _build_summary_trends(
+        db=db,
+        source_prefix="google",
+        region=region,
+        trend_mode=trend_mode,
+        limit=trend_limit,
+    )
+    tiktok_source_mode, tiktok_items = _build_summary_trends(
+        db=db,
+        source_prefix="tiktok",
+        region=region,
+        trend_mode=trend_mode,
+        limit=trend_limit,
+    )
 
     live_topic_scores = _build_topic_scores_from_trends(trend_items + google_items + tiktok_items)
     historical_counts = _build_historical_topic_counts(db)

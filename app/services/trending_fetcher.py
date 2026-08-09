@@ -1,5 +1,4 @@
 import json
-import random
 import threading
 import time
 from datetime import datetime, timedelta
@@ -8,19 +7,19 @@ from typing import Dict, List, Optional, Tuple
 from app.core.config import settings
 from app.database.db import SessionLocal
 from app.services.jobs import enqueue
+from app.services.live_trend_snapshots import refresh_global_live_trends
 from app.services.persistence import log_system_event, save_trending_items
 from app.services.simple_cache import get as cache_get, set as cache_set
-from app.services.trends import get_google_trending, get_youtube_trending
+from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_trending
 
 
 _RATE_LIMIT_SECONDS = {
     "youtube": 60,
     "google": 60,
+    "tiktok": 60,
 }
-_DEFAULT_SOURCES = ["youtube", "google"]
+_DEFAULT_SOURCES = ["youtube", "google", "tiktok"]
 _CACHE_TTL_SECONDS = 60
-_FETCH_INTERVAL_MIN = 60
-_FETCH_INTERVAL_MAX = 120
 
 _last_fetch: Dict[str, datetime] = {}
 _lock = threading.Lock()
@@ -96,6 +95,8 @@ def _fetch_source_items(source: str, mode: str, limit: int) -> Tuple[str, List[o
         return get_youtube_trending(region=settings.youtube_region, limit=limit, mode=mode)
     if source == "google":
         return get_google_trending(region=settings.google_region, limit=limit, mode=mode)
+    if source == "tiktok":
+        return get_tiktok_trending(region=settings.tiktok_region, limit=limit, mode=mode)
     raise ValueError(f"Unsupported source: {source}")
 
 
@@ -157,8 +158,25 @@ def fetch_trending_items_job(
     return fetch_trending_items(limit=limit, mode=mode, sources=sources, user_id=user_id)
 
 
+def refresh_global_live_trends_job(
+    limit: int | None = None,
+    sources: Optional[List[str]] = None,
+    user_id: Optional[int] = None,
+) -> Dict[str, object]:
+    selected_sources = sources or _DEFAULT_SOURCES
+    result = refresh_global_live_trends(
+        region=settings.youtube_region,
+        limit=limit or settings.live_trend_limit,
+        platforms=selected_sources,
+    )
+    if result.get("status") != "busy":
+        for source in selected_sources:
+            _touch_source_fetch(source)
+    return result
+
+
 def trigger_trending_refresh(
-    limit: int = 10,
+    limit: int | None = None,
     mode: str = "auto",
     sources: Optional[List[str]] = None,
     user_id: Optional[int] = None,
@@ -178,14 +196,23 @@ def trigger_trending_refresh(
                     f"Refresh for {source} is rate-limited. Try again after {round(wait)}s."
                 )
 
-    job_id = enqueue(fetch_trending_items_job, limit=limit, mode=mode, sources=sources, user_id=user_id)
+    job_id = enqueue(
+        refresh_global_live_trends_job,
+        limit=limit or settings.live_trend_limit,
+        sources=sources,
+        user_id=user_id,
+    )
     return {"job_id": job_id, "status": "queued", "rate_limited": False}
 
 
 def _fetch_loop() -> None:
     while not _stop_event.is_set():
+        loop_started = time.monotonic()
         try:
-            fetch_trending_items(limit=10, mode="auto", sources=_DEFAULT_SOURCES)
+            refresh_global_live_trends_job(
+                limit=settings.live_trend_limit,
+                sources=_DEFAULT_SOURCES,
+            )
         except Exception as exc:
             db = SessionLocal()
             try:
@@ -199,7 +226,8 @@ def _fetch_loop() -> None:
                 db.commit()
             finally:
                 db.close()
-        wait_seconds = random.uniform(_FETCH_INTERVAL_MIN, _FETCH_INTERVAL_MAX)
+        elapsed = time.monotonic() - loop_started
+        wait_seconds = max(1.0, settings.live_trend_refresh_seconds - elapsed)
         _stop_event.wait(wait_seconds)
 
 

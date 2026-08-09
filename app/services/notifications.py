@@ -1,69 +1,108 @@
-from typing import Dict, List, Optional
-from sqlalchemy.orm import Session
 import json
+from datetime import datetime
+from typing import Dict, List
 
-from app.database.models import Notification
+from sqlalchemy.orm import Session
+
+from app.database.models import Notification, TrendSnapshotItem
 
 
-def create_notification(
+def create_live_trend_notification(
     db: Session,
     *,
     user_id: int,
-    title: str,
-    dataset_id: Optional[int] = None,
-    body: Optional[str] = None,
-    link: Optional[str] = None,
-    type: str = "system",
-    payload: Optional[dict] = None,
-    message: Optional[str] = None,
-    topic: str = "general",
-    source_platform: str = "system",
-    trend_score: float = 0.0,
-    delivered_via_ws: bool = False,
-) -> Notification:
-    payload_text = json.dumps(payload, ensure_ascii=False) if payload is not None else None
-    n = Notification(
-        user_id=user_id,
-        dataset_id=dataset_id,
-        title=title[:255],
-        body=body,
-        link=link,
-        type=type,
-        payload=payload_text,
-        message=message if message is not None else (body or title)[:1000],
-        topic=topic,
-        source_platform=source_platform,
-        trend_score=trend_score,
-        is_read=False,
-        delivered_via_ws=delivered_via_ws,
+    watch_session_id: int,
+    item: TrendSnapshotItem,
+    detected_at: datetime,
+) -> Notification | None:
+    existing = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == user_id,
+            Notification.watch_session_id == watch_session_id,
+            Notification.trend_key == item.trend_key,
+        )
+        .first()
     )
-    db.add(n)
+    if existing is not None:
+        return None
+
+    notification = Notification(
+        user_id=user_id,
+        watch_session_id=watch_session_id,
+        type="new_live_trend",
+        trend_key=item.trend_key,
+        platform=item.platform,
+        title=item.title,
+        category=item.category or "general",
+        detected_at=detected_at,
+        payload=json.dumps(
+            {
+                "trend_key": item.trend_key,
+                "platform": item.platform,
+                "title": item.title,
+                "category": item.category or "general",
+                "detected_at": detected_at.isoformat(),
+                "video_url": item.video_url,
+                "views": item.views,
+                "likes": item.likes,
+                "comments": item.comments,
+                "published_at": item.published_at,
+            },
+            ensure_ascii=False,
+        ),
+        is_read=False,
+    )
+    db.add(notification)
     db.flush()
-    db.commit()
-    return n
+    return notification
 
 
 def get_notifications(
     db: Session,
     *,
     user_id: int,
+    watch_session_id: int,
     unread_only: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> Dict[str, object]:
-    q = db.query(Notification).filter(Notification.user_id == user_id)
+    query = db.query(Notification).filter(
+        Notification.user_id == user_id,
+        Notification.watch_session_id == watch_session_id,
+        Notification.type == "new_live_trend",
+    )
     if unread_only:
-        q = q.filter(Notification.is_read == False)
-    total = q.count()
-    items = q.order_by(Notification.created_at.desc()).offset(offset).limit(limit).all()
+        query = query.filter(Notification.is_read.is_(False))
+    total = query.count()
+    items = (
+        query.order_by(Notification.detected_at.desc(), Notification.notification_id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return {"total": total, "items": items}
 
 
-def mark_notifications_read(db: Session, *, user_id: int, ids: List[int]) -> int:
+def mark_notifications_read(
+    db: Session,
+    *,
+    user_id: int,
+    watch_session_id: int,
+    ids: List[int],
+) -> int:
     if not ids:
         return 0
-    rows = db.query(Notification).filter(Notification.user_id == user_id, Notification.notification_id.in_(ids)).all()
-    for r in rows:
-        r.is_read = True
+    rows = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == user_id,
+            Notification.watch_session_id == watch_session_id,
+            Notification.notification_id.in_(ids),
+        )
+        .all()
+    )
+    for row in rows:
+        row.is_read = True
     db.commit()
     return len(rows)

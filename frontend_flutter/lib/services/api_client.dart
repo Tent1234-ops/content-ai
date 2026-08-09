@@ -5,19 +5,31 @@ import "package:http/http.dart" as http;
 import "package:shared_preferences/shared_preferences.dart";
 
 class ApiClient {
-  ApiClient({this.baseUrl = "http://127.0.0.1:8000"});
+  ApiClient({String? baseUrl})
+      : baseUrl =
+            (baseUrl ?? _configuredBaseUrl).replaceFirst(RegExp(r'/$'), '');
+
+  static const String _configuredBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://127.0.0.1:8000',
+  );
 
   final String baseUrl;
 
   Future<Map<String, String>> _headers({bool json = true}) async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString("access_token");
+    final sessionKey = prefs.getString("trend_session_key");
     final headers = <String, String>{};
     if (json) {
       headers["Content-Type"] = "application/json";
     }
     if (token != null && token.isNotEmpty) {
-      headers["Authorization"] = "Bearer " + token; // ignore: prefer_interpolation_to_compose_strings
+      headers["Authorization"] =
+          "Bearer " + token; // ignore: prefer_interpolation_to_compose_strings
+    }
+    if (sessionKey != null && sessionKey.isNotEmpty) {
+      headers["X-Trend-Session-Key"] = sessionKey;
     }
     return headers;
   }
@@ -68,13 +80,17 @@ class ApiClient {
     final headers = await _headers(json: false);
     request.headers.addAll(headers);
     if (fileBytes != null) {
-      request.files.add(http.MultipartFile.fromBytes("file", fileBytes, filename: fileName));
+      request.files.add(
+          http.MultipartFile.fromBytes("file", fileBytes, filename: fileName));
     } else if (filePath != null) {
-      request.files.add(await http.MultipartFile.fromPath("file", filePath, filename: fileName));
+      request.files.add(await http.MultipartFile.fromPath("file", filePath,
+          filename: fileName));
     } else if (fileStream != null && fileSize != null) {
-      request.files.add(http.MultipartFile("file", fileStream, fileSize, filename: fileName));
+      request.files.add(
+          http.MultipartFile("file", fileStream, fileSize, filename: fileName));
     } else {
-      throw ArgumentError("Either filePath, fileBytes, or fileStream must be provided for multipart upload.");
+      throw ArgumentError(
+          "Either filePath, fileBytes, or fileStream must be provided for multipart upload.");
     }
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
@@ -98,11 +114,12 @@ class ApiClient {
       if (body is Map<String, dynamic>) {
         throw Exception(body['detail'] ?? body['message'] ?? body.toString());
       }
-      // ignore: prefer_interpolation_to_compose_strings
       if (rawBody.isNotEmpty) {
-        throw Exception("HTTP " + response.statusCode.toString() + ": " + rawBody); // ignore: prefer_interpolation_to_compose_strings
+        throw Exception('HTTP ${response.statusCode}: $rawBody');
       }
-      throw Exception("HTTP " + response.statusCode.toString() + ": " + (response.reasonPhrase ?? 'Unknown error')); // ignore: prefer_interpolation_to_compose_strings
+      throw Exception(
+        'HTTP ${response.statusCode}: ${response.reasonPhrase ?? 'Unknown error'}',
+      );
     }
     return body;
   }

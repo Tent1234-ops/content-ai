@@ -24,6 +24,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<NotificationItem> _notifications = const [];
   Timer? _pollTimer;
   String? _error;
+  Map<String, String> _sectionErrors = const {};
   String _searchText = '';
   String _platformFilter = 'All';
   String _categoryFilter = 'All';
@@ -45,41 +46,87 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadAll() async {
+    if (_loading) return;
     setState(() {
       _loading = true;
       _error = null;
     });
-    try {
-      final overview = await _repository.getOverview();
-      final followedTopics = await _repository.getFollowedTopics();
-      final liveSnapshot = await _repository.getLiveTrendSnapshot(limit: 50);
-      final notifications = await _repository.getNotifications(limit: 20);
-      if (!mounted) return;
-      setState(() {
-        _data = overview;
+    final overviewRequest = _capture(_repository.getOverview());
+    final snapshotRequest =
+        _capture(_repository.getLiveTrendSnapshot(limit: 50));
+    final topicsRequest = _capture(_repository.getFollowedTopics());
+    final notificationsRequest =
+        _capture(_repository.getNotifications(limit: 20));
+
+    final overviewResult = await overviewRequest;
+    final snapshotResult = await snapshotRequest;
+    final topicsResult = await topicsRequest;
+    final notificationsResult = await notificationsRequest;
+    if (!mounted) return;
+
+    final errors = <String, String>{};
+    if (overviewResult.error != null) {
+      errors['Overview'] = overviewResult.error.toString();
+    }
+    if (snapshotResult.error != null) {
+      errors['Live trends'] = snapshotResult.error.toString();
+    }
+    if (topicsResult.error != null) {
+      errors['Followed topics'] = topicsResult.error.toString();
+    }
+    if (notificationsResult.error != null) {
+      errors['Notifications'] = notificationsResult.error.toString();
+    }
+
+    final liveSnapshot = snapshotResult.value?.retainPreviousItems(_snapshot);
+    setState(() {
+      if (liveSnapshot != null) {
         _snapshot = liveSnapshot;
-        _followedTopics = followedTopics;
-        _notifications = notifications;
-      });
-      if (liveSnapshot.newNotifications.isNotEmpty) {
-        final first = liveSnapshot.newNotifications.first;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              liveSnapshot.newCount == 1
-                  ? first.title
-                  : '${liveSnapshot.newCount} new live trends detected.',
-            ),
-          ),
-        );
       }
-    } catch (error) {
+      if (overviewResult.value != null) {
+        _data = overviewResult.value;
+      } else if (_data == null && liveSnapshot != null) {
+        _data = DashboardOverview.liveOnly(liveSnapshot);
+      }
+      if (topicsResult.value != null) {
+        _followedTopics = topicsResult.value!;
+      }
+      if (notificationsResult.value != null) {
+        _notifications = notificationsResult.value!;
+      }
+      _sectionErrors = errors;
+      _error = _data == null
+          ? errors['Overview'] ??
+              errors['Live trends'] ??
+              'Dashboard is unavailable.'
+          : null;
+      _loading = false;
+    });
+
+    if (liveSnapshot != null && liveSnapshot.newCount > 0) {
+      await _loadNotificationsOnly();
       if (!mounted) return;
-      setState(() => _error = error.toString());
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
+    }
+
+    if (liveSnapshot != null && liveSnapshot.newNotifications.isNotEmpty) {
+      final first = liveSnapshot.newNotifications.first;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            liveSnapshot.newCount == 1
+                ? first.title
+                : '${liveSnapshot.newCount} new live trends detected.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<_DashboardLoadResult<T>> _capture<T>(Future<T> request) async {
+    try {
+      return _DashboardLoadResult<T>.success(await request);
+    } catch (error) {
+      return _DashboardLoadResult<T>.failure(error);
     }
   }
 
@@ -87,7 +134,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _syncing = true);
     try {
       final results = await _repository.syncAllTrendsLive(limit: 50);
-      final fetched = results.fold<int>(0, (sum, item) => sum + item.totalFetched);
+      final fetched =
+          results.fold<int>(0, (sum, item) => sum + item.totalFetched);
       final saved = results.fold<int>(
         0,
         (sum, item) => sum + item.created + item.updated,
@@ -146,6 +194,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _followedTopics = topics);
   }
 
+  Future<void> _loadNotificationsOnly() async {
+    try {
+      final notifications = await _repository.getNotifications(limit: 20);
+      if (!mounted) return;
+      setState(() {
+        _notifications = notifications;
+        if (_sectionErrors.containsKey('Notifications')) {
+          final errors = Map<String, String>.from(_sectionErrors)
+            ..remove('Notifications');
+          _sectionErrors = errors;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _sectionErrors = {
+          ..._sectionErrors,
+          'Notifications': error.toString(),
+        };
+      });
+    }
+  }
+
   Future<void> _markAllRead() async {
     final unreadIds = _notifications
         .where((item) => !item.isRead)
@@ -181,16 +252,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   List<DashboardTrendItem> _allTrends(DashboardOverview data) {
-    return _displayPlatforms(data).expand((platform) => platform.items).toList();
+    return _displayPlatforms(data)
+        .expand((platform) => platform.items)
+        .toList();
   }
 
   List<DashboardTrendItem> _filteredTrends(DashboardOverview data) {
     final query = _searchText.trim().toLowerCase();
     return _allTrends(data).where((item) {
       final platformOk = _platformFilter == 'All' ||
-          item.sourcePlatform.toLowerCase().contains(_platformFilter.toLowerCase());
+          item.sourcePlatform
+              .toLowerCase()
+              .contains(_platformFilter.toLowerCase());
       final category = item.category.isEmpty ? 'General' : item.category;
-      final categoryOk = _categoryFilter == 'All' || category == _categoryFilter;
+      final categoryOk =
+          _categoryFilter == 'All' || category == _categoryFilter;
       final statusOk = _statusFilter == 'All' || item.status == _statusFilter;
       final text = '${item.title} ${item.category}'.toLowerCase();
       final searchOk = query.isEmpty || text.contains(query);
@@ -213,6 +289,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     final auth = AuthScope.of(context);
     final data = _data;
+    final unreadNotifications =
+        _notifications.where((item) => !item.isRead).length;
 
     return AppShell(
       title: 'Dashboard',
@@ -220,6 +298,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       isAdmin: auth.isAdmin,
       onLogout: _logout,
       actions: [
+        Badge(
+          isLabelVisible: unreadNotifications > 0,
+          label: Text(
+            unreadNotifications > 99 ? '99+' : '$unreadNotifications',
+          ),
+          child: IconButton(
+            onPressed: _loadNotificationsOnly,
+            icon: const Icon(Icons.notifications_outlined),
+            tooltip: 'Refresh trend notifications',
+          ),
+        ),
         if (auth.isAdmin)
           IconButton(
             onPressed: _syncing ? null : _syncTrends,
@@ -253,6 +342,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     padding: const EdgeInsets.all(16),
                     children: [
                       if (_loading) const LinearProgressIndicator(),
+                      if (_sectionErrors.isNotEmpty) ...[
+                        _DashboardWarning(errors: _sectionErrors),
+                        const SizedBox(height: 16),
+                      ],
                       _DashboardIntro(
                         totalTrends: _allTrends(data).length,
                         newCount: _snapshot?.newCount ?? 0,
@@ -314,7 +407,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               children: [
                                 Text(
                                   'Dataset records by source',
-                                  style: Theme.of(context).textTheme.titleMedium,
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium,
                                 ),
                                 const SizedBox(height: 12),
                                 SimpleBarChart(items: data.sourceDistribution),
@@ -325,6 +419,59 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                 ),
+    );
+  }
+}
+
+class _DashboardLoadResult<T> {
+  const _DashboardLoadResult._({this.value, this.error});
+
+  factory _DashboardLoadResult.success(T value) {
+    return _DashboardLoadResult._(value: value);
+  }
+
+  factory _DashboardLoadResult.failure(Object error) {
+    return _DashboardLoadResult._(error: error);
+  }
+
+  final T? value;
+  final Object? error;
+}
+
+class _DashboardWarning extends StatelessWidget {
+  const _DashboardWarning({required this.errors});
+
+  final Map<String, String> errors;
+
+  @override
+  Widget build(BuildContext context) {
+    final message = errors.entries
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join('\n');
+    return Material(
+      color: Theme.of(context).colorScheme.errorContainer,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.warning_amber_outlined,
+              color: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Some dashboard sections could not refresh. Previous data is still shown.\n$message',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onErrorContainer,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -465,7 +612,7 @@ class _FilterDropdown extends StatelessWidget {
     return SizedBox(
       width: 180,
       child: DropdownButtonFormField<String>(
-        value: safeValue,
+        initialValue: safeValue,
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
@@ -716,8 +863,7 @@ class _CategoryOverview extends StatelessWidget {
                 spacing: 8,
                 runSpacing: 8,
                 children: items
-                    .map((entry) =>
-                        _SmallPill('${entry.key} (${entry.value})'))
+                    .map((entry) => _SmallPill('${entry.key} (${entry.value})'))
                     .toList(),
               ),
           ],
@@ -735,10 +881,13 @@ class _MetricsGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = [
-      _MetricItem('Dataset', metrics.totalDatasetContents, Icons.dataset_outlined),
+      _MetricItem(
+          'Dataset', metrics.totalDatasetContents, Icons.dataset_outlined),
       _MetricItem('Users', metrics.totalUsers, Icons.people_outline),
-      _MetricItem('Cluster runs', metrics.totalClusterRuns, Icons.bubble_chart_outlined),
-      _MetricItem('My analyses', metrics.myAnalysisResults, Icons.assessment_outlined),
+      _MetricItem('Cluster runs', metrics.totalClusterRuns,
+          Icons.bubble_chart_outlined),
+      _MetricItem(
+          'My analyses', metrics.myAnalysisResults, Icons.assessment_outlined),
     ];
 
     return LayoutBuilder(
@@ -856,14 +1005,17 @@ class _NotificationPanel extends StatelessWidget {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
-                    item.isRead ? Icons.notifications_none : Icons.notifications_active,
+                    item.isRead
+                        ? Icons.notifications_none
+                        : Icons.notifications_active,
                     color: item.isRead
                         ? Theme.of(context).disabledColor
                         : Theme.of(context).colorScheme.primary,
                   ),
-                  title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  title: Text(item.title,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
                   subtitle: Text(
-                    '${_formatPlatformName(item.sourcePlatform)} | ${item.topic} | ${_formatDateTime(item.createdAt)}',
+                    '${_formatPlatformName(item.platform)} | ${item.category} | ${_formatDateTime(item.detectedAt)}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -896,7 +1048,8 @@ class _FollowedTopicsPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Followed topics', style: Theme.of(context).textTheme.titleMedium),
+            Text('Followed topics',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             if (topics.isEmpty)
               Text(
@@ -1042,7 +1195,8 @@ class _TrendCard extends StatelessWidget {
                 ),
                 IconButton(
                   onPressed: onToggleFollow,
-                  icon: Icon(isFollowing ? Icons.bookmark : Icons.bookmark_outline),
+                  icon: Icon(
+                      isFollowing ? Icons.bookmark : Icons.bookmark_outline),
                   tooltip: isFollowing ? 'Unfollow topic' : 'Follow topic',
                 ),
               ],
@@ -1070,7 +1224,8 @@ class _TrendCard extends StatelessWidget {
                   value: _compactSignal(item.engagementSignal),
                 ),
                 _Stat(label: 'Views', value: _compactNumber(item.views)),
-                Expanded(child: _ChangeText(value: item.engagementChangePercent)),
+                Expanded(
+                    child: _ChangeText(value: item.engagementChangePercent)),
               ],
             ),
           ],
@@ -1088,11 +1243,12 @@ class _ModePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLive = mode == 'live';
-    final color = isLive ? Colors.green.shade700 : Theme.of(context).colorScheme.error;
+    final color =
+        isLive ? Colors.green.shade700 : Theme.of(context).colorScheme.error;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
@@ -1115,7 +1271,7 @@ class _StatusPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
@@ -1157,7 +1313,7 @@ class _SmallPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(label, style: Theme.of(context).textTheme.labelSmall),
@@ -1211,9 +1367,8 @@ String _formatPlatformName(String platform) {
   if (normalized.isEmpty) return '-';
   return normalized
       .split(' ')
-      .map((part) => part.isEmpty
-          ? part
-          : '${part[0].toUpperCase()}${part.substring(1)}')
+      .map((part) =>
+          part.isEmpty ? part : '${part[0].toUpperCase()}${part.substring(1)}')
       .join(' ');
 }
 

@@ -49,5 +49,6 @@ class UserResponse(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    session_key: str
     token_type: str = "bearer"
     user: UserResponse

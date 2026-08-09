@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user, get_current_watch_session
 from app.core.config import settings
-from app.api.deps import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database.db import get_db
-from app.database.models import User
+from app.database.models import User, UserTrendWatchSession
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.services.trend_watch_sessions import end_trend_watch_session, start_trend_watch_session
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -64,8 +65,30 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User account is inactive")
 
-    token = create_access_token(subject=str(user.user_id), role=user.role)
-    return TokenResponse(access_token=token, user=user)
+    watch_session = start_trend_watch_session(
+        db,
+        user=user,
+        region=settings.youtube_region,
+    )
+    token = create_access_token(
+        subject=str(user.user_id),
+        role=user.role,
+        session_key=watch_session.session_key,
+    )
+    return TokenResponse(
+        access_token=token,
+        session_key=watch_session.session_key,
+        user=user,
+    )
+
+
+@router.post("/logout")
+def logout(
+    watch_session: UserTrendWatchSession = Depends(get_current_watch_session),
+    db: Session = Depends(get_db),
+):
+    end_trend_watch_session(db, watch_session=watch_session)
+    return {"status": "ok"}
 
 
 @router.get("/me", response_model=UserResponse)

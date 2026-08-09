@@ -186,42 +186,85 @@ CREATE TABLE IF NOT EXISTS system_logs (
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS notifications (
-  notification_id INT AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS trend_snapshot_runs (
+  run_id INT AUTO_INCREMENT PRIMARY KEY,
+  region VARCHAR(10) NOT NULL DEFAULT 'TH',
+  status VARCHAR(20) NOT NULL DEFAULT 'running',
+  provider_status TEXT NOT NULL,
+  total_items INT NOT NULL DEFAULT 0,
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  INDEX ix_trend_snapshot_runs_region (region),
+  INDEX ix_trend_snapshot_runs_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_trend_watch_sessions (
+  watch_session_id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
-  dataset_id INT NULL,
-  title VARCHAR(255) NOT NULL,
-  body TEXT NULL,
-  link VARCHAR(255) NULL,
-  type VARCHAR(50) NOT NULL DEFAULT 'system',
-  payload TEXT NULL,
-  message TEXT NOT NULL,
-  topic VARCHAR(100) NOT NULL DEFAULT 'general',
-  source_platform VARCHAR(50) NOT NULL DEFAULT 'system',
-  trend_score FLOAT NOT NULL DEFAULT 0,
-  is_read BOOLEAN NOT NULL DEFAULT FALSE,
-  delivered_via_ws BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_notifications_user
+  session_key VARCHAR(64) NOT NULL,
+  baseline_run_id INT NULL,
+  last_seen_run_id INT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at DATETIME NULL,
+  UNIQUE KEY uq_user_trend_watch_session_key (session_key),
+  INDEX ix_user_trend_watch_sessions_user (user_id),
+  CONSTRAINT fk_user_trend_watch_sessions_user
     FOREIGN KEY (user_id) REFERENCES users(user_id)
     ON DELETE CASCADE,
-  CONSTRAINT fk_notifications_dataset
-    FOREIGN KEY (dataset_id) REFERENCES dataset_contents(dataset_id)
+  CONSTRAINT fk_user_trend_watch_sessions_baseline_run
+    FOREIGN KEY (baseline_run_id) REFERENCES trend_snapshot_runs(run_id)
+    ON DELETE SET NULL,
+  CONSTRAINT fk_user_trend_watch_sessions_last_seen_run
+    FOREIGN KEY (last_seen_run_id) REFERENCES trend_snapshot_runs(run_id)
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS user_trend_snapshots (
-  snapshot_id INT AUTO_INCREMENT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS notifications (
+  notification_id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
+  watch_session_id INT NOT NULL,
+  type VARCHAR(50) NOT NULL DEFAULT 'new_live_trend',
+  trend_key VARCHAR(40) NOT NULL,
   platform VARCHAR(50) NOT NULL,
-  item_keys TEXT NOT NULL,
-  snapshot_payload TEXT NOT NULL,
-  last_checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  title VARCHAR(500) NOT NULL,
+  category VARCHAR(100) NOT NULL DEFAULT 'general',
+  detected_at DATETIME NOT NULL,
+  payload TEXT NULL,
+  is_read BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_user_trend_snapshot_user_platform (user_id, platform),
-  CONSTRAINT fk_user_trend_snapshots_user
+  UNIQUE KEY uq_notification_user_session_trend (user_id, watch_session_id, trend_key),
+  INDEX ix_notifications_user_session (user_id, watch_session_id),
+  CONSTRAINT fk_notifications_user
     FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_notifications_watch_session
+    FOREIGN KEY (watch_session_id) REFERENCES user_trend_watch_sessions(watch_session_id)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS trend_snapshot_items (
+  item_id INT AUTO_INCREMENT PRIMARY KEY,
+  run_id INT NOT NULL,
+  platform VARCHAR(50) NOT NULL,
+  trend_key VARCHAR(40) NOT NULL,
+  title VARCHAR(500) NOT NULL,
+  category VARCHAR(100) NOT NULL DEFAULT 'general',
+  source_platform VARCHAR(100) NOT NULL,
+  video_url VARCHAR(1024) NULL,
+  views INT NOT NULL DEFAULT 0,
+  likes INT NOT NULL DEFAULT 0,
+  comments INT NOT NULL DEFAULT 0,
+  trend_score FLOAT NOT NULL DEFAULT 0,
+  engagement_signal FLOAT NOT NULL DEFAULT 0,
+  published_at VARCHAR(64) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_trend_snapshot_item_run_platform_key (run_id, platform, trend_key),
+  INDEX ix_trend_snapshot_items_run_id (run_id),
+  INDEX ix_trend_snapshot_items_platform (platform),
+  CONSTRAINT fk_trend_snapshot_items_run
+    FOREIGN KEY (run_id) REFERENCES trend_snapshot_runs(run_id)
     ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

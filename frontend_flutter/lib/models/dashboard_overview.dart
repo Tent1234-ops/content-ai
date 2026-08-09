@@ -109,8 +109,9 @@ class DashboardTrendItem {
   factory DashboardTrendItem.fromJson(Map<String, dynamic> json) {
     return DashboardTrendItem(
       title: json['title']?.toString() ?? '-',
-      sourcePlatform:
-          json['source_platform']?.toString() ?? json['source']?.toString() ?? '-',
+      sourcePlatform: json['source_platform']?.toString() ??
+          json['source']?.toString() ??
+          '-',
       trendScore: json['trend_score'] as num? ?? 0,
       category: json['category']?.toString() ?? '',
       videoUrl: json['video_url']?.toString() ?? '',
@@ -118,11 +119,12 @@ class DashboardTrendItem {
       likes: (json['likes'] as num?)?.toInt() ?? 0,
       comments: (json['comments'] as num?)?.toInt() ?? 0,
       publishedAt: json['published_at']?.toString() ?? '',
-      engagementSignal:
-          (json['engagement_signal'] as num?) ?? (json['trend_score'] as num?) ?? 0,
-      engagementChangePercent:
-          json['engagement_change_percent'] as num? ?? 0,
-      status: json['status']?.toString() ?? _statusFromScore(json['trend_score']),
+      engagementSignal: (json['engagement_signal'] as num?) ??
+          (json['trend_score'] as num?) ??
+          0,
+      engagementChangePercent: json['engagement_change_percent'] as num? ?? 0,
+      status:
+          json['status']?.toString() ?? _statusFromScore(json['trend_score']),
       isNew: json['is_new'] == true,
     );
   }
@@ -147,6 +149,19 @@ class DashboardPlatformTrends {
   final List<DashboardTrendItem> items;
 
   bool get isLive => mode == 'live';
+
+  DashboardPlatformTrends retainPreviousItems(
+    DashboardPlatformTrends previous,
+  ) {
+    if (items.isNotEmpty || mode == 'live' || previous.items.isEmpty) {
+      return this;
+    }
+    return DashboardPlatformTrends(
+      platform: platform,
+      mode: mode,
+      items: previous.items,
+    );
+  }
 
   factory DashboardPlatformTrends.fromJson(
     String platform,
@@ -190,35 +205,38 @@ class FollowedTopicItem {
 class NotificationItem {
   const NotificationItem({
     required this.id,
+    required this.watchSessionId,
+    required this.trendKey,
+    required this.platform,
     required this.title,
-    required this.message,
     required this.type,
-    required this.topic,
-    required this.sourcePlatform,
-    required this.trendScore,
+    required this.category,
+    required this.detectedAt,
     required this.isRead,
     required this.createdAt,
   });
 
   final int id;
+  final int watchSessionId;
+  final String trendKey;
+  final String platform;
   final String title;
-  final String message;
   final String type;
-  final String topic;
-  final String sourcePlatform;
-  final num trendScore;
+  final String category;
+  final String detectedAt;
   final bool isRead;
   final String createdAt;
 
   factory NotificationItem.fromJson(Map<String, dynamic> json) {
     return NotificationItem(
       id: (json['notification_id'] as num?)?.toInt() ?? 0,
-      title: json['title']?.toString() ?? 'Notification',
-      message: json['message']?.toString() ?? json['body']?.toString() ?? '',
-      type: json['type']?.toString() ?? 'system',
-      topic: json['topic']?.toString() ?? 'general',
-      sourcePlatform: json['source_platform']?.toString() ?? 'system',
-      trendScore: json['trend_score'] as num? ?? 0,
+      watchSessionId: (json['watch_session_id'] as num?)?.toInt() ?? 0,
+      trendKey: json['trend_key']?.toString() ?? '',
+      platform: json['platform']?.toString() ?? 'unknown',
+      title: json['title']?.toString() ?? 'New live trend',
+      type: json['type']?.toString() ?? 'new_live_trend',
+      category: json['category']?.toString() ?? 'general',
+      detectedAt: json['detected_at']?.toString() ?? '',
       isRead: json['is_read'] == true,
       createdAt: json['created_at']?.toString() ?? '',
     );
@@ -247,6 +265,18 @@ class LiveTrendSnapshot {
         googleTrends,
         tiktokTrends,
       ];
+
+  LiveTrendSnapshot retainPreviousItems(LiveTrendSnapshot? previous) {
+    if (previous == null) return this;
+    return LiveTrendSnapshot(
+      generatedAt: generatedAt,
+      newCount: newCount,
+      newNotifications: newNotifications,
+      youtubeTrends: youtubeTrends.retainPreviousItems(previous.youtubeTrends),
+      googleTrends: googleTrends.retainPreviousItems(previous.googleTrends),
+      tiktokTrends: tiktokTrends.retainPreviousItems(previous.tiktokTrends),
+    );
+  }
 
   factory LiveTrendSnapshot.fromJson(Map<String, dynamic> json) {
     final platforms =
@@ -361,6 +391,26 @@ class DashboardOverview {
   List<DashboardTrendItem> get liveYoutubeTrends => youtubeTrends.items;
   String get liveYoutubeTrendMode => youtubeTrends.mode;
 
+  factory DashboardOverview.liveOnly(LiveTrendSnapshot snapshot) {
+    return DashboardOverview(
+      userRole: 'user',
+      metrics: const DashboardMetrics(
+        totalDatasetContents: 0,
+        totalUsers: 0,
+        totalClusterRuns: 0,
+        myAnalysisResults: 0,
+      ),
+      platformComparison: const [],
+      platformSummaries: const [],
+      topTrends:
+          snapshot.platformTrends.expand((platform) => platform.items).toList(),
+      youtubeTrends: snapshot.youtubeTrends,
+      googleTrends: snapshot.googleTrends,
+      tiktokTrends: snapshot.tiktokTrends,
+      sourceDistribution: const [],
+    );
+  }
+
   factory DashboardOverview.fromJson(Map<String, dynamic> json) {
     return DashboardOverview(
       userRole: json['user_role']?.toString() ?? 'user',
@@ -373,12 +423,12 @@ class DashboardOverview {
                     Map<String, dynamic>.from(item as Map),
                   ))
               .toList(),
-      platformSummaries: (json['platform_summaries'] as List<dynamic>? ??
-              const [])
-          .map((item) => PlatformSummary.fromJson(
-                Map<String, dynamic>.from(item as Map),
-              ))
-          .toList(),
+      platformSummaries:
+          (json['platform_summaries'] as List<dynamic>? ?? const [])
+              .map((item) => PlatformSummary.fromJson(
+                    Map<String, dynamic>.from(item as Map),
+                  ))
+              .toList(),
       topTrends: (json['top_trends'] as List<dynamic>? ?? const [])
           .map((item) => DashboardTrendItem.fromJson(
                 Map<String, dynamic>.from(item as Map),

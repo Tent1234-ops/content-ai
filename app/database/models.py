@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -23,7 +23,11 @@ class User(Base):
     configs = relationship("SystemConfig", back_populates="user")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     followed_topics = relationship("FollowedTopic", back_populates="user", cascade="all, delete-orphan")
-    trend_snapshots = relationship("UserTrendSnapshot", back_populates="user", cascade="all, delete-orphan")
+    trend_watch_sessions = relationship(
+        "UserTrendWatchSession",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class UserContent(Base):
@@ -210,24 +214,34 @@ class SystemLog(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "watch_session_id",
+            "trend_key",
+            name="uq_notification_user_session_trend",
+        ),
+    )
 
     notification_id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    dataset_id = Column(Integer, ForeignKey("dataset_contents.dataset_id"), nullable=True)
-    title = Column(String(255), nullable=False)
-    body = Column(Text)
-    link = Column(String(255))
-    type = Column(String(50), nullable=False, default="system")
-    payload = Column(Text)  # optional JSON payload
-    message = Column(Text, nullable=False, default="", server_default=text("''"))
-    topic = Column(String(100), nullable=False, default="general", server_default=text("'general'"))
-    source_platform = Column(String(50), nullable=False, default="system", server_default=text("'system'"))
-    trend_score = Column(Float, nullable=False, default=0.0, server_default=text("0.0"))
+    watch_session_id = Column(
+        Integer,
+        ForeignKey("user_trend_watch_sessions.watch_session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    type = Column(String(50), nullable=False, default="new_live_trend")
+    trend_key = Column(String(40), nullable=False)
+    platform = Column(String(50), nullable=False)
+    title = Column(String(500), nullable=False)
+    category = Column(String(100), nullable=False, default="general")
+    detected_at = Column(DateTime, nullable=False)
+    payload = Column(Text)
     is_read = Column(Boolean, nullable=False, default=False)
-    delivered_via_ws = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="notifications")
+    watch_session = relationship("UserTrendWatchSession", back_populates="notifications")
 
 
 class FollowedTopic(Base):
@@ -242,19 +256,76 @@ class FollowedTopic(Base):
     user = relationship("User", back_populates="followed_topics")
 
 
-class UserTrendSnapshot(Base):
-    __tablename__ = "user_trend_snapshots"
-    __table_args__ = (
-        UniqueConstraint("user_id", "platform", name="uq_user_trend_snapshot_user_platform"),
+class UserTrendWatchSession(Base):
+    __tablename__ = "user_trend_watch_sessions"
+
+    watch_session_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    session_key = Column(String(64), nullable=False, unique=True, index=True)
+    baseline_run_id = Column(
+        Integer,
+        ForeignKey("trend_snapshot_runs.run_id", ondelete="SET NULL"),
+    )
+    last_seen_run_id = Column(
+        Integer,
+        ForeignKey("trend_snapshot_runs.run_id", ondelete="SET NULL"),
+    )
+    is_active = Column(Boolean, nullable=False, default=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    ended_at = Column(DateTime)
+
+    user = relationship("User", back_populates="trend_watch_sessions")
+    notifications = relationship(
+        "Notification",
+        back_populates="watch_session",
+        cascade="all, delete-orphan",
     )
 
-    snapshot_id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    platform = Column(String(50), nullable=False)
-    item_keys = Column(Text, nullable=False, default="[]")
-    snapshot_payload = Column(Text, nullable=False, default="[]")
-    last_checked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
-    user = relationship("User", back_populates="trend_snapshots")
+class TrendSnapshotRun(Base):
+    __tablename__ = "trend_snapshot_runs"
+
+    run_id = Column(Integer, primary_key=True)
+    region = Column(String(10), nullable=False, default="TH", index=True)
+    status = Column(String(20), nullable=False, default="running", index=True)
+    provider_status = Column(Text, nullable=False, default="{}")
+    total_items = Column(Integer, nullable=False, default=0)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime)
+
+    items = relationship(
+        "TrendSnapshotItem",
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class TrendSnapshotItem(Base):
+    __tablename__ = "trend_snapshot_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "platform",
+            "trend_key",
+            name="uq_trend_snapshot_item_run_platform_key",
+        ),
+    )
+
+    item_id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("trend_snapshot_runs.run_id"), nullable=False, index=True)
+    platform = Column(String(50), nullable=False, index=True)
+    trend_key = Column(String(40), nullable=False)
+    title = Column(String(500), nullable=False)
+    category = Column(String(100), nullable=False, default="general")
+    source_platform = Column(String(100), nullable=False)
+    video_url = Column(String(1024))
+    views = Column(Integer, nullable=False, default=0)
+    likes = Column(Integer, nullable=False, default=0)
+    comments = Column(Integer, nullable=False, default=0)
+    trend_score = Column(Float, nullable=False, default=0.0)
+    engagement_signal = Column(Float, nullable=False, default=0.0)
+    published_at = Column(String(64))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    run = relationship("TrendSnapshotRun", back_populates="items")

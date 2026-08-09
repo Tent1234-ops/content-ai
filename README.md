@@ -111,8 +111,26 @@ python scripts/start_rq_worker.py --redis redis://localhost:6379/0 --queue defau
 ```powershell
 cd frontend_flutter
 flutter pub get
-flutter run -d chrome
+flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
+
+`API_BASE_URL` defaults to `http://127.0.0.1:8000`. Set it with
+`--dart-define` when the backend runs on another host or port.
+
+## Phase 11 Notification Migration
+
+Run this once when upgrading an existing database:
+
+```powershell
+python scripts/migrate_phase11_notifications.py
+```
+
+The migration archives the previous notification tables and creates
+`user_trend_watch_sessions` plus the session-scoped `notifications` table.
+Login establishes the current trend snapshot as a baseline without sending an
+alert. Later dashboard polls create one `new_live_trend` notification for each
+trend key first seen during that login session. Uploaded-video analysis does not
+create notifications.
 
 ค่า API backend อยู่ใน `frontend_flutter/lib/services/api_client.dart` ค่าเริ่มต้นคือ:
 
