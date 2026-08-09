@@ -188,7 +188,7 @@ class SystemConfig(Base):
     enable_tiktok_trending = Column(Boolean, nullable=False, default=True)
     auto_scan_interval_hours = Column(Integer, nullable=False, default=6)
     # New runtime/admin-configurable fields
-    asr_model_default = Column(String(20), nullable=False, default='tiny')
+    asr_model_default = Column(String(20), nullable=False, default="small")
     enable_model_toggle = Column(Boolean, nullable=False, default=True)
     job_backend = Column(String(20), nullable=False, default='inprocess')
     redis_url = Column(String(255), nullable=True)

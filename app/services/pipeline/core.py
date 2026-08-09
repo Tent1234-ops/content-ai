@@ -2241,6 +2241,11 @@ def analyze_video(video_path: str, display_name: str | None = None):
         fallback_title = os.path.splitext(os.path.basename(fallback_source))[0].replace("_", " ").replace("-", " ")
         transcript = fallback_title
         stt["transcript_source"] = "fallback_filename"
+        stt["fallback_reason"] = stt.get("fallback_reason") or "empty_stt_transcript"
+        stt["warning"] = (
+            "Speech-to-text failed, so the analysis uses only the uploaded filename. "
+            "Classification confidence is intentionally limited."
+        )
     else:
         stt["transcript_source"] = "speech_to_text"
 
@@ -2473,6 +2478,9 @@ def analyze_video(video_path: str, display_name: str | None = None):
     elif strong_count >= 2 and weak_count >= 1:
         quality_score += 0.05
 
+    if stt.get("transcript_source") == "fallback_filename":
+        quality_score = min(quality_score, 0.25)
+
     return convert_numpy(
         {
             "transcript": transcript,
@@ -2505,6 +2513,7 @@ def analyze_video(video_path: str, display_name: str | None = None):
                     "weak_audio": weak_audio,
                     "transcript_source": stt.get("transcript_source"),
                     "fallback_reason": stt.get("fallback_reason"),
+                    "warning": stt.get("warning"),
                     "hook_seconds_analyzed": hook_seconds,
                 },
             },

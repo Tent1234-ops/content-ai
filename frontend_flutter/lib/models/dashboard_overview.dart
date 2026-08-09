@@ -88,6 +88,16 @@ class DashboardTrendItem {
     required this.publishedAt,
     required this.engagementSignal,
     required this.engagementChangePercent,
+    required this.engagementDelta,
+    required this.engagementRatePerMinute,
+    required this.rank,
+    required this.rankChange,
+    required this.momentumScore,
+    required this.changeKind,
+    required this.changeLabel,
+    required this.hasPreviousSnapshot,
+    required this.comparisonWindowSeconds,
+    required this.isMeaningfulRising,
     required this.status,
     required this.isNew,
   });
@@ -103,6 +113,16 @@ class DashboardTrendItem {
   final String publishedAt;
   final num engagementSignal;
   final num engagementChangePercent;
+  final num engagementDelta;
+  final num engagementRatePerMinute;
+  final int rank;
+  final int rankChange;
+  final num momentumScore;
+  final String changeKind;
+  final String changeLabel;
+  final bool hasPreviousSnapshot;
+  final int comparisonWindowSeconds;
+  final bool isMeaningfulRising;
   final String status;
   final bool isNew;
 
@@ -123,6 +143,17 @@ class DashboardTrendItem {
           (json['trend_score'] as num?) ??
           0,
       engagementChangePercent: json['engagement_change_percent'] as num? ?? 0,
+      engagementDelta: json['engagement_delta'] as num? ?? 0,
+      engagementRatePerMinute: json['engagement_rate_per_minute'] as num? ?? 0,
+      rank: (json['rank'] as num?)?.toInt() ?? 0,
+      rankChange: (json['rank_change'] as num?)?.toInt() ?? 0,
+      momentumScore: json['momentum_score'] as num? ?? 0,
+      changeKind: json['change_kind']?.toString() ?? 'baseline',
+      changeLabel: json['change_label']?.toString() ?? 'Baseline',
+      hasPreviousSnapshot: json['has_previous_snapshot'] == true,
+      comparisonWindowSeconds:
+          (json['comparison_window_seconds'] as num?)?.toInt() ?? 0,
+      isMeaningfulRising: json['is_meaningful_rising'] == true,
       status:
           json['status']?.toString() ?? _statusFromScore(json['trend_score']),
       isNew: json['is_new'] == true,

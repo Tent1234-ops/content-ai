@@ -38,6 +38,17 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
         source_prefix="youtube",
         profile_limit=80,
     )
+    stt_meta = analysis.get("stt_meta", {})
+    filename_fallback = stt_meta.get("transcript_source") == "fallback_filename"
+    if filename_fallback:
+        classification["confidence"] = min(
+            float(classification.get("confidence", 0.0)),
+            0.25,
+        )
+        classification["input_source"] = "filename_fallback"
+        classification["warning"] = stt_meta.get("warning") or (
+            "Speech-to-text failed; classification is based only on the filename."
+        )
     selected_domain = str(analysis.get("domain") or "general")
     if float(classification.get("confidence", 0.0)) >= 0.45:
         selected_domain = str(classification["domain"])
@@ -61,11 +72,11 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
         item["keyword"] for item in nlp_result.get("top_keywords", [])
     ][:12]
     recommendation["hook_terms"] = nlp_result.get("filtered_tokens", [])[:8]
-    stt_meta = analysis.get("stt_meta", {})
     if isinstance(recommendation.get("evidence"), dict):
         recommendation["evidence"]["transcript_source"] = stt_meta.get("transcript_source") or "unknown"
         recommendation["evidence"]["hook_seconds_analyzed"] = stt_meta.get("hook_seconds_analyzed")
         recommendation["evidence"]["stt_fallback_reason"] = stt_meta.get("fallback_reason")
+        recommendation["evidence"]["warning"] = stt_meta.get("warning")
     return recommendation, nlp_result
 
 

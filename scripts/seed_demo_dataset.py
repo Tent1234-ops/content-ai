@@ -24,7 +24,7 @@ def ensure_sqlite_demo_columns() -> None:
         additions = [
             ("tiktok_region", "TEXT NOT NULL DEFAULT 'TH'"),
             ("enable_tiktok_trending", "INTEGER NOT NULL DEFAULT 1"),
-            ("asr_model_default", "TEXT NOT NULL DEFAULT 'tiny'"),
+            ("asr_model_default", "TEXT NOT NULL DEFAULT 'small'"),
             ("enable_model_toggle", "INTEGER NOT NULL DEFAULT 1"),
             ("job_backend", "TEXT NOT NULL DEFAULT 'inprocess'"),
             ("redis_url", "TEXT NULL"),
@@ -96,7 +96,60 @@ DOMAIN_SEEDS = {
         ("Creator audio kit", "microphone quality monitoring latency noise cancelling sound quality portability battery life connection stability"),
         ("Call quality showdown", "microphone quality noise rejection wind noise clarity battery life wear comfort bluetooth stability"),
     ],
+    "keyboard": [
+        ("Mechanical keyboard switch guide", "mechanical keyboard switch type linear tactile clicky actuation force typing feel sound profile"),
+        ("Gasket keyboard sound test", "gasket mount sound profile foam dampening build quality flex typing feel stabilizer tuning"),
+        ("Hot swap keyboard review", "hot swappable switch compatibility keycap profile layout build quality typing feel software tuning"),
+        ("Wireless keyboard latency test", "wireless bluetooth latency connectivity battery life polling rate typing feel gaming performance"),
+        ("Budget keyboard comparison", "mechanical keyboard value for money build quality switch type keycap quality sound profile"),
+        ("Keyboard layout buying guide", "keyboard layout 60 percent 75 percent tkl full size productivity typing feel connectivity"),
+        ("Custom keyboard beginner build", "mechanical keyboard pcb plate stabilizer switch type keycap gasket build quality sound profile"),
+        ("Low profile keyboard review", "low profile switch type typing feel portability wireless battery life build quality layout"),
+        ("Gaming keyboard response test", "gaming keyboard latency polling rate switch type rapid trigger software tuning build quality"),
+        ("Office keyboard comfort test", "typing feel wrist comfort sound profile layout wireless connectivity battery life build quality"),
+        ("Keyboard keycap comparison", "keycap material pbt abs profile texture durability sound profile typing feel compatibility"),
+        ("Silent keyboard setup", "silent switch sound profile foam dampening stabilizer typing feel build quality office keyboard"),
+    ],
+    "mouse": [
+        ("Gaming mouse sensor test", "gaming mouse sensor performance dpi tracking stability polling rate click latency software tuning"),
+        ("Lightweight mouse comparison", "gaming mouse weight ergonomic shape sensor performance click latency build quality grip style"),
+        ("Wireless mouse battery review", "wireless mouse battery life connectivity latency sensor performance charging build quality"),
+        ("Mouse shape buying guide", "ergonomic shape palm grip claw grip fingertip grip weight comfort sensor performance"),
+        ("Budget gaming mouse review", "gaming mouse value for money dpi sensor performance polling rate click latency build quality"),
+        ("Mouse polling rate explained", "polling rate latency sensor performance tracking stability cpu usage gaming mouse dpi"),
+        ("Productivity mouse workflow", "wireless mouse bluetooth buttons software tuning ergonomic shape battery life connectivity"),
+        ("Esports mouse click test", "gaming mouse click latency switch durability sensor performance polling rate weight grip style"),
+        ("Travel mouse review", "wireless mouse portability bluetooth battery life compact ergonomic shape tracking stability"),
+        ("Mouse feet and pad test", "tracking stability sensor performance mouse feet glide control dpi polling rate gaming mouse"),
+        ("Vertical mouse comfort review", "ergonomic shape wrist comfort vertical mouse wireless connectivity battery life build quality"),
+        ("Mouse software setup", "software tuning dpi profiles macros polling rate sensor performance wireless battery life"),
+    ],
+    "fashion": [
+        ("Everyday shirt material test", "fashion material quality cotton fabric fit size accuracy comfort durability care requirement"),
+        ("Sneaker comfort comparison", "fashion sneaker fit size accuracy comfort material quality durability style versatility"),
+        ("Office outfit buying guide", "fashion outfit fit material quality comfort size accuracy style versatility value for money"),
+        ("Denim durability review", "fashion denim fabric material quality fit size accuracy durability care requirement comfort"),
+        ("Online clothing size test", "fashion clothing size accuracy fit return policy material quality comfort value for money"),
+        ("Travel outfit capsule", "fashion outfit style versatility material quality comfort durability care requirement fit"),
+        ("Budget bag quality check", "fashion bag material quality stitching durability capacity comfort style versatility value for money"),
+        ("Summer dress fabric review", "fashion dress fabric breathability material quality fit size accuracy comfort care requirement"),
+        ("Jacket construction test", "fashion jacket material quality stitching fit durability comfort care requirement style versatility"),
+        ("Activewear performance review", "fashion activewear fabric stretch breathability fit size accuracy comfort durability"),
+        ("Sustainable fashion guide", "fashion material quality durability care requirement fit style versatility value for money"),
+        ("Accessory styling comparison", "fashion accessory material quality comfort durability style versatility outfit fit"),
+    ],
 }
+
+SEED_VARIATIONS = [
+    (
+        "real-world test",
+        "real world usage benchmark strengths weaknesses buying advice audience comparison",
+    ),
+    (
+        "creator comparison",
+        "hook demonstration side by side evidence pros cons value for money recommendation",
+    ),
+]
 
 
 def _trend_score(views: int, likes: int, comments: int) -> float:
@@ -108,33 +161,35 @@ def build_rows() -> list[dict[str, object]]:
     now = datetime.utcnow()
     for domain_index, (domain, items) in enumerate(DOMAIN_SEEDS.items()):
         for item_index, (title, transcript) in enumerate(items):
-            views = 120_000 + (domain_index * 35_000) + (item_index * 14_500)
-            likes = 7_500 + (domain_index * 1_200) + (item_index * 680)
-            comments = 420 + (domain_index * 80) + (item_index * 38)
-            if domain == "food_drink":
-                duration = 34 + (item_index % 6) * 6
-            elif domain == "smartphone":
-                duration = 78 + (item_index % 6) * 12
-            elif domain == "skincare":
-                duration = 58 + (item_index % 6) * 8
-            else:
-                duration = 62 + (item_index % 6) * 10
+            for variation_index, (variation_title, variation_text) in enumerate(SEED_VARIATIONS):
+                row_index = (item_index * len(SEED_VARIATIONS)) + variation_index
+                views = 120_000 + (domain_index * 35_000) + (row_index * 14_500)
+                likes = 7_500 + (domain_index * 1_200) + (row_index * 680)
+                comments = 420 + (domain_index * 80) + (row_index * 38)
+                if domain == "food_drink":
+                    duration = 34 + (row_index % 6) * 6
+                elif domain == "smartphone":
+                    duration = 78 + (row_index % 6) * 12
+                elif domain == "skincare":
+                    duration = 58 + (row_index % 6) * 8
+                else:
+                    duration = 62 + (row_index % 6) * 10
 
-            rows.append(
-                {
-                    "title": f"{title} | demo seed {item_index + 1:02d}",
-                    "video_url": f"seed://youtube/{domain}/{item_index + 1:02d}",
-                    "transcript": transcript,
-                    "category": domain,
-                    "source_platform": "youtube_seed",
-                    "views": views,
-                    "likes": likes,
-                    "comments": comments,
-                    "trend_score": _trend_score(views, likes, comments),
-                    "duration_seconds": duration,
-                    "published_at": now - timedelta(days=item_index + domain_index),
-                }
-            )
+                rows.append(
+                    {
+                        "title": f"{title}: {variation_title}",
+                        "video_url": f"seed://youtube/{domain}/{row_index + 1:02d}",
+                        "transcript": f"{transcript} {variation_text}",
+                        "category": domain,
+                        "source_platform": "youtube_seed",
+                        "views": views,
+                        "likes": likes,
+                        "comments": comments,
+                        "trend_score": _trend_score(views, likes, comments),
+                        "duration_seconds": duration,
+                        "published_at": now - timedelta(days=row_index + domain_index),
+                    }
+                )
     return rows
 
 

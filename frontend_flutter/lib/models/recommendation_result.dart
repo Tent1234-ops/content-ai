@@ -151,7 +151,8 @@ class RecommendationResult {
             (json['recommended_duration'] as Map?) ?? const {}),
       ),
       datasetProfile: DatasetProfile.fromJson(
-        Map<String, dynamic>.from((json['dataset_profile'] as Map?) ?? const {}),
+        Map<String, dynamic>.from(
+            (json['dataset_profile'] as Map?) ?? const {}),
       ),
       evidence: RecommendationEvidence.fromJson(
         Map<String, dynamic>.from((json['evidence'] as Map?) ?? const {}),
@@ -249,10 +250,12 @@ class RecommendationEvidence {
     required this.sourcePlatformCounts,
     required this.durationSource,
     required this.durationSampleSize,
+    required this.durationSamples,
     required this.exemplarTitles,
     required this.keywordScoreExplanation,
     required this.durationExplanation,
     required this.transcriptSource,
+    this.warning,
     this.hookSecondsAnalyzed,
     this.sttFallbackReason,
   });
@@ -263,10 +266,12 @@ class RecommendationEvidence {
   final Map<String, int> sourcePlatformCounts;
   final String durationSource;
   final int durationSampleSize;
+  final List<int> durationSamples;
   final List<String> exemplarTitles;
   final String keywordScoreExplanation;
   final String durationExplanation;
   final String transcriptSource;
+  final String? warning;
   final int? hookSecondsAnalyzed;
   final String? sttFallbackReason;
 
@@ -284,6 +289,10 @@ class RecommendationEvidence {
           : const {},
       durationSource: json['duration_source']?.toString() ?? '-',
       durationSampleSize: (json['duration_sample_size'] as num?)?.toInt() ?? 0,
+      durationSamples: (json['duration_samples'] as List<dynamic>? ?? const [])
+          .whereType<num>()
+          .map((item) => item.toInt())
+          .toList(),
       exemplarTitles: (json['exemplar_titles'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
           .toList(),
@@ -291,8 +300,8 @@ class RecommendationEvidence {
           json['keyword_score_explanation']?.toString() ?? '',
       durationExplanation: json['duration_explanation']?.toString() ?? '',
       transcriptSource: json['transcript_source']?.toString() ?? 'unknown',
-      hookSecondsAnalyzed:
-          (json['hook_seconds_analyzed'] as num?)?.toInt(),
+      warning: json['warning']?.toString(),
+      hookSecondsAnalyzed: (json['hook_seconds_analyzed'] as num?)?.toInt(),
       sttFallbackReason: json['stt_fallback_reason']?.toString(),
     );
   }

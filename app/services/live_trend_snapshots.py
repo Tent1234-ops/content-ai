@@ -327,7 +327,7 @@ def load_latest_live_snapshot(
     rows = (
         db.query(TrendSnapshotItem)
         .filter(TrendSnapshotItem.run_id == latest.run_id)
-        .order_by(TrendSnapshotItem.platform, TrendSnapshotItem.engagement_signal.desc())
+        .order_by(TrendSnapshotItem.platform, TrendSnapshotItem.item_id)
         .all()
     )
     grouped: Dict[str, List[Dict[str, object]]] = {platform: [] for platform in PLATFORMS}
@@ -348,6 +348,16 @@ def load_latest_live_snapshot(
                 "trend_score": row.trend_score,
                 "engagement_signal": row.engagement_signal,
                 "engagement_change_percent": 0.0,
+                "engagement_delta": 0.0,
+                "engagement_rate_per_minute": 0.0,
+                "rank": len(grouped[row.platform]) + 1,
+                "rank_change": 0,
+                "momentum_score": 0.0,
+                "change_kind": "baseline",
+                "change_label": "Baseline",
+                "has_previous_snapshot": False,
+                "comparison_window_seconds": 0,
+                "is_meaningful_rising": False,
                 "status": "Stable",
                 "is_new": False,
                 "published_at": row.published_at,

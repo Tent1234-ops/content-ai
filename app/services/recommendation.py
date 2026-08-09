@@ -26,8 +26,10 @@ from app.services.pipeline.domain_rules import (
     DOMAIN_BASE,
     DOMAIN_DIMENSIONS_ORDER,
     DOMAIN_HINTS,
+    category_query_values,
     detect_domain,
     infer_domain_from_features,
+    normalize_domain,
 )
 
 DEFAULT_DURATION_BY_DOMAIN = {
@@ -156,10 +158,9 @@ def _analyze_dataset_profile_snapshot(
     hook_duration: int = 60,
 ) -> Dict[str, object]:
     merged_text = " ".join(part for part in [title or "", text or "", category or ""] if part).strip()
+    category_domain = normalize_domain(category)
     detected = detect_domain(f"{merged_text} {category or ''}")
-    domain = detected if detected != "general" else detect_domain(category or "")
-    if domain == "general" and category:
-        domain = str(category).strip().lower() or "general"
+    domain = category_domain if category_domain != "general" else detected
     if domain not in DEFAULT_DURATION_BY_DOMAIN:
         domain = detected if detected in DEFAULT_DURATION_BY_DOMAIN else "general"
 
@@ -282,7 +283,9 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
         "source_platform_counts": profile.get("source_platform_counts") or {},
         "duration_source": duration_source,
         "duration_sample_size": duration_sample_size,
+        "duration_samples": profile.get("duration_samples") or [],
         "exemplar_titles": profile.get("exemplar_titles") or [],
+        "dataset_row_ids": profile.get("dataset_row_ids") or [],
         "keyword_score_explanation": (
             "Keyword gap is computed from high-engagement clips in the same classified content type. "
             "Scores combine keyword frequency with trend and engagement weight."
@@ -426,7 +429,127 @@ def build_dataset_profiles(
     return profiles
 
 
+def _platform_key(source_platform: str | None, source_prefix: str) -> str:
+    value = str(source_platform or source_prefix).strip().lower()
+    for platform in ("youtube", "google", "tiktok"):
+        if value.startswith(platform):
+            return platform
+    return value or source_prefix
+
+
+def build_dataset_profile_for_domain(
+    db: Session,
+    *,
+    domain: str,
+    source_prefix: str = "youtube",
+    limit: int = 150,
+) -> Dict[str, object]:
+    """Build recommendation evidence from the exact canonical category rows used."""
+    canonical_domain = normalize_domain(domain)
+    admin_config = get_admin_config(db)
+    min_date = datetime.utcnow() - timedelta(days=admin_config.analysis_time_range_days)
+    rows = (
+        db.query(DatasetContent)
+        .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
+        .filter(DatasetContent.created_at >= min_date)
+        .filter(
+            func.lower(func.trim(DatasetContent.category)).in_(
+                category_query_values(canonical_domain)
+            )
+        )
+        .order_by(
+            DatasetContent.trend_score.desc(),
+            DatasetContent.views.desc(),
+            DatasetContent.created_at.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+    keyword_scores: Dict[str, float] = {}
+    dimension_scores: Dict[str, float] = {}
+    hook_scores: Dict[str, float] = {}
+    durations: List[int] = []
+    platform_counts: Counter[str] = Counter()
+
+    for row in rows:
+        base_text = " ".join(
+            part
+            for part in [row.title or "", row.transcript or "", row.category or ""]
+            if part
+        ).strip()
+        weight = 1.0 + min(float(row.trend_score or 0.0) / 500000.0, 5.0)
+        for item in _fast_keyword_items(
+            base_text,
+            canonical_domain,
+            admin_config.max_keywords_display,
+        ):
+            _weighted_increment(
+                keyword_scores,
+                str(item["keyword"]),
+                weight * float(item["score"]),
+            )
+        for name in DOMAIN_DIMENSIONS_ORDER.get(canonical_domain, [])[:8]:
+            if _keyword_is_domain_relevant(name, canonical_domain):
+                confidence = 1.0 if name.lower() in base_text.lower() else 0.35
+                _weighted_increment(dimension_scores, name, weight * confidence)
+        hook_limit = min(12, max(4, int(admin_config.hook_analysis_duration / 15)))
+        for term in _fast_dataset_tokens(base_text)[:hook_limit]:
+            _weighted_increment(hook_scores, term, weight)
+        if row.duration_seconds and int(row.duration_seconds) > 0:
+            durations.append(int(row.duration_seconds))
+        platform_counts[_platform_key(row.source_platform, source_prefix)] += 1
+
+    raw_top_keywords = [
+        {"keyword": keyword, "score": round(score, 3)}
+        for keyword, score in sorted(
+            keyword_scores.items(), key=lambda item: (-item[1], item[0])
+        )[:20]
+    ]
+    top_keywords = _clean_profile_keywords(
+        raw_top_keywords,
+        canonical_domain,
+        max_items=10,
+    )
+    top_dimensions = [
+        {"keyword": name, "score": round(score, 3)}
+        for name, score in sorted(
+            dimension_scores.items(), key=lambda item: (-item[1], item[0])
+        )[:8]
+    ]
+    raw_hook_keywords = [
+        {"keyword": keyword, "score": round(score, 3)}
+        for keyword, score in sorted(
+            hook_scores.items(), key=lambda item: (-item[1], item[0])
+        )[:20]
+    ]
+    hook_keywords = _clean_profile_keywords(
+        raw_hook_keywords,
+        canonical_domain,
+        max_items=8,
+    )
+
+    sample_size = len(rows)
+    if sum(platform_counts.values()) != sample_size:
+        raise RuntimeError("Recommendation evidence platform counts do not match sample size")
+
+    return {
+        "domain": canonical_domain,
+        "sample_size": sample_size,
+        "top_keywords": top_keywords,
+        "top_dimensions": top_dimensions,
+        "hook_keywords": hook_keywords,
+        "recommended_duration": _duration_summary(durations, canonical_domain),
+        "duration_samples": sorted(durations),
+        "exemplar_titles": [str(row.title) for row in rows[:5]],
+        "dataset_row_ids": [int(row.dataset_id) for row in rows],
+        "source": source_prefix,
+        "source_platform_counts": dict(platform_counts),
+    }
+
+
 def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[str, object]:
+    domain = normalize_domain(domain)
     for profile in profiles:
         if profile["domain"] == domain:
             return profile
@@ -444,6 +567,8 @@ def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[st
         "hook_keywords": [],
         "recommended_duration": _duration_summary([], domain),
         "exemplar_titles": [],
+        "duration_samples": [],
+        "dataset_row_ids": [],
         "source": "fallback",
         "source_platform_counts": {},
     }
@@ -499,8 +624,13 @@ def build_recommendation_from_analysis_data(
     source_prefix: str = "youtube",
     profile_limit: int = 150,
 ) -> Dict[str, object]:
-    profiles = build_dataset_profiles(db, source_prefix=source_prefix, limit=profile_limit)
-    profile = _find_profile(profiles, domain)
+    domain = normalize_domain(domain)
+    profile = build_dataset_profile_for_domain(
+        db,
+        domain=domain,
+        source_prefix=source_prefix,
+        limit=profile_limit,
+    )
 
     normalized_user_keywords = {keyword.lower() for keyword in user_keywords}
     missing_keywords = []

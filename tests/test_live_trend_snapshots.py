@@ -97,6 +97,42 @@ class LiveTrendSnapshotTests(unittest.TestCase):
 
         return fetcher
 
+    @staticmethod
+    def _youtube_metric(views, likes, comments):
+        def fetcher(_region, _limit):
+            return "live", [
+                YouTubeTrendItem(
+                    title="Keyboard momentum",
+                    channel_title="Channel",
+                    category="Technology",
+                    video_url="https://youtube.example/keyboard-momentum",
+                    views=views,
+                    likes=likes,
+                    comments=comments,
+                    trend_score=730,
+                    source="youtube_live",
+                )
+            ]
+
+        return fetcher
+
+    @staticmethod
+    def _google_ranked(*titles):
+        def fetcher(_region, _limit):
+            return "live", [
+                GoogleTrendItem(
+                    title=title,
+                    query=title,
+                    category="TH",
+                    video_url=f"https://google.example/{title.lower()}",
+                    trend_score=float(50_000 - (index * 10_000)),
+                    source="google_trends_live",
+                )
+                for index, title in enumerate(titles)
+            ]
+
+        return fetcher
+
     def _start_watch_session(self):
         return start_trend_watch_session(self.db, user=self.user, region="TH")
 
@@ -294,6 +330,85 @@ class LiveTrendSnapshotTests(unittest.TestCase):
         self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0].type, "new_live_trend")
         self.assertNotIn("Analysis complete", notifications[0].title)
+
+    def test_youtube_momentum_uses_engagement_rate_instead_of_rounded_percent(self):
+        empty = self._empty_provider
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": self._youtube_metric(1_000, 100, 10),
+                "google": empty,
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+        watch_session = self._start_watch_session()
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": self._youtube_metric(1_600, 160, 16),
+                "google": empty,
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+
+        result = compare_live_trend_snapshot(
+            db=self.db,
+            user=self.user,
+            watch_session=watch_session,
+            region="TH",
+            limit=50,
+        )
+        item = result["platforms"]["youtube"]["items"][0]
+
+        self.assertEqual(item["change_kind"], "velocity_up")
+        self.assertTrue(item["change_label"].startswith("+"))
+        self.assertTrue(item["change_label"].endswith("/min"))
+        self.assertGreater(item["engagement_rate_per_minute"], 0)
+        self.assertTrue(item["is_meaningful_rising"])
+        self.assertNotEqual(item["change_label"], "+0%")
+
+    def test_google_momentum_uses_rank_movement(self):
+        empty = self._empty_provider
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": empty,
+                "google": self._google_ranked("A", "B", "C"),
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+        watch_session = self._start_watch_session()
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": empty,
+                "google": self._google_ranked("C", "A", "B"),
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+
+        result = compare_live_trend_snapshot(
+            db=self.db,
+            user=self.user,
+            watch_session=watch_session,
+            region="TH",
+            limit=50,
+        )
+        item = result["platforms"]["google"]["items"][0]
+
+        self.assertEqual(item["title"], "C")
+        self.assertEqual(item["rank_change"], 2)
+        self.assertEqual(item["change_kind"], "rank_up")
+        self.assertEqual(item["change_label"], "Up 2 ranks")
+        self.assertTrue(item["is_meaningful_rising"])
 
 
 if __name__ == "__main__":

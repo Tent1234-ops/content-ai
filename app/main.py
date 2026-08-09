@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,8 +13,10 @@ from app.database.migrations import archive_phase10_notification_tables
 from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends, notifications, follows
 from app.services.trending_fetcher import start_trending_fetcher, stop_trending_fetcher
 from app.services.live_trend_snapshots import get_live_provider_health
+from models.speech_to_text import check_model_readiness
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
+asr_model_status = check_model_readiness()
 
 def preload_ai_models():
     modules = [
@@ -37,8 +40,17 @@ def preload_ai_models():
 
 @app.on_event("startup")
 async def startup_event():
-    # Skipping AI model preload for faster testing
-    # await asyncio.to_thread(preload_ai_models)
+    global asr_model_status
+    asr_model_status = check_model_readiness()
+    if not asr_model_status["ready"]:
+        message = (
+            "Faster Whisper model is not ready. Run "
+            f"python scripts/setup_faster_whisper.py --model {asr_model_status['model_size']}"
+        )
+        print(f"Warning: {message}", flush=True)
+        require_ready = os.getenv("ASR_REQUIRE_MODEL_READY", "0").strip().lower()
+        if require_ready not in {"0", "false", "no", "off"}:
+            raise RuntimeError(message)
     start_trending_fetcher()
 
 
@@ -139,11 +151,14 @@ def health():
         status = "unhealthy"
     elif not provider_states or any(item in {"error", "pending"} for item in provider_states):
         status = "degraded"
+    elif not asr_model_status.get("ready"):
+        status = "degraded"
     else:
         status = "ok"
 
     return {
         "status": status,
         "database": database,
+        "ai_models": {"faster_whisper": asr_model_status},
         "live_trends": live_trends,
     }

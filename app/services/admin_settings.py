@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
     "enable_tiktok_trending": True,
     "auto_scan_interval_hours": 6,
     # New defaults
-    "asr_model_default": "tiny",
+    "asr_model_default": "small",
     "enable_model_toggle": True,
     "job_backend": "inprocess",
     "redis_url": None,

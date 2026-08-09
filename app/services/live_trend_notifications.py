@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Iterable, List
@@ -75,9 +76,62 @@ def _latest_successful_items_before(
                 TrendSnapshotItem.run_id == run.run_id,
                 TrendSnapshotItem.platform == platform,
             )
+            .order_by(TrendSnapshotItem.item_id)
             .all()
         )
     return None
+
+
+def _latest_successful_run_and_items_before(
+    db: Session,
+    *,
+    region: str,
+    platform: str,
+    run_id: int,
+) -> tuple[TrendSnapshotRun, List[TrendSnapshotItem]] | None:
+    runs = (
+        db.query(TrendSnapshotRun)
+        .filter(
+            TrendSnapshotRun.region == region,
+            TrendSnapshotRun.run_id <= run_id,
+            TrendSnapshotRun.status.in_(("completed", "partial")),
+        )
+        .order_by(TrendSnapshotRun.run_id.desc())
+        .limit(120)
+        .all()
+    )
+    for run in runs:
+        if _provider_states(run).get(platform) not in SUCCESS_PROVIDER_STATES:
+            continue
+        rows = (
+            db.query(TrendSnapshotItem)
+            .filter(
+                TrendSnapshotItem.run_id == run.run_id,
+                TrendSnapshotItem.platform == platform,
+            )
+            .order_by(TrendSnapshotItem.item_id)
+            .all()
+        )
+        return run, rows
+    return None
+
+
+def _compact_rate(value: float) -> str:
+    absolute = abs(value)
+    if absolute >= 1_000_000:
+        return f"{absolute / 1_000_000:.1f}M"
+    if absolute >= 1_000:
+        return f"{absolute / 1_000:.1f}K"
+    if absolute >= 10:
+        return f"{absolute:.0f}"
+    return f"{absolute:.1f}"
+
+
+def _percentile(value: float, positive_values: List[float]) -> float:
+    if value <= 0 or not positive_values:
+        return 0.0
+    at_or_below = sum(1 for candidate in positive_values if candidate <= value)
+    return (at_or_below / len(positive_values)) * 100.0
 
 
 def _apply_session_and_engagement_status(
@@ -98,41 +152,145 @@ def _apply_session_and_engagement_status(
     if not isinstance(run_id, int):
         return
 
+    current_run = db.get(TrendSnapshotRun, run_id)
+    if current_run is None:
+        return
+
     region = str(snapshot.get("region") or "TH")
     for platform in PLATFORMS:
         platform_payload = snapshot.get("platforms", {}).get(platform, {})
         items = platform_payload.get("items", [])
-        previous_rows = _latest_successful_items_before(
+        previous_snapshot = _latest_successful_run_and_items_before(
             db,
             region=region,
             platform=platform,
             run_id=run_id - 1,
         )
-        previous_signals = {
-            row.trend_key: float(row.engagement_signal or 0.0)
-            for row in (previous_rows or [])
+        previous_run, previous_rows = previous_snapshot or (None, [])
+        previous_by_key = {row.trend_key: row for row in previous_rows}
+        previous_ranks = {
+            row.trend_key: index + 1 for index, row in enumerate(previous_rows)
         }
-        max_signal = max(
-            (float(item.get("engagement_signal") or 0.0) for item in items),
-            default=0.0,
+        current_timestamp = current_run.completed_at or current_run.started_at
+        previous_timestamp = (
+            previous_run.completed_at or previous_run.started_at
+            if previous_run is not None
+            else None
         )
+        comparison_seconds = max(
+            1.0,
+            (current_timestamp - previous_timestamp).total_seconds(),
+        ) if previous_timestamp is not None else 0.0
+        comparison_minutes = comparison_seconds / 60.0 if comparison_seconds else 0.0
+
+        calculated: List[Dict[str, object]] = []
         for item in items:
             key = str(item.get("key") or "")
             current = float(item.get("engagement_signal") or 0.0)
-            previous = previous_signals.get(key)
-            change = ((current - previous) / previous) * 100.0 if previous and previous > 0 else 0.0
+            previous_row = previous_by_key.get(key)
+            previous = (
+                float(previous_row.engagement_signal or 0.0)
+                if previous_row is not None
+                else None
+            )
+            delta = current - previous if previous is not None else 0.0
+            raw_change = (
+                (delta / previous) * 100.0
+                if previous is not None and previous > 0
+                else 0.0
+            )
+            if abs(raw_change) < 0.005:
+                raw_change = 0.0
+            rate = delta / comparison_minutes if comparison_minutes > 0 else 0.0
+            current_rank = int(item.get("rank") or (len(calculated) + 1))
+            previous_rank = previous_ranks.get(key)
+            rank_change = previous_rank - current_rank if previous_rank is not None else 0
             is_new = key in notified_keys
-            if is_new or change >= 15:
-                status = "Rising"
-            elif change <= -10:
-                status = "Cooling"
-            elif max_signal > 0 and current >= max_signal * 0.75:
+
+            if previous_snapshot is None:
+                change_kind = "baseline"
+                change_label = "Baseline"
+            elif previous_row is None:
+                change_kind = "new"
+                change_label = "New"
+            elif platform == "google" or (
+                int(item.get("views") or 0) == 0
+                and int(item.get("likes") or 0) == 0
+                and int(item.get("comments") or 0) == 0
+            ):
+                if rank_change > 0:
+                    change_kind = "rank_up"
+                    change_label = f"Up {rank_change} rank{'s' if rank_change != 1 else ''}"
+                elif rank_change < 0:
+                    change_kind = "rank_down"
+                    moved = abs(rank_change)
+                    change_label = f"Down {moved} rank{'s' if moved != 1 else ''}"
+                elif abs(raw_change) >= 0.1:
+                    change_kind = "interest"
+                    prefix = "+" if raw_change > 0 else ""
+                    change_label = f"{prefix}{raw_change:.1f}% interest"
+                else:
+                    change_kind = "none"
+                    change_label = "No change"
+            else:
+                if abs(rate) < 0.05:
+                    change_kind = "none"
+                    change_label = "No change"
+                else:
+                    change_kind = "velocity_up" if rate > 0 else "velocity_down"
+                    prefix = "+" if rate > 0 else "-"
+                    change_label = f"{prefix}{_compact_rate(rate)}/min"
+
+            calculated.append(
+                {
+                    "item": item,
+                    "rate": rate,
+                    "rank_change": rank_change,
+                    "change_kind": change_kind,
+                    "change_label": change_label,
+                    "raw_change": raw_change,
+                    "delta": delta,
+                    "is_new": is_new,
+                    "has_previous": previous_row is not None,
+                }
+            )
+
+        positive_rates = [
+            float(row["rate"]) for row in calculated if float(row["rate"]) > 0
+        ]
+        hot_count = max(1, math.ceil(len(items) * 0.1)) if items else 0
+        for row in calculated:
+            item = row["item"]
+            rate_percentile = _percentile(float(row["rate"]), positive_rates)
+            rank_change = int(row["rank_change"])
+            rank_momentum = min(100.0, 45.0 + (rank_change * 12.0)) if rank_change > 0 else 0.0
+            momentum_score = max(rate_percentile, rank_momentum)
+            meaningful_rising = (
+                row["change_kind"] not in {"baseline", "new", "none"}
+                and (rank_change >= 2 or rate_percentile >= 75.0)
+            )
+            current_rank = int(item.get("rank") or 0)
+            if current_rank > 0 and current_rank <= hot_count:
                 status = "Hot"
+            elif meaningful_rising or row["is_new"]:
+                status = "Rising"
+            elif rank_change <= -2 or float(row["rate"]) < 0:
+                status = "Cooling"
             else:
                 status = "Stable"
-            item["engagement_change_percent"] = round(change, 1)
+
+            item["engagement_change_percent"] = round(float(row["raw_change"]), 2)
+            item["engagement_delta"] = round(float(row["delta"]), 2)
+            item["engagement_rate_per_minute"] = round(float(row["rate"]), 2)
+            item["rank_change"] = rank_change
+            item["momentum_score"] = round(momentum_score, 1)
+            item["change_kind"] = row["change_kind"]
+            item["change_label"] = row["change_label"]
+            item["has_previous_snapshot"] = bool(row["has_previous"])
+            item["comparison_window_seconds"] = int(round(comparison_seconds))
+            item["is_meaningful_rising"] = meaningful_rising
             item["status"] = status
-            item["is_new"] = is_new
+            item["is_new"] = bool(row["is_new"])
 
 
 def compare_live_trend_snapshot(

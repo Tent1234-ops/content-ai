@@ -114,7 +114,7 @@ def _ensure_mysql_schema_compat() -> None:
             ("analysis_results", "dataset_id", "INT NULL"),
             ("system_configs", "tiktok_region", "VARCHAR(2) NOT NULL DEFAULT 'TH'"),
             ("system_configs", "enable_tiktok_trending", "BOOLEAN NOT NULL DEFAULT TRUE"),
-            ("system_configs", "asr_model_default", "VARCHAR(20) NOT NULL DEFAULT 'tiny'"),
+            ("system_configs", "asr_model_default", "VARCHAR(20) NOT NULL DEFAULT 'small'"),
             ("system_configs", "enable_model_toggle", "BOOLEAN NOT NULL DEFAULT TRUE"),
             ("system_configs", "job_backend", "VARCHAR(20) NOT NULL DEFAULT 'inprocess'"),
             ("system_configs", "redis_url", "VARCHAR(255) NULL"),
@@ -208,7 +208,7 @@ def _ensure_sqlite_schema_compat() -> None:
                 connection.execute(text("ALTER TABLE system_configs ADD COLUMN enable_tiktok_trending INTEGER NOT NULL DEFAULT 1"))
                 connection.commit()
             if not table_has_column("system_configs", "asr_model_default"):
-                connection.execute(text("ALTER TABLE system_configs ADD COLUMN asr_model_default TEXT NOT NULL DEFAULT 'tiny'"))
+                connection.execute(text("ALTER TABLE system_configs ADD COLUMN asr_model_default TEXT NOT NULL DEFAULT 'small'"))
                 connection.commit()
             if not table_has_column("system_configs", "enable_model_toggle"):
                 connection.execute(text("ALTER TABLE system_configs ADD COLUMN enable_model_toggle INTEGER NOT NULL DEFAULT 1"))

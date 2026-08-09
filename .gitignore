@@ -26,6 +26,7 @@ videos/
 artifacts/
 artifacts_*/
 runtime_artifacts/
+models_cache/
 
 # Archived demo artifacts kept out of root intentionally
 !archive/runtime_artifacts/

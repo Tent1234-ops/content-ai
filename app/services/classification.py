@@ -5,22 +5,49 @@ import re
 from collections import Counter, defaultdict
 from typing import Dict, List
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent
 from app.services.nlp import filter_tokens
 from app.services.pipeline.core import normalize_space
-from app.services.pipeline.domain_rules import DOMAIN_BASE, DOMAIN_HINTS, detect_domain
+from app.services.pipeline.domain_rules import (
+    DOMAIN_BASE,
+    DOMAIN_HINTS,
+    category_query_values,
+    detect_domain,
+    normalize_domain,
+)
 
 
 def _weighted_dataset_rows(db: Session, source_prefix: str, limit: int) -> List[DatasetContent]:
-    return (
-        db.query(DatasetContent)
-        .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
-        .order_by(DatasetContent.trend_score.desc(), DatasetContent.views.desc(), DatasetContent.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    domains = list(DOMAIN_BASE)
+    per_domain_limit = max(5, math.ceil(limit / max(1, len(domains))))
+    rows: List[DatasetContent] = []
+    seen_ids: set[int] = set()
+    for domain in domains:
+        domain_rows = (
+            db.query(DatasetContent)
+            .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
+            .filter(
+                func.lower(func.trim(DatasetContent.category)).in_(
+                    category_query_values(domain)
+                )
+            )
+            .order_by(
+                DatasetContent.trend_score.desc(),
+                DatasetContent.views.desc(),
+                DatasetContent.created_at.desc(),
+            )
+            .limit(per_domain_limit)
+            .all()
+        )
+        for row in domain_rows:
+            if row.dataset_id in seen_ids:
+                continue
+            seen_ids.add(row.dataset_id)
+            rows.append(row)
+    return rows
 
 
 def _token_counter(text: str) -> Counter[str]:
@@ -55,9 +82,9 @@ def build_domain_classifier_profiles(
         text = " ".join(part for part in [row.title or "", row.transcript or "", row.category or ""] if part).strip()
         if not text:
             continue
-        domain = detect_domain(text)
-        if domain == "general" and row.category:
-            domain = detect_domain(str(row.category))
+        domain = normalize_domain(row.category)
+        if domain == "general":
+            domain = detect_domain(text)
         weight = 1.0 + min(float(row.trend_score or 0.0) / 500000.0, 5.0)
         for term, count in _token_counter(text).items():
             term_profiles[domain][term] += count * weight
@@ -151,8 +178,6 @@ def classify_text_domain(
     confidence = top_score / score_total if score_total > 0 else 0.0
     if candidates[0]["domain"] == rule_domain and rule_domain != "general":
         confidence = min(1.0, confidence + 0.08)
-        if int(candidates[0].get("sample_size", 0) or 0) > 0:
-            confidence = max(confidence, 0.72)
 
     return {
         "domain": candidates[0]["domain"],

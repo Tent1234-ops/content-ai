@@ -130,6 +130,50 @@ DOMAIN_BASE = {
     "skincare": ["hydration", "barrier support", "active ingredients", "skin compatibility"],
 }
 
+CATEGORY_ALIASES = {
+    "smartphone": {"smartphone", "smartphones", "phone", "mobile", "mobile_phone"},
+    "food_drink": {
+        "food_drink",
+        "food",
+        "food & drink",
+        "food and drink",
+        "food_and_drink",
+        "restaurant",
+        "restaurants",
+        "cafe",
+    },
+    "skincare": {"skincare", "skin care", "skin_care", "beauty skincare", "beauty_skincare", "beauty"},
+    "audio": {"audio", "headphone", "headphones", "earbuds", "microphone"},
+    "keyboard": {"keyboard", "keyboards", "mechanical keyboard", "mechanical_keyboard"},
+    "mouse": {"mouse", "mice", "computer_mouse", "gaming_mouse"},
+    "fashion": {"fashion", "clothing", "apparel", "outfit"},
+    "general": {"general", "other", "unknown"},
+}
+
+
+def _category_slug(value: str | None) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    return slug.strip("_")
+
+
+_CATEGORY_TO_DOMAIN = {
+    _category_slug(alias): domain
+    for domain, aliases in CATEGORY_ALIASES.items()
+    for alias in aliases
+}
+
+
+def normalize_domain(value: str | None) -> str:
+    """Map category labels to the canonical recommendation taxonomy."""
+    slug = _category_slug(value)
+    return _CATEGORY_TO_DOMAIN.get(slug, slug if slug in DOMAIN_BASE else "general")
+
+
+def category_query_values(domain: str) -> List[str]:
+    """Return normalized category labels accepted by a same-domain DB query."""
+    canonical = normalize_domain(domain)
+    return sorted(CATEGORY_ALIASES.get(canonical, {canonical}))
+
 COMPARABLE_KEYWORDS_BY_DOMAIN = {
     "mouse": {
         "dpi",
@@ -374,10 +418,11 @@ def detect_domain(text: str, visual_text: str = "") -> str:
         scores[domain] = score
 
     best_domain = max(scores, key=scores.get) if scores else "general"
-    return best_domain if scores.get(best_domain, 0) > 0 else "general"
+    return normalize_domain(best_domain if scores.get(best_domain, 0) > 0 else "general")
 
 
 def infer_domain_from_features(features: Dict[str, object], detected_domain: str) -> str:
+    detected_domain = normalize_domain(detected_domain)
     def score(keys: List[str]) -> int:
         return sum(1 for key in keys if features.get(key))
 

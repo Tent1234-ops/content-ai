@@ -99,13 +99,15 @@ class _ResultScreenState extends State<ResultScreen> {
     final recommendation = data?.recommendation;
     final classification = recommendation?.classification;
     final classifierConfidence = (classification?.confidence ?? 0) * 100;
-    final domain =
-        classification?.domain ?? recommendation?.domain ?? data?.fallbackDomain ?? '-';
+    final domain = classification?.domain ??
+        recommendation?.domain ??
+        data?.fallbackDomain ??
+        '-';
     final userKeywords = recommendation?.userKeywords ?? const <String>[];
-    final contentKeywords =
-        recommendation?.contentKeywords ?? const <String>[];
+    final contentKeywords = recommendation?.contentKeywords ?? const <String>[];
     final hookTerms = recommendation?.hookTerms ?? const <String>[];
-    final missingKeywords = recommendation?.missingKeywords ?? const <KeywordScore>[];
+    final missingKeywords =
+        recommendation?.missingKeywords ?? const <KeywordScore>[];
     final hookKeywords = recommendation?.hookKeywords ?? const <KeywordScore>[];
     final duration = recommendation?.duration;
     final evidence = recommendation?.evidence;
@@ -165,7 +167,8 @@ class _ResultScreenState extends State<ResultScreen> {
                         runSpacing: 8,
                         children: [
                           Chip(
-                            avatar: const Icon(Icons.category_outlined, size: 18),
+                            avatar:
+                                const Icon(Icons.category_outlined, size: 18),
                             label: Text('Type: $domain'),
                           ),
                           Chip(
@@ -232,7 +235,8 @@ class _ResultScreenState extends State<ResultScreen> {
                       ),
                       _StringKeywordCard(
                         keywords: userKeywords,
-                        emptyMessage: 'No keywords were detected from this clip.',
+                        emptyMessage:
+                            'No keywords were detected from this clip.',
                       ),
                       const SizedBox(height: 24),
                       if (contentKeywords.isNotEmpty) ...[
@@ -365,7 +369,8 @@ class _ScopeSummaryCard extends StatelessWidget {
             _SummaryRow(
               icon: Icons.key_outlined,
               label: 'Keywords in clip',
-              value: userKeywords.isEmpty ? '-' : userKeywords.take(6).join(', '),
+              value:
+                  userKeywords.isEmpty ? '-' : userKeywords.take(6).join(', '),
             ),
             const Divider(height: 20),
             _SummaryRow(
@@ -438,6 +443,20 @@ class _EvidenceCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
+            if (evidence.warning != null && evidence.warning!.isNotEmpty) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                color: Theme.of(context).colorScheme.errorContainer,
+                child: Text(
+                  evidence.warning!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             _SummaryRow(
               icon: Icons.source_outlined,
               label: 'Data source type',
@@ -474,6 +493,17 @@ class _EvidenceCard extends StatelessWidget {
               value:
                   '${evidence.durationSource}, ${evidence.durationSampleSize} duration samples',
             ),
+            if (evidence.durationSamples.isNotEmpty) ...[
+              const Divider(height: 20),
+              _SummaryRow(
+                icon: Icons.timer_outlined,
+                label: 'Duration samples used',
+                value: evidence.durationSamples
+                    .take(12)
+                    .map((seconds) => '${seconds}s')
+                    .join(', '),
+              ),
+            ],
             if (examples.isNotEmpty) ...[
               const Divider(height: 20),
               Text(
@@ -578,9 +608,10 @@ class _ClassificationCard extends StatelessWidget {
                   children: [
                     Text(
                       '${confidence.toStringAsFixed(0)}%',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            color: Theme.of(context).primaryColor,
-                          ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                color: Theme.of(context).primaryColor,
+                              ),
                     ),
                     Text(
                       'confidence',
@@ -800,9 +831,7 @@ String _transcriptSourceText(RecommendationEvidence evidence) {
     return 'Speech-to-text$suffix';
   }
   if (source == 'fallback_filename') {
-    final reason = evidence.sttFallbackReason;
-    final reasonText = reason == null || reason.isEmpty ? '' : ' ($reason)';
-    return 'Fallback from filename$reasonText$suffix';
+    return 'Filename fallback (speech-to-text unavailable)$suffix';
   }
   return '$source$suffix';
 }

@@ -552,41 +552,61 @@ class _TrendFilters extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            SizedBox(
-              width: 320,
-              child: TextField(
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  labelText: 'Search title or category',
-                  border: OutlineInputBorder(),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = constraints.maxWidth < 760;
+            final searchWidth = stacked
+                ? constraints.maxWidth
+                : math.min(320.0, constraints.maxWidth * 0.34);
+            final dropdownWidth = stacked
+                ? constraints.maxWidth
+                : math.min(
+                    240.0,
+                    math.max(
+                      150.0,
+                      (constraints.maxWidth - searchWidth - 36) / 3,
+                    ),
+                  );
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  width: searchWidth,
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      labelText: 'Search title or category',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: onSearchChanged,
+                  ),
                 ),
-                onChanged: onSearchChanged,
-              ),
-            ),
-            _FilterDropdown(
-              label: 'Platform',
-              value: platform,
-              values: const ['All', 'youtube', 'google', 'tiktok'],
-              onChanged: onPlatformChanged,
-            ),
-            _FilterDropdown(
-              label: 'Category',
-              value: category,
-              values: categories,
-              onChanged: onCategoryChanged,
-            ),
-            _FilterDropdown(
-              label: 'Status',
-              value: status,
-              values: const ['All', 'Hot', 'Rising', 'Stable', 'Cooling'],
-              onChanged: onStatusChanged,
-            ),
-          ],
+                _FilterDropdown(
+                  width: dropdownWidth,
+                  label: 'Platform',
+                  value: platform,
+                  values: const ['All', 'youtube', 'google', 'tiktok'],
+                  onChanged: onPlatformChanged,
+                ),
+                _FilterDropdown(
+                  width: dropdownWidth,
+                  label: 'Category',
+                  value: category,
+                  values: categories,
+                  onChanged: onCategoryChanged,
+                ),
+                _FilterDropdown(
+                  width: dropdownWidth,
+                  label: 'Status',
+                  value: status,
+                  values: const ['All', 'Hot', 'Rising', 'Stable', 'Cooling'],
+                  onChanged: onStatusChanged,
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -595,12 +615,14 @@ class _TrendFilters extends StatelessWidget {
 
 class _FilterDropdown extends StatelessWidget {
   const _FilterDropdown({
+    required this.width,
     required this.label,
     required this.value,
     required this.values,
     required this.onChanged,
   });
 
+  final double width;
   final String label;
   final String value;
   final List<String> values;
@@ -610,15 +632,26 @@ class _FilterDropdown extends StatelessWidget {
   Widget build(BuildContext context) {
     final safeValue = values.contains(value) ? value : 'All';
     return SizedBox(
-      width: 180,
+      width: width,
       child: DropdownButtonFormField<String>(
         initialValue: safeValue,
+        isExpanded: true,
+        menuMaxHeight: 360,
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
         ),
         items: values
-            .map((item) => DropdownMenuItem(value: item, child: Text(item)))
+            .map(
+              (item) => DropdownMenuItem(
+                value: item,
+                child: Text(
+                  item,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            )
             .toList(),
         onChanged: (value) {
           if (value != null) onChanged(value);
@@ -642,12 +675,8 @@ class _TrendDashboardSections extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final trendingNow = trends.take(12).toList();
-    final rising = trends
-        .where((item) =>
-            item.status == 'Rising' || item.engagementChangePercent != 0)
-        .toList()
-      ..sort((a, b) =>
-          b.engagementChangePercent.compareTo(a.engagementChangePercent));
+    final rising = trends.where((item) => item.isMeaningfulRising).toList()
+      ..sort((a, b) => b.momentumScore.compareTo(a.momentumScore));
     final newItems = trends.where((item) => item.isNew).take(12).toList();
     return Column(
       children: [
@@ -663,7 +692,8 @@ class _TrendDashboardSections extends StatelessWidget {
         const SizedBox(height: 16),
         _TrendListSection(
           title: 'Fastest Rising',
-          subtitle: 'Items moving up compared with the previous snapshot',
+          subtitle:
+              'Meaningful engagement velocity or rank gains since the previous snapshot',
           trends: rising.take(8).toList(),
           isFollowing: isFollowing,
           onToggleFollow: onToggleFollow,
@@ -703,38 +733,81 @@ class _EngagementChart extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Trend engagement',
+            Text('Current engagement and momentum',
                 style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'Video sources show engagement gained per minute; Google shows rank movement.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 12),
             if (visible.isEmpty)
               Text('No live trend data available right now.',
                   style: Theme.of(context).textTheme.bodyMedium)
             else
               ...visible.map((item) {
-                final value = maxSignal <= 0
+                final ratio = maxSignal <= 0
                     ? 0.0
                     : item.engagementSignal.toDouble() / maxSignal;
+                final value = math.sqrt(math.max(0.0, ratio));
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 132,
-                        child: Text(
-                          item.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Expanded(
-                        child: LinearProgressIndicator(
-                          value: math.min(1.0, math.max(0.0, value)),
-                          minHeight: 10,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      _ChangeText(value: item.engagementChangePercent),
-                    ],
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final progress = LinearProgressIndicator(
+                        value: math.min(1.0, math.max(0.0, value)),
+                        minHeight: 10,
+                      );
+                      final signal = Text(
+                        _compactSignal(item.engagementSignal),
+                        textAlign: TextAlign.right,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      );
+                      if (constraints.maxWidth < 600) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    item.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                signal,
+                                const SizedBox(width: 10),
+                                Flexible(child: _ChangeText(item: item)),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            progress,
+                          ],
+                        );
+                      }
+                      return Row(
+                        children: [
+                          SizedBox(
+                            width: 132,
+                            child: Text(
+                              item.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Expanded(child: progress),
+                          const SizedBox(width: 10),
+                          SizedBox(width: 72, child: signal),
+                          const SizedBox(width: 10),
+                          SizedBox(
+                            width: 108,
+                            child: _ChangeText(item: item),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 );
               }),
@@ -804,6 +877,51 @@ class _CompactTrendTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (MediaQuery.sizeOf(context).width < 700) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Icon(_platformIcon(item.sourcePlatform)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${_formatPlatformName(item.sourcePlatform)} | ${item.category.isEmpty ? 'General' : item.category}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _ChangeText(item: item),
+                      _StatusPill(label: item.status, status: item.status),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              onPressed: onToggleFollow,
+              icon: Icon(isFollowing ? Icons.bookmark : Icons.bookmark_outline),
+              tooltip: isFollowing ? 'Unfollow topic' : 'Follow topic',
+            ),
+          ],
+        ),
+      );
+    }
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: Icon(_platformIcon(item.sourcePlatform)),
@@ -814,11 +932,11 @@ class _CompactTrendTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       trailing: SizedBox(
-        width: 172,
+        width: 220,
         child: Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
-            _ChangeText(value: item.engagementChangePercent),
+            _ChangeText(item: item),
             const SizedBox(width: 8),
             _StatusPill(label: item.status, status: item.status),
             IconButton(
@@ -1224,8 +1342,7 @@ class _TrendCard extends StatelessWidget {
                   value: _compactSignal(item.engagementSignal),
                 ),
                 _Stat(label: 'Views', value: _compactNumber(item.views)),
-                Expanded(
-                    child: _ChangeText(value: item.engagementChangePercent)),
+                Expanded(child: _ChangeText(item: item)),
               ],
             ),
           ],
@@ -1283,22 +1400,34 @@ class _StatusPill extends StatelessWidget {
 }
 
 class _ChangeText extends StatelessWidget {
-  const _ChangeText({required this.value});
+  const _ChangeText({required this.item});
 
-  final num value;
+  final DashboardTrendItem item;
 
   @override
   Widget build(BuildContext context) {
-    final change = value.toDouble();
-    final color = change > 0
+    final kind = item.changeKind;
+    final rising = kind == 'velocity_up' ||
+        kind == 'rank_up' ||
+        (kind == 'interest' && item.engagementChangePercent > 0) ||
+        kind == 'new';
+    final cooling = kind == 'velocity_down' ||
+        kind == 'rank_down' ||
+        (kind == 'interest' && item.engagementChangePercent < 0);
+    final color = rising
         ? Colors.green.shade700
-        : change < 0
+        : cooling
             ? Colors.red.shade700
             : Theme.of(context).colorScheme.onSurfaceVariant;
-    final prefix = change > 0 ? '+' : '';
-    return Text(
-      '$prefix${change.toStringAsFixed(0)}%',
-      style: Theme.of(context).textTheme.labelMedium?.copyWith(color: color),
+    return Tooltip(
+      message: _momentumTooltip(item),
+      child: Text(
+        item.changeLabel,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.right,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(color: color),
+      ),
     );
   }
 }
@@ -1379,6 +1508,28 @@ String _formatDateTime(String value) {
   final hour = local.hour.toString().padLeft(2, '0');
   final minute = local.minute.toString().padLeft(2, '0');
   return '${local.day}/${local.month} $hour:$minute';
+}
+
+String _momentumTooltip(DashboardTrendItem item) {
+  final seconds = item.comparisonWindowSeconds;
+  final window = seconds > 0 ? ' Comparison window: ${seconds}s.' : '';
+  switch (item.changeKind) {
+    case 'velocity_up':
+    case 'velocity_down':
+      return 'Weighted engagement gained per minute since the previous snapshot '
+          '(views x 0.2 + likes x 1.5 + comments x 3).$window';
+    case 'rank_up':
+    case 'rank_down':
+      return 'Position change in the live provider ranking since the previous snapshot.$window';
+    case 'interest':
+      return 'Change in the provider interest signal since the previous snapshot.$window';
+    case 'new':
+      return 'First appearance in the current live snapshot.';
+    case 'none':
+      return 'No measurable movement since the previous snapshot.$window';
+    default:
+      return 'Waiting for a previous snapshot to calculate movement.';
+  }
 }
 
 String _compactSignal(num value) {

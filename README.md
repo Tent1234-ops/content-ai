@@ -117,6 +117,36 @@ flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:8000
 `API_BASE_URL` defaults to `http://127.0.0.1:8000`. Set it with
 `--dart-define` when the backend runs on another host or port.
 
+## Faster Whisper Setup
+
+Prepare the multilingual `small` model once before starting the demo backend:
+
+```powershell
+python scripts/setup_faster_whisper.py --model small
+python scripts/setup_faster_whisper.py --model small --verify-only
+```
+
+Production/demo configuration uses the verified local model without downloading
+during an upload:
+
+```env
+ASR_MODEL_SIZE=small
+ASR_MODEL_DIR=models_cache/faster_whisper
+ASR_LOCAL_FILES_ONLY=1
+ASR_REQUIRE_MODEL_READY=1
+ASR_LANGUAGE=auto
+```
+
+`ASR_LANGUAGE=auto` lets Faster Whisper detect Thai or English. If speech-to-text
+fails, the pipeline uses the filename only as a low-confidence fallback and shows
+a warning in Recommendation Evidence.
+
+Seed 24 evidence clips for each supported category (168 rows total):
+
+```powershell
+python scripts/seed_demo_dataset.py
+```
+
 ## Phase 11 Notification Migration
 
 Run this once when upgrading an existing database:

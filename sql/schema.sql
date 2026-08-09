@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS system_configs (
   enable_google_trends BOOLEAN NOT NULL DEFAULT TRUE,
   enable_tiktok_trending BOOLEAN NOT NULL DEFAULT TRUE,
   auto_scan_interval_hours INT NOT NULL DEFAULT 6,
-  asr_model_default VARCHAR(20) NOT NULL DEFAULT 'tiny',
+  asr_model_default VARCHAR(20) NOT NULL DEFAULT 'small',
   enable_model_toggle BOOLEAN NOT NULL DEFAULT TRUE,
   job_backend VARCHAR(20) NOT NULL DEFAULT 'inprocess',
   redis_url VARCHAR(255) NULL,
