@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import math
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Iterable, List
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.database.models import (
     Notification,
     TrendSnapshotItem,
@@ -88,6 +89,7 @@ def _latest_successful_run_and_items_before(
     region: str,
     platform: str,
     run_id: int,
+    completed_before: datetime | None = None,
 ) -> tuple[TrendSnapshotRun, List[TrendSnapshotItem]] | None:
     runs = (
         db.query(TrendSnapshotRun)
@@ -101,6 +103,9 @@ def _latest_successful_run_and_items_before(
         .all()
     )
     for run in runs:
+        run_timestamp = run.completed_at or run.started_at
+        if completed_before is not None and run_timestamp > completed_before:
+            continue
         if _provider_states(run).get(platform) not in SUCCESS_PROVIDER_STATES:
             continue
         rows = (
@@ -114,17 +119,6 @@ def _latest_successful_run_and_items_before(
         )
         return run, rows
     return None
-
-
-def _compact_rate(value: float) -> str:
-    absolute = abs(value)
-    if absolute >= 1_000_000:
-        return f"{absolute / 1_000_000:.1f}M"
-    if absolute >= 1_000:
-        return f"{absolute / 1_000:.1f}K"
-    if absolute >= 10:
-        return f"{absolute:.0f}"
-    return f"{absolute:.1f}"
 
 
 def _percentile(value: float, positive_values: List[float]) -> float:
@@ -160,18 +154,22 @@ def _apply_session_and_engagement_status(
     for platform in PLATFORMS:
         platform_payload = snapshot.get("platforms", {}).get(platform, {})
         items = platform_payload.get("items", [])
+        current_timestamp = current_run.completed_at or current_run.started_at
+        comparison_cutoff = current_timestamp - timedelta(
+            seconds=settings.live_trend_momentum_window_seconds
+        )
         previous_snapshot = _latest_successful_run_and_items_before(
             db,
             region=region,
             platform=platform,
             run_id=run_id - 1,
+            completed_before=comparison_cutoff,
         )
         previous_run, previous_rows = previous_snapshot or (None, [])
         previous_by_key = {row.trend_key: row for row in previous_rows}
         previous_ranks = {
             row.trend_key: index + 1 for index, row in enumerate(previous_rows)
         }
-        current_timestamp = current_run.completed_at or current_run.started_at
         previous_timestamp = (
             previous_run.completed_at or previous_run.started_at
             if previous_run is not None
@@ -238,8 +236,11 @@ def _apply_session_and_engagement_status(
                     change_label = "No change"
                 else:
                     change_kind = "velocity_up" if rate > 0 else "velocity_down"
-                    prefix = "+" if rate > 0 else "-"
-                    change_label = f"{prefix}{_compact_rate(rate)}/min"
+                    change_label = (
+                        "Audience activity increased"
+                        if rate > 0
+                        else "Audience activity decreased"
+                    )
 
             calculated.append(
                 {
@@ -258,10 +259,19 @@ def _apply_session_and_engagement_status(
         positive_rates = [
             float(row["rate"]) for row in calculated if float(row["rate"]) > 0
         ]
+        negative_rates = [
+            abs(float(row["rate"]))
+            for row in calculated
+            if float(row["rate"]) < 0
+        ]
         hot_count = max(1, math.ceil(len(items) * 0.1)) if items else 0
         for row in calculated:
             item = row["item"]
             rate_percentile = _percentile(float(row["rate"]), positive_rates)
+            cooling_percentile = _percentile(
+                abs(float(row["rate"])),
+                negative_rates,
+            )
             rank_change = int(row["rank_change"])
             rank_momentum = min(100.0, 45.0 + (rank_change * 12.0)) if rank_change > 0 else 0.0
             momentum_score = max(rate_percentile, rank_momentum)
@@ -269,12 +279,24 @@ def _apply_session_and_engagement_status(
                 row["change_kind"] not in {"baseline", "new", "none"}
                 and (rank_change >= 2 or rate_percentile >= 75.0)
             )
+            meaningful_cooling = (
+                row["change_kind"] not in {"baseline", "new", "none"}
+                and (rank_change <= -2 or cooling_percentile >= 75.0)
+            )
+            change_label = str(row["change_label"])
+            if row["change_kind"] == "velocity_up":
+                if rate_percentile >= 90.0:
+                    change_label = "Gaining fastest"
+                elif rate_percentile >= 75.0:
+                    change_label = "Gaining quickly"
+            elif row["change_kind"] == "velocity_down":
+                change_label = "Cooling"
             current_rank = int(item.get("rank") or 0)
             if current_rank > 0 and current_rank <= hot_count:
                 status = "Hot"
             elif meaningful_rising or row["is_new"]:
                 status = "Rising"
-            elif rank_change <= -2 or float(row["rate"]) < 0:
+            elif meaningful_cooling:
                 status = "Cooling"
             else:
                 status = "Stable"
@@ -285,7 +307,7 @@ def _apply_session_and_engagement_status(
             item["rank_change"] = rank_change
             item["momentum_score"] = round(momentum_score, 1)
             item["change_kind"] = row["change_kind"]
-            item["change_label"] = row["change_label"]
+            item["change_label"] = change_label
             item["has_previous_snapshot"] = bool(row["has_previous"])
             item["comparison_window_seconds"] = int(round(comparison_seconds))
             item["is_meaningful_rising"] = meaningful_rising

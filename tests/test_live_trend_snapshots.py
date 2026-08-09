@@ -1,5 +1,6 @@
 import time
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -7,14 +8,24 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database.db import Base
 from app.core.security import decode_access_token, hash_password
-from app.database.models import Notification, User, UserTrendWatchSession
+from app.database.models import (
+    Notification,
+    TrendSnapshotRun,
+    User,
+    UserTrendWatchSession,
+)
 from app.routes.auth import login
 from app.schemas.trends import GoogleTrendItem, YouTubeTrendItem
 from app.schemas.auth import LoginRequest
+from app.schemas.notifications import NotificationItem
 from app.routes.dashboard import dashboard_live_trends_snapshot
 from app.services.dashboard import build_dashboard_summary
 from app.services.live_trend_notifications import compare_live_trend_snapshot
-from app.services.live_trend_snapshots import load_latest_live_snapshot, refresh_global_live_trends
+from app.services.live_trend_snapshots import (
+    load_latest_live_snapshot,
+    normalize_live_item,
+    refresh_global_live_trends,
+)
 from app.services.trend_watch_sessions import start_trend_watch_session
 
 
@@ -136,6 +147,17 @@ class LiveTrendSnapshotTests(unittest.TestCase):
     def _start_watch_session(self):
         return start_trend_watch_session(self.db, user=self.user, region="TH")
 
+    def _backdate_latest_run(self, *, minutes=6):
+        run = (
+            self.db.query(TrendSnapshotRun)
+            .order_by(TrendSnapshotRun.run_id.desc())
+            .first()
+        )
+        run.started_at -= timedelta(minutes=minutes)
+        if run.completed_at is not None:
+            run.completed_at -= timedelta(minutes=minutes)
+        self.db.commit()
+
     def test_partial_run_keeps_successful_platforms_and_reads_quickly(self):
         result = refresh_global_live_trends(
             region="TH",
@@ -156,6 +178,8 @@ class LiveTrendSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["platforms"]["youtube"]["total"], 1)
         self.assertEqual(snapshot["platforms"]["google"]["total"], 1)
         self.assertEqual(snapshot["platforms"]["tiktok"]["mode"], "live_error")
+        self.assertTrue(result["completed_at"].endswith("Z"))
+        self.assertTrue(snapshot["generated_at"].endswith("Z"))
         self.assertLess(elapsed, 1.0)
 
     def test_user_snapshot_uses_cached_run_as_baseline(self):
@@ -330,8 +354,13 @@ class LiveTrendSnapshotTests(unittest.TestCase):
         self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0].type, "new_live_trend")
         self.assertNotIn("Analysis complete", notifications[0].title)
+        serialized = NotificationItem.model_validate(notifications[0]).model_dump(
+            mode="json"
+        )
+        self.assertTrue(serialized["detected_at"].endswith("Z"))
+        self.assertTrue(serialized["created_at"].endswith("Z"))
 
-    def test_youtube_momentum_uses_engagement_rate_instead_of_rounded_percent(self):
+    def test_youtube_momentum_uses_stable_window_and_qualitative_label(self):
         empty = self._empty_provider
         refresh_global_live_trends(
             region="TH",
@@ -343,6 +372,7 @@ class LiveTrendSnapshotTests(unittest.TestCase):
             },
             db=self.db,
         )
+        self._backdate_latest_run()
         watch_session = self._start_watch_session()
         refresh_global_live_trends(
             region="TH",
@@ -365,11 +395,49 @@ class LiveTrendSnapshotTests(unittest.TestCase):
         item = result["platforms"]["youtube"]["items"][0]
 
         self.assertEqual(item["change_kind"], "velocity_up")
-        self.assertTrue(item["change_label"].startswith("+"))
-        self.assertTrue(item["change_label"].endswith("/min"))
+        self.assertEqual(item["change_label"], "Gaining fastest")
         self.assertGreater(item["engagement_rate_per_minute"], 0)
+        self.assertGreaterEqual(item["comparison_window_seconds"], 300)
         self.assertTrue(item["is_meaningful_rising"])
-        self.assertNotEqual(item["change_label"], "+0%")
+        self.assertNotIn("/min", item["change_label"])
+
+    def test_youtube_momentum_ignores_single_refresh_noise(self):
+        empty = self._empty_provider
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": self._youtube_metric(1_000, 100, 10),
+                "google": empty,
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+        watch_session = self._start_watch_session()
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": self._youtube_metric(1_001, 101, 10),
+                "google": empty,
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+
+        result = compare_live_trend_snapshot(
+            db=self.db,
+            user=self.user,
+            watch_session=watch_session,
+            region="TH",
+            limit=50,
+        )
+        item = result["platforms"]["youtube"]["items"][0]
+
+        self.assertEqual(item["change_kind"], "baseline")
+        self.assertEqual(item["change_label"], "Baseline")
+        self.assertEqual(item["engagement_rate_per_minute"], 0)
+        self.assertFalse(item["is_meaningful_rising"])
 
     def test_google_momentum_uses_rank_movement(self):
         empty = self._empty_provider
@@ -383,6 +451,7 @@ class LiveTrendSnapshotTests(unittest.TestCase):
             },
             db=self.db,
         )
+        self._backdate_latest_run()
         watch_session = self._start_watch_session()
         refresh_global_live_trends(
             region="TH",
@@ -409,6 +478,22 @@ class LiveTrendSnapshotTests(unittest.TestCase):
         self.assertEqual(item["change_kind"], "rank_up")
         self.assertEqual(item["change_label"], "Up 2 ranks")
         self.assertTrue(item["is_meaningful_rising"])
+
+    def test_google_region_is_not_exposed_as_a_content_category(self):
+        normalized = normalize_live_item(
+            "google",
+            GoogleTrendItem(
+                title="Thai search topic",
+                query="Thai search topic",
+                category="TH",
+                video_url="https://google.example/topic",
+                trend_score=20_000,
+                source="google_trends_live",
+            ),
+        )
+
+        self.assertEqual(normalized["category"], "Search Trends")
+        self.assertEqual(normalized["views"], 0)
 
 
 if __name__ == "__main__":

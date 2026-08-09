@@ -325,7 +325,8 @@ class AnalysisJobStatus {
   final String? error;
 
   bool get isComplete => status == 'completed';
-  bool get isFailed => status == 'failed' || status == 'error';
+  bool get isFailed =>
+      status == 'failed' || status == 'error' || status == 'not_found';
 
   factory AnalysisJobStatus.fromJson(Map<String, dynamic> json) {
     final status = json['status']?.toString() ?? 'unknown';

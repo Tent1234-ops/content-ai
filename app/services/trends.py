@@ -555,7 +555,6 @@ def _live_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
                 if not isinstance(entry, list) or not entry:
                     continue
                 title = str(entry[0]) if entry[0] is not None else ""
-                country = str(entry[2]) if len(entry) > 2 and entry[2] is not None else None
                 traffic = None
                 if len(entry) > 6 and isinstance(entry[6], int):
                     traffic = entry[6]
@@ -564,7 +563,7 @@ def _live_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
                     GoogleTrendItem(
                         title=title,
                         query=title,
-                        category=country or "Search",
+                        category="Search Trends",
                         published_at=datetime.utcnow(),
                         video_url=f"https://trends.google.com/trends/explore?q={quote_plus(title)}&geo={region.upper()}",
                         thumbnail_url=None,

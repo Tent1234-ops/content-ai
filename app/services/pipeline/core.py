@@ -237,16 +237,30 @@ def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
     except Exception:
         pass
 
-    # If pythainlp is available, run a contextual correction pass for Thai tokens
+    # Dictionary correction is expensive on long ASR phrases and can consume
+    # several gigabytes. Keep it opt-in and tightly bounded for weak audio only.
     try:
-        if pythai_word_tokenize and pythai_correct:
-            # tokenize into Thai/Latin tokens preserving ordering
-            tokens = re.findall(r"[\u0E00-\u0E7Fa-zA-Z0-9\-]+|\s+|\S", normalized)
+        spell_enabled = os.getenv(
+            "ANALYZE_ENABLE_THAI_SPELL_CORRECTION",
+            "0",
+        ).strip().lower() in {"1", "true", "yes"}
+        if aggressive and spell_enabled and pythai_word_tokenize and pythai_correct:
+            tokens = pythai_word_tokenize(normalized, keep_whitespace=True)
             rebuilt = []
+            corrections = {}
+            correction_count = 0
             for t in tokens:
-                if re.search(r"[\u0E00-\u0E7F]", t):
+                can_correct = (
+                    correction_count < 40
+                    and 2 <= len(t) <= 16
+                    and re.fullmatch(r"[\u0E00-\u0E7F]+", t) is not None
+                )
+                if can_correct:
                     try:
-                        corrected = pythai_correct(t)
+                        if t not in corrections:
+                            corrections[t] = pythai_correct(t)
+                            correction_count += 1
+                        corrected = corrections[t]
                     except Exception:
                         corrected = t
                     rebuilt.append(corrected)
@@ -2191,7 +2205,7 @@ def analyze_video(video_path: str, display_name: str | None = None):
         print(f"[pipeline] ML model import failed: {exc}", flush=True)
         ml_import_ok = False
 
-    max_audio_seconds = int(os.getenv("ANALYZE_MAX_AUDIO_SECONDS", "120") or "120")
+    max_audio_seconds = int(os.getenv("ANALYZE_MAX_AUDIO_SECONDS", "60") or "60")
     hook_seconds = max(15, min(max_audio_seconds, 180))
     audio_path = tempfile.NamedTemporaryFile(prefix="content_ai_", suffix=".wav", delete=False).name
     try:
@@ -2204,7 +2218,11 @@ def analyze_video(video_path: str, display_name: str | None = None):
         audio_ok = extract_audio(video_path, audio_path, max_seconds=hook_seconds)
 
         print("[pipeline] transcribing audio...", flush=True)
-        update_current_job(stage="transcribing", progress=38, message="Generating transcript")
+        update_current_job(
+            stage="transcribing",
+            progress=38,
+            message=f"Transcribing first {hook_seconds}s of audio",
+        )
         if audio_ok:
             try:
                 stt = transcribe_with_meta(audio_path)
@@ -2235,6 +2253,11 @@ def analyze_video(video_path: str, display_name: str | None = None):
         except OSError:
             pass
 
+    update_current_job(
+        stage="normalizing_transcript",
+        progress=48,
+        message="Cleaning and validating transcript",
+    )
     transcript = stt.get("text", "")
     if not transcript:
         fallback_source = display_name or os.path.basename(video_path)

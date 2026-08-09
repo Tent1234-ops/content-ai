@@ -13,6 +13,7 @@ from app.database.db import Base
 from app.database.models import DatasetContent
 from app.routes.analyze import _build_recommendation
 from app.services.classification import classify_text_domain
+from app.services.pipeline.core import normalize_asr_terms
 from app.services.pipeline.domain_rules import normalize_domain
 from app.services.recommendation import build_recommendation_from_analysis_data
 from models.speech_to_text import check_model_readiness, transcribe_with_meta
@@ -124,6 +125,21 @@ class Phase12AiEvidenceTests(unittest.TestCase):
         self.assertNotIn("language", kwargs)
         self.assertEqual(result["language"], "en")
         self.assertEqual(result["language_probability"], 0.94)
+
+    def test_thai_spell_correction_is_disabled_by_default(self):
+        with (
+            patch(
+                "app.services.pipeline.core.pythai_correct",
+                side_effect=AssertionError("unbounded spell correction must not run"),
+            ),
+            patch.dict(
+                os.environ,
+                {"ANALYZE_ENABLE_THAI_SPELL_CORRECTION": "0"},
+            ),
+        ):
+            result = normalize_asr_terms("ทดสอบเสียงจากหูฟัง", aggressive=True)
+
+        self.assertTrue(result)
 
     def test_model_readiness_checks_required_local_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:

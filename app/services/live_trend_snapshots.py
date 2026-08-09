@@ -11,6 +11,7 @@ from typing import Callable, Dict, Iterable, List, Mapping
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.datetime_utils import utc_isoformat
 from app.database.db import SessionLocal
 from app.database.models import TrendSnapshotItem, TrendSnapshotRun
 from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_trending
@@ -42,6 +43,11 @@ def normalize_live_item(platform: str, item: object) -> Dict[str, object]:
     data = _item_to_dict(item)
     title = str(data.get("title") or data.get("query") or "").strip()
     category = str(data.get("category") or data.get("domain") or "general").strip() or "general"
+    if platform == "google" and (
+        category.casefold() in {"general", "search", "th", "thailand"}
+        or (len(category) == 2 and category.isalpha())
+    ):
+        category = "Search Trends"
     source_platform = str(data.get("source_platform") or data.get("source") or platform).strip()
     published_at = data.get("published_at")
     if hasattr(published_at, "isoformat"):
@@ -261,8 +267,8 @@ def refresh_global_live_trends(
             "region": region,
             "total_items": total_items,
             "providers": provider_results,
-            "started_at": started_at.isoformat(),
-            "completed_at": completed_at.isoformat(),
+            "started_at": utc_isoformat(started_at),
+            "completed_at": utc_isoformat(completed_at),
         }
     except Exception as exc:
         session.rollback()
@@ -376,13 +382,13 @@ def load_latest_live_snapshot(
             "items": grouped[platform],
             "new_items": [],
             "error": details.get("error"),
-            "last_checked_at": generated_at.isoformat() if generated_at else None,
+            "last_checked_at": utc_isoformat(generated_at),
         }
 
     return {
         "run_id": latest.run_id,
         "snapshot_status": latest.status,
-        "generated_at": generated_at.isoformat() if generated_at else None,
+        "generated_at": utc_isoformat(generated_at),
         "region": latest.region,
         "platforms": platforms_payload,
     }

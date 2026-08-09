@@ -1,5 +1,6 @@
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -20,7 +21,7 @@ router = APIRouter()
 def _save_upload(file: UploadFile) -> str:
     os.makedirs("videos", exist_ok=True)
     safe_name = Path(file.filename or "upload.mp4").name
-    file_path = os.path.join("videos", safe_name)
+    file_path = os.path.join("videos", f"{uuid.uuid4().hex}_{safe_name}")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     return file_path

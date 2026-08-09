@@ -37,7 +37,8 @@ YOUTUBE_REGION=TH
 GOOGLE_REGION=TH
 TIKTOK_REGION=TH
 ASR_LOCAL_FILES_ONLY=1
-ANALYZE_MAX_AUDIO_SECONDS=90
+ANALYZE_MAX_AUDIO_SECONDS=60
+ANALYZE_ENABLE_THAI_SPELL_CORRECTION=0
 ANALYZE_ENABLE_ML_KEYWORDS=0
 ANALYZE_ENABLE_VISUAL=0
 NLP_USE_PYTHAINLP=0
@@ -135,11 +136,18 @@ ASR_MODEL_DIR=models_cache/faster_whisper
 ASR_LOCAL_FILES_ONLY=1
 ASR_REQUIRE_MODEL_READY=1
 ASR_LANGUAGE=auto
+ANALYZE_MAX_AUDIO_SECONDS=60
+ANALYZE_ENABLE_THAI_SPELL_CORRECTION=0
 ```
 
 `ASR_LANGUAGE=auto` lets Faster Whisper detect Thai or English. If speech-to-text
 fails, the pipeline uses the filename only as a low-confidence fallback and shows
 a warning in Recommendation Evidence.
+
+Thai dictionary spell correction is disabled by default because applying it to
+long ASR phrases is CPU- and memory-intensive. Domain term normalization still
+runs. Enable it only for short, low-confidence transcripts that need an
+additional correction pass.
 
 Seed 24 evidence clips for each supported category (168 rows total):
 

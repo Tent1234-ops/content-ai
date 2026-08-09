@@ -4,6 +4,7 @@ from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
+from app.core.datetime_utils import utc_isoformat
 from app.database.models import Notification, TrendSnapshotItem
 
 
@@ -42,7 +43,7 @@ def create_live_trend_notification(
                 "platform": item.platform,
                 "title": item.title,
                 "category": item.category or "general",
-                "detected_at": detected_at.isoformat(),
+                "detected_at": utc_isoformat(detected_at),
                 "video_url": item.video_url,
                 "views": item.views,
                 "likes": item.likes,

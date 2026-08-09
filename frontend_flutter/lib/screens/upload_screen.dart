@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -29,8 +27,6 @@ class _UploadScreenState extends State<UploadScreen> {
   int? _selectedFileSize;
   int _uploadProgress = 0;
   String _statusMessage = '';
-  Timer? _progressTimer;
-  bool _hasBackendProgress = false;
   String? _suggestedTopic;
   bool _hasReadRouteArgs = false;
 
@@ -109,10 +105,8 @@ class _UploadScreenState extends State<UploadScreen> {
       _error = null;
       _uploadProgress = 5;
       _statusMessage = 'Uploading video...';
-      _hasBackendProgress = false;
     });
 
-    _startProgressTimer();
     try {
       final jobId = await _repository.startAnalyzeAndSaveVideo(
         fileName: _selectedFileName!,
@@ -124,7 +118,7 @@ class _UploadScreenState extends State<UploadScreen> {
 
       if (!mounted) return;
       setState(() {
-        _uploadProgress = 20;
+        _uploadProgress = 10;
         _statusMessage = 'Queued job $jobId';
       });
 
@@ -132,7 +126,6 @@ class _UploadScreenState extends State<UploadScreen> {
 
       if (!mounted) return;
 
-      _progressTimer?.cancel();
       setState(() {
         _uploadProgress = 100;
         _statusMessage = 'Analysis complete!';
@@ -148,7 +141,6 @@ class _UploadScreenState extends State<UploadScreen> {
         arguments: ResultScreenArgs(initialData: response),
       );
     } catch (error) {
-      _progressTimer?.cancel();
       if (!mounted) return;
       setState(() {
         _error = error.toString();
@@ -162,26 +154,23 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<AnalysisResultViewData> _pollAnalysisJob(String jobId) async {
-    for (var attempt = 0; attempt < 900; attempt++) {
+    for (var attempt = 0; attempt < 180; attempt++) {
       final job = await _repository.getAnalysisJob(jobId);
       if (!mounted) {
         throw Exception('Upload screen was closed.');
       }
 
       setState(() {
-        if (job.progress > 0) {
-          _hasBackendProgress = true;
-          _uploadProgress = job.progress > _uploadProgress
-              ? job.progress
-              : _uploadProgress;
+        if (job.status == 'queued') {
+          _uploadProgress = job.progress > 10 ? job.progress : 10;
+        } else if (job.progress > 0) {
+          _uploadProgress = job.progress.clamp(0, 100).toInt();
         }
         if (job.message.isNotEmpty) {
           _statusMessage = job.message;
         } else if (job.status == 'queued') {
-          _uploadProgress = _uploadProgress < 20 ? 20 : _uploadProgress;
           _statusMessage = 'Queued for analysis...';
         } else if (job.status == 'running') {
-          _uploadProgress = _uploadProgress < 45 ? 45 : _uploadProgress;
           _statusMessage = _messageForStage(job.stage);
         } else {
           _statusMessage = 'Job status: ${job.status}';
@@ -197,13 +186,18 @@ class _UploadScreenState extends State<UploadScreen> {
       }
 
       if (job.isFailed) {
+        if (job.status == 'not_found') {
+          throw Exception(
+            'Analysis job was lost because the backend restarted. Please submit the clip again.',
+          );
+        }
         throw Exception(job.error ?? 'Analysis failed.');
       }
 
       await Future.delayed(const Duration(seconds: 2));
     }
     throw Exception(
-      'Analysis is still running. Please check History later or try a shorter clip.',
+      'Analysis did not finish within 6 minutes. Please try again or use a shorter clip.',
     );
   }
 
@@ -213,6 +207,8 @@ class _UploadScreenState extends State<UploadScreen> {
         return 'Extracting hook audio...';
       case 'transcribing':
         return 'Generating transcript...';
+      case 'normalizing_transcript':
+        return 'Cleaning transcript...';
       case 'classifying':
         return 'Classifying content type...';
       case 'recommending':
@@ -224,46 +220,7 @@ class _UploadScreenState extends State<UploadScreen> {
     }
   }
 
-  void _startProgressTimer() {
-    _progressTimer?.cancel();
-    _progressTimer = Timer.periodic(const Duration(milliseconds: 800), (timer) {
-      if (!mounted || !_loading) {
-        timer.cancel();
-        return;
-      }
-
-      setState(() {
-        if (_hasBackendProgress) {
-          return;
-        }
-        if (_uploadProgress < 18) {
-          _uploadProgress = 18;
-          _statusMessage = 'Preparing analysis...';
-        } else if (_uploadProgress < 25) {
-          _uploadProgress = 25;
-          _statusMessage = 'Extracting audio...';
-        } else if (_uploadProgress < 50) {
-          _uploadProgress = 50;
-          _statusMessage = 'Generating transcript...';
-        } else if (_uploadProgress < 75) {
-          _uploadProgress = 75;
-          _statusMessage = 'Classifying content...';
-        } else if (_uploadProgress < 90) {
-          _uploadProgress = 90;
-          _statusMessage = 'Processing AI analysis...';
-        } else if (_uploadProgress < 92) {
-          _uploadProgress = 92;
-          _statusMessage = 'Finishing up report...';
-        } else if (_uploadProgress < 94) {
-          _uploadProgress = 94;
-          _statusMessage = 'Still processing analysis...';
-        }
-      });
-    });
-  }
-
   void _clearSelection() {
-    _progressTimer?.cancel();
     setState(() {
       _selectedFileName = null;
       _selectedFilePath = null;
@@ -272,27 +229,20 @@ class _UploadScreenState extends State<UploadScreen> {
       _selectedFileSize = null;
       _uploadProgress = 0;
       _statusMessage = '';
-      _hasBackendProgress = false;
       _error = null;
     });
   }
 
   @override
   void didChangeDependencies() {
-   super.didChangeDependencies();
-   if (!_hasReadRouteArgs) {
-     final args = ModalRoute.of(context)?.settings.arguments;
-     if (args is Map<String, dynamic>) {
-       _suggestedTopic = args['suggestedTopic']?.toString();
-     }
-     _hasReadRouteArgs = true;
-   }
-  }
-
-  @override
-  void dispose() {
-   _progressTimer?.cancel();
-   super.dispose();
+    super.didChangeDependencies();
+    if (!_hasReadRouteArgs) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is Map<String, dynamic>) {
+        _suggestedTopic = args['suggestedTopic']?.toString();
+      }
+      _hasReadRouteArgs = true;
+    }
   }
 
   @override
@@ -401,7 +351,10 @@ class _UploadScreenState extends State<UploadScreen> {
                       children: [
                         Text(
                           'Suggested trend to analyze',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 8),
                         Text(
@@ -413,7 +366,7 @@ class _UploadScreenState extends State<UploadScreen> {
                   ),
                 ),
               if (_suggestedTopic != null) const SizedBox(height: 16),
- 
+
               // Upload Section
               if (!hasFile) ...[
                 FilledButton.icon(

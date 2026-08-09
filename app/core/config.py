@@ -51,6 +51,10 @@ class Settings:
         2,
         int(os.getenv("LIVE_TREND_SNAPSHOT_RETENTION_RUNS", "120")),
     )
+    live_trend_momentum_window_seconds: int = max(
+        120,
+        int(os.getenv("LIVE_TREND_MOMENTUM_WINDOW_SECONDS", "300")),
+    )
 
 
 settings = Settings()

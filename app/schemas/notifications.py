@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import List
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
+
+from app.core.datetime_utils import utc_isoformat
 
 
 class NotificationItem(BaseModel):
@@ -19,6 +21,10 @@ class NotificationItem(BaseModel):
     payload: str | None = None
     is_read: bool
     created_at: datetime
+
+    @field_serializer("detected_at", "created_at", when_used="json")
+    def serialize_utc_datetime(self, value: datetime) -> str:
+        return utc_isoformat(value) or ""
 
 
 class NotificationsResponse(BaseModel):
