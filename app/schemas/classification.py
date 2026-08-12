@@ -13,6 +13,7 @@ class ClassificationRequest(BaseModel):
 
 class ClassificationCandidate(BaseModel):
     domain: str
+    taxonomy_leaf_key: Optional[str] = None
     score: float
     similarity: float
     sample_size: int
@@ -27,3 +28,48 @@ class ClassificationResponse(BaseModel):
     source: str
     profile_limit: int
     candidates: list[ClassificationCandidate]
+    taxonomy_version: str = "content-taxonomy-v1"
+    taxonomy_leaf_key: str = "unknown"
+    category_level_1: Optional[str] = None
+    category_level_2: Optional[str] = None
+    category_level_3: Optional[str] = None
+    is_unknown: bool = False
+    taxonomy_ready: bool = False
+    warning: Optional[str] = None
+
+
+class TaxonomyNodeItem(BaseModel):
+    node_key: str
+    display_name: str
+    display_name_th: Optional[str] = None
+    level: int
+    parent_key: Optional[str] = None
+    is_leaf: bool
+    is_active: bool
+    is_trainable: bool
+    minimum_sample_count: int
+
+
+class TaxonomyLeafCoverageItem(BaseModel):
+    leaf_key: str
+    category_level_1: Optional[str] = None
+    category_level_2: Optional[str] = None
+    category_level_3: Optional[str] = None
+    source_dataset: str
+    source_category: Optional[str] = None
+    source_subcategories: list[str]
+    minimum_sample_count: int
+    verified_sample_count: int
+    ready: bool
+
+
+class TaxonomyResponse(BaseModel):
+    taxonomy_version: str
+    source_dataset: str
+    minimum_samples_per_leaf: int
+    leaf_count: int
+    ready_leaf_count: int
+    ready: bool
+    unknown_leaf_key: str
+    nodes: list[TaxonomyNodeItem]
+    leaves: list[TaxonomyLeafCoverageItem]

@@ -99,7 +99,7 @@ class _ResultScreenState extends State<ResultScreen> {
     final recommendation = data?.recommendation;
     final classification = recommendation?.classification;
     final classifierConfidence = (classification?.confidence ?? 0) * 100;
-    final domain = classification?.domain ??
+    final domain = classification?.displayCategory ??
         recommendation?.domain ??
         data?.fallbackDomain ??
         '-';
@@ -202,7 +202,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         const SizedBox(height: 24),
                       ],
                       if (data.transcript.isNotEmpty) ...[
-                        _SectionHeader(
+                        const _SectionHeader(
                           title: 'Transcript Preview',
                           icon: Icons.subtitles_outlined,
                         ),
@@ -219,7 +219,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         ),
                         const SizedBox(height: 24),
                       ],
-                      _SectionHeader(
+                      const _SectionHeader(
                         title: 'Content Type',
                         icon: Icons.account_tree_outlined,
                       ),
@@ -229,7 +229,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         classification: classification,
                       ),
                       const SizedBox(height: 24),
-                      _SectionHeader(
+                      const _SectionHeader(
                         title: 'Keywords Found in Your Clip',
                         icon: Icons.key_outlined,
                       ),
@@ -240,7 +240,7 @@ class _ResultScreenState extends State<ResultScreen> {
                       ),
                       const SizedBox(height: 24),
                       if (contentKeywords.isNotEmpty) ...[
-                        _SectionHeader(
+                        const _SectionHeader(
                           title: 'Content Keywords',
                           icon: Icons.article_outlined,
                         ),
@@ -251,7 +251,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         const SizedBox(height: 24),
                       ],
                       if (hookTerms.isNotEmpty) ...[
-                        _SectionHeader(
+                        const _SectionHeader(
                           title: 'Hook Terms From Opening Segment',
                           icon: Icons.bolt_outlined,
                         ),
@@ -262,12 +262,12 @@ class _ResultScreenState extends State<ResultScreen> {
                         const SizedBox(height: 24),
                       ],
                       if (missingKeywords.isNotEmpty) ...[
-                        _SectionHeader(
-                          title: 'Keyword Gap From High-Engagement Clips',
+                        const _SectionHeader(
+                          title: 'Keyword Gap From Same-Category Transcripts',
                           icon: Icons.auto_awesome_outlined,
                         ),
                         Text(
-                          'These terms appear in high-performing $domain content but were not found in your clip.',
+                          'These terms appear frequently in verified $domain transcripts but were not found in your clip.',
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
@@ -284,7 +284,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         const SizedBox(height: 24),
                       ],
                       if (duration != null) ...[
-                        _SectionHeader(
+                        const _SectionHeader(
                           title: 'Recommended Video Duration',
                           icon: Icons.schedule_outlined,
                         ),
@@ -300,7 +300,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         const SizedBox(height: 24),
                       ],
                       if (hookKeywords.isNotEmpty) ...[
-                        _SectionHeader(
+                        const _SectionHeader(
                           title: 'Hook Keywords Recommendation',
                           icon: Icons.lightbulb_outline,
                         ),
@@ -415,9 +415,28 @@ class _EvidenceCard extends StatelessWidget {
         : sourceCounts.entries
             .map((entry) => '${entry.key}: ${entry.value}')
             .join(', ');
+    final languageText = evidence.languageCounts.entries
+        .map((entry) => '${entry.key}: ${entry.value}')
+        .join(', ');
+    final verificationText = <String>[
+      if (evidence.verificationStatus.isNotEmpty)
+        evidence.verificationStatus.replaceAll('_', ' '),
+      if (evidence.licenseName.isNotEmpty) evidence.licenseName,
+    ].join(' · ');
+    final selectionText = evidence.selectionRule ==
+            'top_40_percent_by_average_views_per_day_and_engagement_rate'
+        ? 'Top 40% in the same category by average views/day and engagement rate'
+        : evidence.selectionRule.replaceAll('_', ' ');
     final examples = evidence.exemplarTitles.isNotEmpty
         ? evidence.exemplarTitles.take(3).toList()
         : datasetProfile.exemplarTitles.take(3).toList();
+    final lineageParts = <String>[
+      if (evidence.datasetSources.isNotEmpty)
+        evidence.datasetSources.join(', '),
+      if (evidence.datasetVersions.isNotEmpty)
+        evidence.datasetVersions.join(', '),
+    ];
+    final lineageText = lineageParts.isEmpty ? '-' : lineageParts.join(' / ');
 
     return Card(
       child: Padding(
@@ -464,6 +483,20 @@ class _EvidenceCard extends StatelessWidget {
             ),
             const Divider(height: 20),
             _SummaryRow(
+              icon: Icons.account_tree_outlined,
+              label: 'Dataset source / version',
+              value: lineageText,
+            ),
+            if (evidence.sourceRecordIds.isNotEmpty) ...[
+              const Divider(height: 20),
+              _SummaryRow(
+                icon: Icons.fingerprint_outlined,
+                label: 'Auditable source records',
+                value: '${evidence.sourceRecordIds.length} record IDs',
+              ),
+            ],
+            const Divider(height: 20),
+            _SummaryRow(
               icon: Icons.subtitles_outlined,
               label: 'Transcript source',
               value: _transcriptSourceText(evidence),
@@ -478,8 +511,36 @@ class _EvidenceCard extends StatelessWidget {
             _SummaryRow(
               icon: Icons.video_library_outlined,
               label: 'Same-type sample size',
-              value: '${evidence.datasetSampleSize} clips',
+              value: evidence.eligiblePoolSize > evidence.datasetSampleSize
+                  ? '${evidence.datasetSampleSize} high-performing clips from '
+                      '${evidence.eligiblePoolSize} eligible clips'
+                  : '${evidence.datasetSampleSize} clips',
             ),
+            if (verificationText.isNotEmpty) ...[
+              const Divider(height: 20),
+              _SummaryRow(
+                icon: Icons.verified_outlined,
+                label: 'Verification / license',
+                value: verificationText,
+              ),
+            ],
+            if (languageText.isNotEmpty) ...[
+              const Divider(height: 20),
+              _SummaryRow(
+                icon: Icons.translate_outlined,
+                label: 'Transcript languages',
+                value: languageText,
+              ),
+            ],
+            if (evidence.selectionRule.isNotEmpty &&
+                evidence.selectionRule != 'none') ...[
+              const Divider(height: 20),
+              _SummaryRow(
+                icon: Icons.filter_alt_outlined,
+                label: 'Evidence selection',
+                value: selectionText,
+              ),
+            ],
             const Divider(height: 20),
             _SummaryRow(
               icon: Icons.score_outlined,
@@ -507,7 +568,7 @@ class _EvidenceCard extends StatelessWidget {
             if (examples.isNotEmpty) ...[
               const Divider(height: 20),
               Text(
-                'High-performing examples',
+                'Verified same-category examples',
                 style: Theme.of(context).textTheme.labelMedium,
               ),
               const SizedBox(height: 8),
@@ -621,6 +682,26 @@ class _ClassificationCard extends StatelessWidget {
                 ),
               ],
             ),
+            if ((classification?.warning ?? '').isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      classification!.warning,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (candidates.isNotEmpty) ...[
               const SizedBox(height: 16),
               const Divider(height: 1),

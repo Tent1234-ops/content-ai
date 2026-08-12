@@ -27,6 +27,9 @@ artifacts/
 artifacts_*/
 runtime_artifacts/
 models_cache/
+data/raw/youtube_cc/
+data/reviews/youtube_cc/
+data/manifests/youtube-cc-*.json
 
 # Archived demo artifacts kept out of root intentionally
 !archive/runtime_artifacts/

@@ -51,7 +51,9 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
             "Speech-to-text failed; classification is based only on the filename."
         )
     selected_domain = str(analysis.get("domain") or "general")
-    if float(classification.get("confidence", 0.0)) >= 0.45:
+    if classification.get("is_unknown"):
+        selected_domain = "general"
+    elif float(classification.get("confidence", 0.0)) >= 0.45:
         selected_domain = str(classification["domain"])
 
     user_keywords = [item["keyword"] for item in analysis.get("top_keywords", [])]

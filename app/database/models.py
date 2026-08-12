@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -78,8 +78,81 @@ class Cluster(Base):
     memberships = relationship("ClusterMembership", back_populates="cluster", cascade="all, delete-orphan")
 
 
+class TaxonomyNode(Base):
+    __tablename__ = "taxonomy_nodes"
+    __table_args__ = (
+        UniqueConstraint("taxonomy_version", "node_key", name="uq_taxonomy_version_node_key"),
+        Index("ix_taxonomy_nodes_version_level", "taxonomy_version", "level"),
+    )
+
+    taxonomy_node_id = Column(Integer, primary_key=True)
+    taxonomy_version = Column(String(50), nullable=False, index=True)
+    node_key = Column(String(100), nullable=False)
+    display_name = Column(String(150), nullable=False)
+    display_name_th = Column(String(150))
+    level = Column(Integer, nullable=False)
+    parent_key = Column(String(100))
+    is_leaf = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_trainable = Column(Boolean, nullable=False, default=False)
+    minimum_sample_count = Column(Integer, nullable=False, default=0)
+    source_dataset = Column(String(100))
+    source_category = Column(String(100))
+    source_subcategory = Column(Text)
+    mapping_rule = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class DatasetCollectionRun(Base):
+    __tablename__ = "dataset_collection_runs"
+
+    collection_run_id = Column(Integer, primary_key=True)
+    run_key = Column(String(64), nullable=False, unique=True, index=True)
+    dataset_source = Column(String(100), nullable=False, default="youtube_cc")
+    dataset_version = Column(String(100), nullable=False)
+    status = Column(String(30), nullable=False, default="running")
+    region_code = Column(String(10), nullable=False, default="TH")
+    languages_json = Column(Text, nullable=False)
+    query_config_json = Column(Text, nullable=False)
+    candidate_artifact_path = Column(String(1024))
+    candidate_artifact_sha256 = Column(String(64))
+    manifest_path = Column(String(1024))
+    manifest_sha256 = Column(String(64))
+    candidates_seen = Column(Integer, nullable=False, default=0)
+    transcripts_collected = Column(Integer, nullable=False, default=0)
+    errors_count = Column(Integer, nullable=False, default=0)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    contents = relationship("DatasetContent", back_populates="collection_run")
+    review_events = relationship(
+        "DatasetReviewEvent",
+        back_populates="collection_run",
+        cascade="all, delete-orphan",
+    )
+
+
 class DatasetContent(Base):
     __tablename__ = "dataset_contents"
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_source",
+            "dataset_version",
+            "source_record_id",
+            name="uq_dataset_source_version_record",
+        ),
+        UniqueConstraint("source_youtube_id", name="uq_dataset_source_youtube_id"),
+        UniqueConstraint("transcript_sha256", name="uq_dataset_transcript_sha256"),
+        Index("ix_dataset_taxonomy_leaf", "taxonomy_version", "taxonomy_leaf_key"),
+        Index(
+            "ix_dataset_training_eligibility",
+            "is_training_eligible",
+            "data_split",
+            "taxonomy_leaf_key",
+        ),
+    )
 
     dataset_id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False)
@@ -87,6 +160,54 @@ class DatasetContent(Base):
     transcript = Column(Text)
     category = Column(String(100))
     source_platform = Column(String(50), nullable=False, default="youtube")
+    dataset_source = Column(String(100), nullable=False, default="legacy")
+    dataset_version = Column(String(100), nullable=False, default="legacy-v1")
+    collection_run_id = Column(
+        Integer,
+        ForeignKey("dataset_collection_runs.collection_run_id", ondelete="SET NULL"),
+        index=True,
+    )
+    source_record_id = Column(String(255))
+    source_youtube_id = Column(String(32))
+    source_creator = Column(String(255))
+    source_channel_id = Column(String(64), index=True)
+    source_category = Column(String(100))
+    source_subcategory = Column(String(100))
+    collection_query = Column(String(255))
+    source_release_url = Column(String(1024))
+    source_archive_sha256 = Column(String(64))
+    source_annotation_path = Column(String(1024))
+    source_annotation_sha256 = Column(String(64))
+    import_batch_id = Column(String(64))
+    taxonomy_version = Column(String(50), nullable=False, default="legacy-v1")
+    taxonomy_leaf_key = Column(String(100), index=True)
+    category_level_1 = Column(String(150))
+    category_level_2 = Column(String(150))
+    category_level_3 = Column(String(150))
+    language = Column(String(20), nullable=False, default="und")
+    verification_status = Column(String(30), nullable=False, default="unverified")
+    label_source = Column(String(100), nullable=False, default="unverified")
+    license_name = Column(String(100), nullable=False, default="unknown")
+    license_url = Column(String(1024))
+    data_split = Column(String(20), nullable=False, default="unassigned")
+    split_strategy = Column(String(100))
+    creator_group_key = Column(String(64), index=True)
+    transcript_sha256 = Column(String(64))
+    transcript_segment_count = Column(Integer, nullable=False, default=0)
+    transcript_start_seconds = Column(Float)
+    transcript_end_seconds = Column(Float)
+    transcript_window_seconds = Column(Integer)
+    transcript_source = Column(String(50))
+    caption_type = Column(String(50))
+    transcript_quality = Column(String(30))
+    reviewed_by = Column(String(255))
+    reviewed_at = Column(DateTime)
+    review_notes = Column(Text)
+    statistics_captured_at = Column(DateTime)
+    license_verified_at = Column(DateTime)
+    raw_metadata_json = Column(Text)
+    is_training_eligible = Column(Boolean, nullable=False, default=False)
+    is_active = Column(Boolean, nullable=False, default=True)
     views = Column(Integer, nullable=False, default=0)
     likes = Column(Integer, nullable=False, default=0)
     comments = Column(Integer, nullable=False, default=0)
@@ -97,6 +218,105 @@ class DatasetContent(Base):
 
     analysis_results = relationship("AnalysisResult", back_populates="dataset")
     memberships = relationship("ClusterMembership", back_populates="dataset")
+    collection_run = relationship("DatasetCollectionRun", back_populates="contents")
+    review_events = relationship("DatasetReviewEvent", back_populates="dataset")
+
+
+class DatasetReviewEvent(Base):
+    __tablename__ = "dataset_review_events"
+    __table_args__ = (
+        Index("ix_dataset_review_source_video", "source_youtube_id", "reviewed_at"),
+    )
+
+    review_event_id = Column(Integer, primary_key=True)
+    collection_run_id = Column(
+        Integer,
+        ForeignKey("dataset_collection_runs.collection_run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dataset_id = Column(
+        Integer,
+        ForeignKey("dataset_contents.dataset_id", ondelete="SET NULL"),
+        index=True,
+    )
+    source_youtube_id = Column(String(32), nullable=False)
+    decision = Column(String(20), nullable=False)
+    proposed_leaf_key = Column(String(100))
+    reviewed_leaf_key = Column(String(100))
+    transcript_quality = Column(String(30))
+    reviewer = Column(String(255), nullable=False)
+    notes = Column(Text)
+    review_artifact_sha256 = Column(String(64), nullable=False)
+    reviewed_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    collection_run = relationship("DatasetCollectionRun", back_populates="review_events")
+    dataset = relationship("DatasetContent", back_populates="review_events")
+
+
+class ClassificationModel(Base):
+    __tablename__ = "classification_models"
+    __table_args__ = (
+        UniqueConstraint("model_key", "model_version", name="uq_classification_model_key_version"),
+        Index("ix_classification_models_active", "is_active", "status"),
+    )
+
+    model_id = Column(Integer, primary_key=True)
+    model_key = Column(String(100), nullable=False)
+    model_version = Column(String(100), nullable=False)
+    taxonomy_version = Column(String(50), nullable=False)
+    model_type = Column(String(100), nullable=False)
+    artifact_path = Column(String(1024))
+    training_dataset_source = Column(String(100))
+    training_dataset_version = Column(String(100))
+    training_sample_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(30), nullable=False, default="draft")
+    is_active = Column(Boolean, nullable=False, default=False)
+    trained_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    evaluation_metrics = relationship(
+        "ModelEvaluationMetric",
+        back_populates="model",
+        cascade="all, delete-orphan",
+    )
+    analysis_results = relationship("AnalysisResult", back_populates="classification_model")
+
+
+class ModelEvaluationMetric(Base):
+    __tablename__ = "model_evaluation_metrics"
+    __table_args__ = (
+        UniqueConstraint(
+            "model_id",
+            "dataset_split",
+            "language",
+            "taxonomy_level",
+            "taxonomy_leaf_key",
+            "metric_name",
+            name="uq_model_evaluation_metric",
+        ),
+    )
+
+    metric_id = Column(Integer, primary_key=True)
+    model_id = Column(
+        Integer,
+        ForeignKey("classification_models.model_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dataset_split = Column(String(20), nullable=False, default="test")
+    language = Column(String(20), nullable=False, default="und")
+    taxonomy_level = Column(Integer, nullable=False)
+    taxonomy_leaf_key = Column(String(100), nullable=False, default="__overall__")
+    metric_name = Column(String(50), nullable=False)
+    metric_value = Column(Float, nullable=False)
+    sample_size = Column(Integer, nullable=False, default=0)
+    details = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    model = relationship("ClassificationModel", back_populates="evaluation_metrics")
 
 
 class TrendingItem(Base):
@@ -120,12 +340,21 @@ class AnalysisResult(Base):
     content_id = Column(Integer, ForeignKey("user_contents.content_id"), nullable=False)
     cluster_id = Column(Integer, ForeignKey("clusters.cluster_id"))
     dataset_id = Column(Integer, ForeignKey("dataset_contents.dataset_id"))
+    classification_model_id = Column(Integer, ForeignKey("classification_models.model_id"))
+    taxonomy_version = Column(String(50))
+    taxonomy_leaf_key = Column(String(100))
+    category_level_1 = Column(String(150))
+    category_level_2 = Column(String(150))
+    category_level_3 = Column(String(150))
+    classification_confidence = Column(Float)
+    classification_is_unknown = Column(Boolean, nullable=False, default=False)
     summary = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     content = relationship("UserContent", back_populates="analysis_results")
     cluster = relationship("Cluster", back_populates="analysis_results")
     dataset = relationship("DatasetContent", back_populates="analysis_results")
+    classification_model = relationship("ClassificationModel", back_populates="analysis_results")
 
 
 class ClusterRun(Base):

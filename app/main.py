@@ -9,10 +9,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.database.db import Base, DB_BOOTSTRAP_ERROR, SessionLocal, engine
-from app.database.migrations import archive_phase10_notification_tables
-from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, datasets, nlp, recommendation, trends, notifications, follows
+from app.database.migrations import (
+    archive_phase10_notification_tables,
+    migrate_phase13_taxonomy_schema,
+    migrate_youtube_cc_dataset_schema,
+)
+from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, dataset_review, datasets, nlp, recommendation, trends, notifications, follows
 from app.services.trending_fetcher import start_trending_fetcher, stop_trending_fetcher
 from app.services.live_trend_snapshots import get_live_provider_health
+from app.services.taxonomy import sync_taxonomy_registry
 from models.speech_to_text import check_model_readiness
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
@@ -79,9 +84,19 @@ app.add_middleware(
 # Keep startup simple for Phase 1 so the API is ready after boot.
 db_init_status = "ok"
 phase11_migration_status = {}
+phase13_migration_status = {}
+youtube_cc_migration_status = {}
+taxonomy_seed_status = {}
 try:
     phase11_migration_status = archive_phase10_notification_tables(engine)
     Base.metadata.create_all(bind=engine)
+    phase13_migration_status = migrate_phase13_taxonomy_schema(engine)
+    youtube_cc_migration_status = migrate_youtube_cc_dataset_schema(engine)
+    taxonomy_db = SessionLocal()
+    try:
+        taxonomy_seed_status = sync_taxonomy_registry(taxonomy_db)
+    finally:
+        taxonomy_db.close()
 except (SQLAlchemyError, Exception) as exc:
     db_init_status = f"degraded: {exc.__class__.__name__}"
 if DB_BOOTSTRAP_ERROR:
@@ -93,6 +108,7 @@ app.include_router(classification.router)
 app.include_router(clustering.router)
 app.include_router(contents.router)
 app.include_router(dashboard.router)
+app.include_router(dataset_review.router)
 app.include_router(datasets.router)
 app.include_router(nlp.router)
 app.include_router(recommendation.router)
@@ -113,6 +129,8 @@ def root():
         "version": settings.app_version,
         "status": "ok",
         "db_init": db_init_status,
+        "youtube_cc_schema": youtube_cc_migration_status,
+        "taxonomy": taxonomy_seed_status,
     }
 
 
@@ -123,6 +141,9 @@ def health():
         "status": "ok",
         "init": db_init_status,
         "phase11_archived_tables": phase11_migration_status,
+        "phase13_schema": phase13_migration_status,
+        "youtube_cc_schema": youtube_cc_migration_status,
+        "taxonomy": taxonomy_seed_status,
     }
     live_trends = {
         "run_id": None,
@@ -138,6 +159,9 @@ def health():
             "status": "error",
             "init": db_init_status,
             "phase11_archived_tables": phase11_migration_status,
+            "phase13_schema": phase13_migration_status,
+            "youtube_cc_schema": youtube_cc_migration_status,
+            "taxonomy": taxonomy_seed_status,
             "error": f"{exc.__class__.__name__}: {exc}",
         }
     finally:

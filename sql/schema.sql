@@ -55,6 +55,51 @@ CREATE TABLE IF NOT EXISTS clusters (
   description TEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS taxonomy_nodes (
+  taxonomy_node_id INT AUTO_INCREMENT PRIMARY KEY,
+  taxonomy_version VARCHAR(50) NOT NULL,
+  node_key VARCHAR(100) NOT NULL,
+  display_name VARCHAR(150) NOT NULL,
+  display_name_th VARCHAR(150) NULL,
+  level INT NOT NULL,
+  parent_key VARCHAR(100) NULL,
+  is_leaf BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_trainable BOOLEAN NOT NULL DEFAULT FALSE,
+  minimum_sample_count INT NOT NULL DEFAULT 0,
+  source_dataset VARCHAR(100) NULL,
+  source_category VARCHAR(100) NULL,
+  source_subcategory TEXT NULL,
+  mapping_rule TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_taxonomy_version_node_key (taxonomy_version, node_key),
+  INDEX ix_taxonomy_nodes_taxonomy_version (taxonomy_version),
+  INDEX ix_taxonomy_nodes_version_level (taxonomy_version, level)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dataset_collection_runs (
+  collection_run_id INT AUTO_INCREMENT PRIMARY KEY,
+  run_key VARCHAR(64) NOT NULL,
+  dataset_source VARCHAR(100) NOT NULL DEFAULT 'youtube_cc',
+  dataset_version VARCHAR(100) NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'running',
+  region_code VARCHAR(10) NOT NULL DEFAULT 'TH',
+  languages_json TEXT NOT NULL,
+  query_config_json TEXT NOT NULL,
+  candidate_artifact_path VARCHAR(1024) NULL,
+  candidate_artifact_sha256 VARCHAR(64) NULL,
+  manifest_path VARCHAR(1024) NULL,
+  manifest_sha256 VARCHAR(64) NULL,
+  candidates_seen INT NOT NULL DEFAULT 0,
+  transcripts_collected INT NOT NULL DEFAULT 0,
+  errors_count INT NOT NULL DEFAULT 0,
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_dataset_collection_runs_run_key (run_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS dataset_contents (
   dataset_id INT AUTO_INCREMENT PRIMARY KEY,
   title VARCHAR(255) NOT NULL,
@@ -62,13 +107,134 @@ CREATE TABLE IF NOT EXISTS dataset_contents (
   transcript TEXT NULL,
   category VARCHAR(100) NULL,
   source_platform VARCHAR(50) NOT NULL DEFAULT 'youtube',
+  dataset_source VARCHAR(100) NOT NULL DEFAULT 'legacy',
+  dataset_version VARCHAR(100) NOT NULL DEFAULT 'legacy-v1',
+  collection_run_id INT NULL,
+  source_record_id VARCHAR(255) NULL,
+  source_youtube_id VARCHAR(32) NULL,
+  source_creator VARCHAR(255) NULL,
+  source_channel_id VARCHAR(64) NULL,
+  source_category VARCHAR(100) NULL,
+  source_subcategory VARCHAR(100) NULL,
+  collection_query VARCHAR(255) NULL,
+  source_release_url VARCHAR(1024) NULL,
+  source_archive_sha256 VARCHAR(64) NULL,
+  source_annotation_path VARCHAR(1024) NULL,
+  source_annotation_sha256 VARCHAR(64) NULL,
+  import_batch_id VARCHAR(64) NULL,
+  taxonomy_version VARCHAR(50) NOT NULL DEFAULT 'legacy-v1',
+  taxonomy_leaf_key VARCHAR(100) NULL,
+  category_level_1 VARCHAR(150) NULL,
+  category_level_2 VARCHAR(150) NULL,
+  category_level_3 VARCHAR(150) NULL,
+  language VARCHAR(20) NOT NULL DEFAULT 'und',
+  verification_status VARCHAR(30) NOT NULL DEFAULT 'unverified',
+  label_source VARCHAR(100) NOT NULL DEFAULT 'unverified',
+  license_name VARCHAR(100) NOT NULL DEFAULT 'unknown',
+  license_url VARCHAR(1024) NULL,
+  data_split VARCHAR(20) NOT NULL DEFAULT 'unassigned',
+  split_strategy VARCHAR(100) NULL,
+  creator_group_key VARCHAR(64) NULL,
+  transcript_sha256 VARCHAR(64) NULL,
+  transcript_segment_count INT NOT NULL DEFAULT 0,
+  transcript_start_seconds FLOAT NULL,
+  transcript_end_seconds FLOAT NULL,
+  transcript_window_seconds INT NULL,
+  transcript_source VARCHAR(50) NULL,
+  caption_type VARCHAR(50) NULL,
+  transcript_quality VARCHAR(30) NULL,
+  reviewed_by VARCHAR(255) NULL,
+  reviewed_at DATETIME NULL,
+  review_notes TEXT NULL,
+  statistics_captured_at DATETIME NULL,
+  license_verified_at DATETIME NULL,
+  raw_metadata_json TEXT NULL,
+  is_training_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
   views INT NOT NULL DEFAULT 0,
   likes INT NOT NULL DEFAULT 0,
   comments INT NOT NULL DEFAULT 0,
   trend_score FLOAT NOT NULL DEFAULT 0,
   duration_seconds INT NULL,
   published_at DATETIME NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_dataset_source_version_record (dataset_source, dataset_version, source_record_id),
+  UNIQUE KEY uq_dataset_source_youtube_id (source_youtube_id),
+  UNIQUE KEY uq_dataset_transcript_sha256 (transcript_sha256),
+  INDEX ix_dataset_contents_taxonomy_leaf_key (taxonomy_leaf_key),
+  INDEX ix_dataset_contents_creator_group_key (creator_group_key),
+  INDEX ix_dataset_contents_source_channel_id (source_channel_id),
+  INDEX ix_dataset_contents_collection_run_id (collection_run_id),
+  INDEX ix_dataset_taxonomy_leaf (taxonomy_version, taxonomy_leaf_key),
+  INDEX ix_dataset_training_eligibility (is_training_eligible, data_split, taxonomy_leaf_key),
+  CONSTRAINT fk_dataset_contents_collection_run
+    FOREIGN KEY (collection_run_id) REFERENCES dataset_collection_runs(collection_run_id)
+    ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS dataset_review_events (
+  review_event_id INT AUTO_INCREMENT PRIMARY KEY,
+  collection_run_id INT NOT NULL,
+  dataset_id INT NULL,
+  source_youtube_id VARCHAR(32) NOT NULL,
+  decision VARCHAR(20) NOT NULL,
+  proposed_leaf_key VARCHAR(100) NULL,
+  reviewed_leaf_key VARCHAR(100) NULL,
+  transcript_quality VARCHAR(30) NULL,
+  reviewer VARCHAR(255) NOT NULL,
+  notes TEXT NULL,
+  review_artifact_sha256 VARCHAR(64) NOT NULL,
+  reviewed_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX ix_dataset_review_events_collection_run_id (collection_run_id),
+  INDEX ix_dataset_review_events_dataset_id (dataset_id),
+  INDEX ix_dataset_review_source_video (source_youtube_id, reviewed_at),
+  CONSTRAINT fk_dataset_review_events_collection_run
+    FOREIGN KEY (collection_run_id) REFERENCES dataset_collection_runs(collection_run_id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_dataset_review_events_dataset
+    FOREIGN KEY (dataset_id) REFERENCES dataset_contents(dataset_id)
+    ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS classification_models (
+  model_id INT AUTO_INCREMENT PRIMARY KEY,
+  model_key VARCHAR(100) NOT NULL,
+  model_version VARCHAR(100) NOT NULL,
+  taxonomy_version VARCHAR(50) NOT NULL,
+  model_type VARCHAR(100) NOT NULL,
+  artifact_path VARCHAR(1024) NULL,
+  training_dataset_source VARCHAR(100) NULL,
+  training_dataset_version VARCHAR(100) NULL,
+  training_sample_count INT NOT NULL DEFAULT 0,
+  status VARCHAR(30) NOT NULL DEFAULT 'draft',
+  is_active BOOLEAN NOT NULL DEFAULT FALSE,
+  trained_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_classification_model_key_version (model_key, model_version),
+  INDEX ix_classification_models_active (is_active, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS model_evaluation_metrics (
+  metric_id INT AUTO_INCREMENT PRIMARY KEY,
+  model_id INT NOT NULL,
+  dataset_split VARCHAR(20) NOT NULL DEFAULT 'test',
+  language VARCHAR(20) NOT NULL DEFAULT 'und',
+  taxonomy_level INT NOT NULL,
+  taxonomy_leaf_key VARCHAR(100) NOT NULL DEFAULT '__overall__',
+  metric_name VARCHAR(50) NOT NULL,
+  metric_value FLOAT NOT NULL,
+  sample_size INT NOT NULL DEFAULT 0,
+  details TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_model_evaluation_metric (
+    model_id, dataset_split, language, taxonomy_level, taxonomy_leaf_key, metric_name
+  ),
+  INDEX ix_model_evaluation_metrics_model_id (model_id),
+  CONSTRAINT fk_model_evaluation_metrics_model
+    FOREIGN KEY (model_id) REFERENCES classification_models(model_id)
+    ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS trending_items (
@@ -89,6 +255,14 @@ CREATE TABLE IF NOT EXISTS analysis_results (
   content_id INT NOT NULL,
   cluster_id INT NULL,
   dataset_id INT NULL,
+  classification_model_id INT NULL,
+  taxonomy_version VARCHAR(50) NULL,
+  taxonomy_leaf_key VARCHAR(100) NULL,
+  category_level_1 VARCHAR(150) NULL,
+  category_level_2 VARCHAR(150) NULL,
+  category_level_3 VARCHAR(150) NULL,
+  classification_confidence FLOAT NULL,
+  classification_is_unknown BOOLEAN NOT NULL DEFAULT FALSE,
   summary TEXT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_analysis_results_content
@@ -99,6 +273,9 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     ON DELETE SET NULL,
   CONSTRAINT fk_analysis_results_dataset
     FOREIGN KEY (dataset_id) REFERENCES dataset_contents(dataset_id)
+    ON DELETE SET NULL,
+  CONSTRAINT fk_analysis_results_classification_model
+    FOREIGN KEY (classification_model_id) REFERENCES classification_models(model_id)
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

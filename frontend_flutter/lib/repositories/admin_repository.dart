@@ -2,6 +2,7 @@ import '../models/admin_report.dart';
 import '../models/cluster_run.dart';
 import '../models/common_models.dart';
 import '../models/dataset_item.dart';
+import '../models/dataset_review.dart';
 import '../models/system_log.dart';
 import '../services/api_client.dart';
 
@@ -49,6 +50,51 @@ class AdminRepository {
   ) async {
     final response = await _client.put('/admin/datasets/$datasetId', payload);
     return DatasetItem.fromJson(Map<String, dynamic>.from(response as Map));
+  }
+
+  Future<DatasetReviewQueueResult> listDatasetReviewQueue({
+    required int limit,
+    required int offset,
+    String status = 'pending',
+    String leafKey = 'all',
+    int? collectionRunId,
+    String search = '',
+  }) async {
+    final buffer = StringBuffer(
+      '/admin/dataset-review/queue?limit=$limit&offset=$offset&status=$status',
+    );
+    if (leafKey != 'all') {
+      buffer.write('&leaf_key=${Uri.encodeComponent(leafKey)}');
+    }
+    if (collectionRunId != null) {
+      buffer.write('&collection_run_id=$collectionRunId');
+    }
+    if (search.trim().isNotEmpty) {
+      buffer.write('&search=${Uri.encodeComponent(search.trim())}');
+    }
+    final response = Map<String, dynamic>.from(
+      await _client.get(buffer.toString()) as Map,
+    );
+    return DatasetReviewQueueResult.fromJson(response);
+  }
+
+  Future<void> reviewDatasetCandidate({
+    required DatasetReviewCandidate candidate,
+    required String decision,
+    String? reviewedLeafKey,
+    String? transcriptQuality,
+    String notes = '',
+  }) async {
+    await _client.post(
+      '/admin/dataset-review/runs/${candidate.collectionRunId}'
+      '/candidates/${Uri.encodeComponent(candidate.youtubeId)}',
+      {
+        'decision': decision,
+        'reviewed_leaf_key': reviewedLeafKey,
+        'transcript_quality': transcriptQuality,
+        'notes': notes.trim().isEmpty ? null : notes.trim(),
+      },
+    );
   }
 
   Future<PaginatedResult<ClusterRunSummary>> listClusterRuns({

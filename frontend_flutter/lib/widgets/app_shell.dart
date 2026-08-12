@@ -56,6 +56,13 @@ class AppShell extends StatelessWidget {
               if (isAdmin) const Divider(),
               if (isAdmin)
                 ListTile(
+                  leading: const Icon(Icons.fact_check_outlined),
+                  title: const Text('Dataset Review'),
+                  selected: currentRoute == '/admin-dataset-review',
+                  onTap: () => _navigate(context, '/admin-dataset-review'),
+                ),
+              if (isAdmin)
+                ListTile(
                   leading: const Icon(Icons.admin_panel_settings_outlined),
                   title: const Text('Admin Console'),
                   selected: currentRoute == '/admin-console',

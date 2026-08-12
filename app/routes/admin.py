@@ -91,7 +91,10 @@ def admin_dataset_create(
     current_user: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
-    item = create_admin_dataset(db, payload=payload, user_id=current_user.user_id)
+    try:
+        item = create_admin_dataset(db, payload=payload, user_id=current_user.user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return AdminDatasetItem.model_validate(item, from_attributes=True)
 
 
@@ -102,12 +105,15 @@ def admin_dataset_update(
     current_user: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
-    item = update_admin_dataset(
-        db,
-        dataset_id=dataset_id,
-        payload=payload,
-        user_id=current_user.user_id,
-    )
+    try:
+        item = update_admin_dataset(
+            db,
+            dataset_id=dataset_id,
+            payload=payload,
+            user_id=current_user.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return AdminDatasetItem.model_validate(item, from_attributes=True)

@@ -18,8 +18,23 @@ from .clustering import (
     KMeansRequest,
     KMeansResponse,
 )
+from .classification import (
+    ClassificationCandidate,
+    ClassificationRequest,
+    ClassificationResponse,
+    TaxonomyLeafCoverageItem,
+    TaxonomyNodeItem,
+    TaxonomyResponse,
+)
 from .contents import UserContentDetailResponse, UserContentHistoryItem, UserContentHistoryResponse
 from .datasets import DatasetContentItem, DatasetListResponse
+from .dataset_review import (
+    DatasetReviewCandidateItem,
+    DatasetReviewDecisionRequest,
+    DatasetReviewDecisionResponse,
+    DatasetReviewQueueResponse,
+    DatasetReviewRunItem,
+)
 from .dashboard import (
     CategoryDistributionItem,
     ClusterDistributionItem,
@@ -59,6 +74,9 @@ __all__ = [
     "AdminSystemLogItem",
     "AdminSystemLogListResponse",
     "CategoryDistributionItem",
+    "ClassificationCandidate",
+    "ClassificationRequest",
+    "ClassificationResponse",
     "ClusterAssignment",
     "ClusterDistributionItem",
     "ClusterSummary",
@@ -67,6 +85,11 @@ __all__ = [
     "UserContentHistoryItem",
     "UserContentHistoryResponse",
     "DatasetContentItem",
+    "DatasetReviewCandidateItem",
+    "DatasetReviewDecisionRequest",
+    "DatasetReviewDecisionResponse",
+    "DatasetReviewQueueResponse",
+    "DatasetReviewRunItem",
     "DatasetKMeansRequest",
     "DatasetKMeansResponse",
     "DatasetListResponse",
@@ -99,6 +122,9 @@ __all__ = [
     "RegisterRequest",
     "SourceActivityItem",
     "TermCount",
+    "TaxonomyLeafCoverageItem",
+    "TaxonomyNodeItem",
+    "TaxonomyResponse",
     "TokenResponse",
     "TrendSyncResponse",
     "UserResponse",

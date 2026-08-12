@@ -1,349 +1,200 @@
-# Content Trend Analysis API Reference
+# Content AI API
 
-เอกสารนี้เป็น API reference สั้น ๆ สำหรับ backend ของระบบวิเคราะห์แนวโน้มคอนเทนต์
+Base URL สำหรับ local development: `http://127.0.0.1:8000`
+
+เปิดเอกสาร OpenAPI แบบ interactive ได้ที่:
+
+- Swagger UI: `/docs`
+- ReDoc: `/redoc`
+- OpenAPI JSON: `/openapi.json`
+
+Endpoint ที่ระบุว่าต้อง login ใช้ header:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+## Health
+
+### `GET /`
+
+สถานะย่อของ backend, database migration และ taxonomy
+
+### `GET /health`
+
+ตรวจ database, Faster Whisper model และสถานะ live trend providers
 
 ## Authentication
 
-ทุก endpoint ที่ต้องการสิทธิ์ใช้งานต้องส่ง header:
+- `POST /auth/register`: สมัครสมาชิก
+- `POST /auth/login`: เข้าสู่ระบบและสร้าง trend watch session baseline
+- `POST /auth/logout`: ปิด login session
+- `GET /auth/me`: ข้อมูลผู้ใช้ปัจจุบัน
 
-    Authorization: Bearer <access_token>
+## Analyze Clip
 
-สำหรับแอดมินให้ใช้:
+### `POST /analyze`
 
-    Authorization: Bearer <admin_token>
+รับ multipart video ความยาวไม่เกิน 300 วินาที แล้วคืน `job_id`
 
+```json
+{
+  "job_id": "...",
+  "status": "queued"
+}
+```
 
-ทุก endpoint ที่ต้องการสิทธิ์ใช้งานต้องส่ง header:
+### `GET /jobs/{job_id}`
 
-    Authorization: Bearer <access_token>
+Frontend polling endpoint สถานะหลักคือ `queued`, `running`, `completed`, `failed`
+พร้อม `stage`, `progress`, `message` และ `result` เมื่อเสร็จ
 
-### POST /auth/register
-ลงทะเบียนผู้ใช้งานใหม่
+### `POST /analyze/save`
 
-Request (JSON):
+วิเคราะห์และบันทึกผลลง My Ideas ตาม workflow ที่รองรับใน frontend
 
-    {
-      "username": "creator_demo",
-      "email": "creator_demo@example.com",
-      "password": "password123"
-    }
+## Classification And Recommendation
 
-Admin registration:
+### `GET /classification/taxonomy`
 
-    {
-      "username": "admin_demo",
-      "email": "admin_demo@example.com",
-      "password": "password123",
-      "role": "admin",
-      "admin_invite_code": "<ADMIN_INVITE_CODE>"
-    }
+คืนโครงสร้าง `content-taxonomy-v1`, readiness และ sample coverage ของ 12 leaf categories
+หนึ่ง leaf พร้อมใช้เมื่อมี YouTube Creative Commons transcripts ที่ผ่าน human review อย่างน้อย
+30 แถวตาม production eligibility contract
 
-Response:
+### `POST /classification/text`
 
-    {
-      "user_id": 1,
-      "username": "creator_demo",
-      "email": "creator_demo@example.com",
-      "role": "user",
-      "is_active": true,
-      "created_at": "2026-07-28T12:34:56"
-    }
+จำแนกข้อความเป็น Level 1 > Level 2 > Level 3 หากหมวดยังไม่พร้อมหรือความมั่นใจต่ำ
+ระบบคืน `Unknown/Other`
 
-### POST /auth/login
-ล็อกอินรับ JWT token
+### `GET /recommendation/profiles`
 
-Request (JSON):
+ดู recommendation profiles ของหมวดที่พร้อม
 
-    {
-      "email": "creator_demo@example.com",
-      "password": "password123"
-    }
+### `POST /recommendation/from-text`
 
-Response:
+สกัด user keywords, keyword gap, hook keywords และ recommended duration
+Evidence ใช้เฉพาะ human-reviewed YouTube CC rows ใน leaf เดียวกัน
 
-    {
-      "access_token": "<jwt-token>",
-      "token_type": "bearer",
-      "user": { ... }
-    }
+### `GET /recommendation/from-content/{content_id}`
 
-### GET /auth/me
-ดูข้อมูลผู้ใช้งานปัจจุบัน
+สร้างคำแนะนำจากคลิปที่ผู้ใช้บันทึกไว้
 
-Headers: Authorization ต้องมี
+### `GET /recommendation/admin/report`
 
-Response fields: user_id, username, email, role, is_active, created_at
+รายงาน dataset/profile health สำหรับ Admin
 
-## Upload / Analysis
+## Dataset
 
-### POST /analyze
-อัปโหลดวิดีโอแล้วกลับผลวิเคราะห์ + recommendation โดยไม่บันทึก
+- `GET /datasets/youtube`: ดูข้อมูล YouTube ที่บันทึก
+- `GET /datasets/google`: ดูข้อมูล Google ที่บันทึก
+- `GET /admin/datasets`: Admin ดูและค้นหา dataset
+- `POST /admin/datasets`: Admin เพิ่มแถวทั่วไป
+- `PUT /admin/datasets/{dataset_id}`: Admin อัปเดตแถว
 
-Form data:
+การเพิ่มแถวผ่าน Admin ไม่ทำให้เป็น training data อัตโนมัติ Production training row ต้องผ่าน
+YouTube CC review importer และกติกาใน `app/services/dataset_eligibility.py`
 
-    file: <video file>
+## Dashboard And Trends
 
-Response fields:
+- `GET /dashboard/overview`: สรุป dashboard
+- `GET /dashboard/summary`: สถิติภาพรวม
+- `GET /dashboard/live-trends/snapshot`: snapshot ล่าสุดจาก DB/cache
+- `POST /dashboard/refresh`: ขอ refresh trend job
+- `GET /dashboard/emerging-topics`: หัวข้อที่กำลังเกิดใหม่
+- `GET /trends/youtube`: YouTube trends
+- `GET /trends/google`: Google trends
+- `GET /trends/tiktok`: TikTok trends
+- `POST /trends/{platform}/sync`: Admin sync provider
 
-    transcript, analysis, recommendation
+Live snapshot endpoint ไม่ดึงอินเทอร์เน็ตระหว่าง request และคืน partial result เมื่อ provider บางตัวล้ม
 
-### POST /analyze/save
-อัปโหลดวิดีโอ วิเคราะห์ recommendation และบันทึกผลลงฐานข้อมูล
+## Notifications
 
-Form data:
+- `GET /notifications/`: รายการ `new_live_trend` ของ session ปัจจุบัน
+- `POST /notifications/mark_read`: ทำเครื่องหมายว่าอ่านแล้ว
 
-    file: <video file>
+Login snapshot แรกเป็น baseline โดยไม่แจ้งเตือน รอบถัดไปสร้าง notification เฉพาะ trend key ใหม่
+และ unique ต่อ user/watch session
 
-Response fields:
+## Followed Topics
 
-    content_id, saved_keywords, recommended_keywords, recommended_duration,
-    recommendation, analysis, nlp_result
+- `POST /follows/topic`: ติดตามหัวข้อ
+- `GET /follows/topics`: ดูหัวข้อที่ติดตาม
+- `DELETE /follows/topic/{id}`: ยกเลิกติดตาม
 
-## User Content / My Ideas
+Followed topics เป็น feature แยก ไม่ใช่ core notification trigger
 
-### GET /contents/my
-ดึงประวัติการวิเคราะห์ของผู้ใช้งาน
+## User Content
 
-Query:
-
-    limit, offset
-
-Response fields:
-
-    total, items
-
-### GET /contents/{content_id}
-ดูรายละเอียดรายการวิดีโอที่บันทึกไว้
-
-Response fields:
-
-    content_id, title, created_at, video_url, transcript, analysis, nlp_result, recommendation
-
-## Recommendation
-
-### POST /recommendations/from-text
-สร้าง recommendation จากข้อความ / ชื่อเรื่อง
-
-Request (JSON):
-
-    {
-      "title": "รีวิวมือถือใหม่",
-      "text": "รีวิวมือถือใหม่ ฟีเจอร์กล้องชัด แบตอึด",
-      "source": "youtube",
-      "profile_limit": 150
-    }
-
-### GET /recommendations/from-content/{content_id}
-สร้าง recommendation จากเนื้อหาที่บันทึกไว้
-
-Query:
-
-    source=youtube|google
-    profile_limit=10-500
-
-### GET /recommendations/profiles
-ดึงโปรไฟล์โดเมนจาก dataset
-
-Query:
-
-    source=youtube|google
-    limit=10-500
-
-### GET /recommendations/profiles/compare
-เปรียบเทียบโปรไฟล์ระหว่างสองแหล่งข้อมูล
-
-Query:
-
-    left_source=youtube|google
-    right_source=youtube|google
-    limit=10-500
-
-### GET /recommendations/admin/report
-รายงาน recommendation profile สำหรับ admin
-
-## Dashboard
-
-### GET /dashboard/overview
-ข้อมูลภาพรวม dashboard
-
-Query:
-
-    region=TH
-    trend_mode=auto|mock|live
-    trend_limit=1-10
-
-Response fields:
-
-    db_status, user_role, metrics, category_distribution,
-    cluster_distribution, top_trends, top_categories, top_keywords,
-    source_distribution, platform_summaries, platform_comparison,
-    priority_topics, emerging_topics, priority_items,
-    youtube_trends, google_trends, tiktok_trends
-
-### GET /dashboard/emerging-topics
-แสดงเทรนด์ priority และ emerging topics
-
-Query:
-
-    region, trend_mode, trend_limit
-
-Response fields:
-
-    priority_items, emerging_topics, youtube_trends, google_trends, tiktok_trends
-
-## Trends
-
-### GET /trends/youtube
-รับรายการเทรนด์ YouTube
-
-Query:
-
-    limit, region, mode=auto|mock|live
-
-### GET /trends/youtube/categories
-รับหมวดหมู่ YouTube ที่รองรับ
-
-### POST /trends/youtube/sync
-ซิงก์เทรนด์ YouTube ลง dataset (admin)
-
-### GET /trends/google
-รับรายการเทรนด์ Google
-
-Query:
-
-    limit, region, mode=auto|mock|live
-
-### POST /trends/google/sync
-ซิงก์เทรนด์ Google ลง dataset (admin)
-
-### GET /trends/tiktok
-รับรายการเทรนด์ TikTok
-
-Query:
-
-    limit, region, mode=auto|mock|live
-
-### POST /trends/tiktok/sync
-ซิงก์เทรนด์ TikTok ลง dataset (admin)
-
-## Follows / Notifications
-
-### POST /follows/topic
-ติดตามคำสำคัญหรือหมวดหมู่ใหม่
-
-Request (JSON):
-
-    {
-      "match_type": "keyword",
-      "value": "รีวิว"
-    }
-
-### GET /follows/topics
-ดูรายการหัวข้อที่ติดตาม
-
-### DELETE /follows/topic/{id}
-ยกเลิกการติดตามหัวข้อ
-
-### GET /notifications/
-ดึงการแจ้งเตือนของผู้ใช้งาน
-
-Query:
-
-    unread_only, limit, offset
-
-### POST /notifications/mark_read
-ทำเครื่องหมายการแจ้งเตือนว่าอ่านแล้ว
-
-Request (JSON):
-
-    {
-      "ids": [1, 2, 3]
-    }
-
-### POST /notifications/create_for_user
-สร้าง notification ด้วย admin helper
-
-## Classification / Clustering / NLP / Datasets
-
-### POST /classification/text
-จำแนกโดเมนจากข้อความ
-
-### POST /clustering/kmeans
-### POST /clustering/hdbscan
-### POST /clustering/kmeans/save
-### POST /clustering/hdbscan/save
-### POST /clustering/from-dataset
-
-### POST /nlp/extract
-### POST /nlp/extract/save
-
-### GET /datasets/youtube
-### GET /datasets/google
+- `GET /contents/my`: ประวัติการวิเคราะห์และ My Ideas
+- `GET /contents/{content_id}`: รายละเอียดผลที่บันทึก
+
+## NLP And Clustering
+
+- `POST /nlp/extract`
+- `POST /nlp/extract/save`
+- `POST /clustering/kmeans`
+- `POST /clustering/hdbscan`
+- `POST /clustering/kmeans/save`
+- `POST /clustering/hdbscan/save`
+- `POST /clustering/from-dataset`
 
 ## Admin
 
-### GET /admin/me
-ดูข้อมูล admin ปัจจุบัน
+### Dataset Review Queue
 
-### GET /admin/datasets
-ดู dataset content ที่อยู่ในระบบ
+```http
+GET /admin/dataset-review/queue?status=pending&limit=12&offset=0
+Authorization: Bearer <admin-token>
+```
 
-### GET /admin/clusters/runs
-ดูรายการการรัน clustering
+ตัวกรองที่รองรับ: `status`, `leaf_key`, `collection_run_id` และ `search` ผลลัพธ์มี
+candidate transcript, automated checks, taxonomy coverage และสถานะ review ของแต่ละรายการ
 
-### GET /admin/clusters/runs/{run_id}
-ดูรายละเอียดการรัน clustering
+### Review Dataset Candidate
 
-### GET /admin/logs
-ดู system log
+```http
+POST /admin/dataset-review/runs/{collection_run_id}/candidates/{source_youtube_id}
+Authorization: Bearer <admin-token>
+Content-Type: application/json
 
-### GET /admin/reports/overview
-ดูรายงานภาพรวม admin
+{
+  "decision": "approve",
+  "reviewed_leaf_key": "phone",
+  "transcript_quality": "good",
+  "notes": "Video and transcript match the selected category."
+}
+```
 
-### GET /admin/settings
-ดึงค่า configuration ปัจจุบัน
+เมื่อ Approve ระบบ import แถวเข้า production dataset ทันที ส่วน Reject จะเก็บ audit event
+โดยไม่สร้าง training row ชื่อผู้ตรวจและเวลามาจาก Admin login session ฝั่ง Backend
 
-### PUT /admin/settings
-แก้ไขค่า configuration
+- `GET /admin/me`
+- `GET /admin/logs`
+- `GET /admin/clusters/runs`
+- `GET /admin/clusters/runs/{run_id}`
+- `GET /admin/reports/overview`
+- `GET /admin/settings`
+- `PUT /admin/settings`
+- `POST /admin/settings/validate`
+- `POST /admin/settings/reset`
+- `GET /admin/statistics`
+- `GET /admin/sources`
+- `PUT /admin/sources/{source_name}`
+- `POST /admin/scan/youtube`
+- `POST /admin/scan/google`
+- `POST /admin/scan/tiktok`
 
-Request (JSON):
+## Error Format
 
-    {
-      "max_keywords_display": 15,
-      "hook_analysis_duration": 90,
-      "analysis_time_range_days": 120,
-      "youtube_region": "TH",
-      "google_region": "TH",
-      "tiktok_region": "TH",
-      "enable_youtube_trending": true,
-      "enable_google_trends": true,
-      "enable_tiktok_trending": true,
-      "auto_scan_interval_hours": 6
-    }
+FastAPI validation และ application errors ใช้ HTTP status ที่เหมาะสม เช่น 401, 403, 404,
+422 และ 500 โดยรายละเอียดอยู่ใน `detail`
 
-### POST /admin/settings/validate
-ตรวจสอบ config ก่อนบันทึก
+```json
+{
+  "detail": "Explanation"
+}
+```
 
-### POST /admin/settings/reset?confirm=true
-ตั้งค่ากลับเป็นค่าเริ่มต้น
-
-### GET /admin/statistics
-สถิติ admin dashboard
-
-### POST /admin/settings/backup
-สำรอง config เป็น JSON
-
-### POST /admin/settings/restore?confirm=true
-กู้ config จาก backup
-
-### POST /admin/settings/audit-log
-ดู audit log การเปลี่ยนแปลง config
-
-### POST /admin/health
-ตรวจสอบสุขภาพระบบ
-
-### POST /admin/scan/youtube
-### POST /admin/scan/google
-### POST /admin/scan/tiktok
-
-สรุป: เอกสารนี้เป็น reference ครบทุก endpoint ที่มีใน backend และใช้ `Authorization: Bearer <token>` สำหรับ route ที่ป้องกันด้วย JWT.
+Live trends เป็นข้อยกเว้นด้าน availability: provider บางตัวล้มได้โดย endpoint snapshot ยังตอบ 200
+และระบุสถานะราย provider ใน payload

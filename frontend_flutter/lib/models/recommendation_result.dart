@@ -52,6 +52,14 @@ class ClassificationResult {
     required this.ruleDomain,
     required this.source,
     required this.candidates,
+    required this.taxonomyVersion,
+    required this.taxonomyLeafKey,
+    required this.categoryLevel1,
+    required this.categoryLevel2,
+    required this.categoryLevel3,
+    required this.isUnknown,
+    required this.taxonomyReady,
+    required this.warning,
   });
 
   final String domain;
@@ -59,6 +67,24 @@ class ClassificationResult {
   final String ruleDomain;
   final String source;
   final List<ClassificationCandidate> candidates;
+  final String taxonomyVersion;
+  final String taxonomyLeafKey;
+  final String categoryLevel1;
+  final String categoryLevel2;
+  final String categoryLevel3;
+  final bool isUnknown;
+  final bool taxonomyReady;
+  final String warning;
+
+  String get displayCategory {
+    if (isUnknown) return 'Unknown/Other';
+    final levels = <String>[
+      categoryLevel1,
+      categoryLevel2,
+      categoryLevel3,
+    ].where((value) => value.trim().isNotEmpty).toList();
+    return levels.isEmpty ? domain : levels.join(' > ');
+  }
 
   factory ClassificationResult.fromJson(Map<String, dynamic> json) {
     return ClassificationResult(
@@ -66,6 +92,14 @@ class ClassificationResult {
       confidence: (json['confidence'] as num?)?.toDouble() ?? 0,
       ruleDomain: json['rule_domain']?.toString() ?? '-',
       source: json['source']?.toString() ?? 'youtube',
+      taxonomyVersion: json['taxonomy_version']?.toString() ?? 'legacy-v1',
+      taxonomyLeafKey: json['taxonomy_leaf_key']?.toString() ?? 'unknown',
+      categoryLevel1: json['category_level_1']?.toString() ?? '',
+      categoryLevel2: json['category_level_2']?.toString() ?? '',
+      categoryLevel3: json['category_level_3']?.toString() ?? '',
+      isUnknown: json['is_unknown'] == true,
+      taxonomyReady: json['taxonomy_ready'] == true,
+      warning: json['warning']?.toString() ?? '',
       candidates: (json['candidates'] as List<dynamic>? ?? const [])
           .map((item) => ClassificationCandidate.fromJson(
               Map<String, dynamic>.from(item as Map)))
@@ -245,9 +279,18 @@ class DatasetProfile {
 class RecommendationEvidence {
   const RecommendationEvidence({
     required this.source,
+    required this.datasetSources,
+    required this.datasetVersions,
+    required this.sourceRecordIds,
     required this.dataSourceLabel,
     required this.datasetSampleSize,
+    required this.eligiblePoolSize,
     required this.sourcePlatformCounts,
+    required this.transcriptSourceCounts,
+    required this.languageCounts,
+    required this.selectionRule,
+    required this.licenseName,
+    required this.verificationStatus,
     required this.durationSource,
     required this.durationSampleSize,
     required this.durationSamples,
@@ -261,9 +304,18 @@ class RecommendationEvidence {
   });
 
   final String source;
+  final List<String> datasetSources;
+  final List<String> datasetVersions;
+  final List<String> sourceRecordIds;
   final String dataSourceLabel;
   final int datasetSampleSize;
+  final int eligiblePoolSize;
   final Map<String, int> sourcePlatformCounts;
+  final Map<String, int> transcriptSourceCounts;
+  final Map<String, int> languageCounts;
+  final String selectionRule;
+  final String licenseName;
+  final String verificationStatus;
   final String durationSource;
   final int durationSampleSize;
   final List<int> durationSamples;
@@ -277,16 +329,45 @@ class RecommendationEvidence {
 
   factory RecommendationEvidence.fromJson(Map<String, dynamic> json) {
     final rawCounts = json['source_platform_counts'];
+    final rawTranscriptCounts = json['transcript_source_counts'];
+    final rawLanguageCounts = json['language_counts'];
     return RecommendationEvidence(
       source: json['source']?.toString() ?? '-',
+      datasetSources: (json['dataset_sources'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      datasetVersions: (json['dataset_versions'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
+      sourceRecordIds: (json['source_record_ids'] as List<dynamic>? ?? const [])
+          .map((item) => item.toString())
+          .toList(),
       dataSourceLabel: json['data_source_label']?.toString() ?? '-',
       datasetSampleSize: (json['dataset_sample_size'] as num?)?.toInt() ?? 0,
+      eligiblePoolSize: (json['eligible_pool_size'] as num?)?.toInt() ??
+          (json['dataset_sample_size'] as num?)?.toInt() ??
+          0,
       sourcePlatformCounts: rawCounts is Map
           ? rawCounts.map(
               (key, value) =>
                   MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
             )
           : const {},
+      transcriptSourceCounts: rawTranscriptCounts is Map
+          ? rawTranscriptCounts.map(
+              (key, value) =>
+                  MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+            )
+          : const {},
+      languageCounts: rawLanguageCounts is Map
+          ? rawLanguageCounts.map(
+              (key, value) =>
+                  MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+            )
+          : const {},
+      selectionRule: json['selection_rule']?.toString() ?? 'none',
+      licenseName: json['license_name']?.toString() ?? '',
+      verificationStatus: json['verification_status']?.toString() ?? '',
       durationSource: json['duration_source']?.toString() ?? '-',
       durationSampleSize: (json['duration_sample_size'] as num?)?.toInt() ?? 0,
       durationSamples: (json['duration_samples'] as List<dynamic>? ?? const [])

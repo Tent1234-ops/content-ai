@@ -1,18 +1,17 @@
 from __future__ import annotations
 
+import math
 import re
-import time
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
 from statistics import median
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent, UserContent
 from app.services.admin_settings import get_admin_config
 from app.services.classification import classify_text_domain
+from app.services.dataset_eligibility import production_transcript_query
 from app.services.nlp import filter_tokens, normalize_text_for_nlp, run_nlp_pipeline, tokenize_text
 from app.services.pipeline.core import (
     build_comparison_profile,
@@ -26,10 +25,14 @@ from app.services.pipeline.domain_rules import (
     DOMAIN_BASE,
     DOMAIN_DIMENSIONS_ORDER,
     DOMAIN_HINTS,
-    category_query_values,
     detect_domain,
     infer_domain_from_features,
     normalize_domain,
+)
+from app.services.taxonomy import (
+    UNKNOWN_LEAF_KEY,
+    normalize_taxonomy_leaf,
+    ready_leaf_keys,
 )
 
 DEFAULT_DURATION_BY_DOMAIN = {
@@ -41,6 +44,33 @@ DEFAULT_DURATION_BY_DOMAIN = {
     "mouse": 60,
     "skincare": 75,
     "general": 60,
+    "phone": 90,
+    "camera": 75,
+    "laptop": 90,
+    "headphone": 75,
+    "hardware": 90,
+    "general_food": 45,
+    "drink": 45,
+    "makeup": 60,
+    "grooming": 60,
+    "shirt": 60,
+    "shoes": 60,
+    "unknown": 60,
+}
+
+KEYWORD_DOMAIN_BY_TAXONOMY_LEAF = {
+    "phone": "smartphone",
+    "camera": "general",
+    "laptop": "general",
+    "audio": "audio",
+    "headphone": "audio",
+    "hardware": "general",
+    "general_food": "food_drink",
+    "drink": "food_drink",
+    "makeup": "general",
+    "grooming": "general",
+    "shirt": "fashion",
+    "shoes": "fashion",
 }
 
 GENERIC_RECOMMENDATION_BLACKLIST = {
@@ -57,8 +87,8 @@ GENERIC_RECOMMENDATION_BLACKLIST = {
     "best",
 }
 
-PROFILE_CACHE_TTL_SECONDS = 300
-_PROFILE_CACHE: Dict[Tuple[object, ...], Tuple[float, List[Dict[str, object]]]] = {}
+def _keyword_domain(leaf_key: str) -> str:
+    return KEYWORD_DOMAIN_BY_TAXONOMY_LEAF.get(leaf_key, "general")
 
 
 def _normalize_keyword(keyword: str) -> str:
@@ -257,11 +287,23 @@ def _duration_summary(durations: List[int], domain: str) -> Dict[str, object]:
     }
 
 
-def _source_label(source_prefix: str, sample_size: int) -> str:
+def _source_label(
+    source_prefix: str,
+    sample_size: int,
+    eligible_pool_size: int = 0,
+) -> str:
     if sample_size <= 0:
-        return f"{source_prefix} dataset: no same-type samples found; using fallback rules"
+        return "No eligible verified transcript samples found for this taxonomy leaf"
     if source_prefix == "youtube":
-        return f"YouTube high-engagement dataset ({sample_size} same-type clips)"
+        pool_label = (
+            f" from {eligible_pool_size} eligible same-category clips"
+            if eligible_pool_size > sample_size
+            else ""
+        )
+        return (
+            "Human-reviewed YouTube Creative Commons transcripts "
+            f"({sample_size} high-performing clips{pool_label})"
+        )
     if source_prefix == "google":
         return f"Google Trends dataset ({sample_size} same-type items)"
     if source_prefix == "tiktok":
@@ -274,23 +316,39 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
     if not isinstance(duration, dict):
         duration = {}
     sample_size = int(profile.get("sample_size") or 0)
+    eligible_pool_size = int(profile.get("eligible_pool_size") or sample_size)
     duration_sample_size = int(duration.get("sample_size") or 0)
     duration_source = str(duration.get("source") or "default")
     return {
-        "source": source_prefix,
-        "data_source_label": _source_label(source_prefix, sample_size),
+        "source": profile.get("source") or source_prefix,
+        "dataset_sources": profile.get("dataset_sources") or [],
+        "dataset_versions": profile.get("dataset_versions") or [],
+        "data_source_label": _source_label(
+            source_prefix,
+            sample_size,
+            eligible_pool_size,
+        ),
         "dataset_sample_size": sample_size,
+        "eligible_pool_size": eligible_pool_size,
         "source_platform_counts": profile.get("source_platform_counts") or {},
+        "transcript_source_counts": profile.get("transcript_source_counts") or {},
+        "language_counts": profile.get("language_counts") or {},
+        "selection_rule": profile.get("selection_rule") or "none",
+        "license_name": profile.get("license_name") or "",
+        "verification_status": profile.get("verification_status") or "",
         "duration_source": duration_source,
         "duration_sample_size": duration_sample_size,
         "duration_samples": profile.get("duration_samples") or [],
         "exemplar_titles": profile.get("exemplar_titles") or [],
         "dataset_row_ids": profile.get("dataset_row_ids") or [],
+        "source_record_ids": profile.get("source_record_ids") or [],
         "keyword_score_explanation": (
-            "Keyword gap is computed from high-engagement clips in the same classified content type. "
-            "Scores combine keyword frequency with trend and engagement weight."
+            "Keyword gap uses only human-reviewed YouTube Creative Commons transcripts "
+            "in the same taxonomy leaf. High-performing examples are selected from real "
+            "YouTube statistics using average views per day and engagement rate captured "
+            "during collection."
             if sample_size > 0
-            else "No same-type dataset samples were available, so keyword suggestions use domain fallback rules."
+            else "No eligible same-type transcript samples were available; no dataset keyword evidence was generated."
         ),
         "duration_explanation": (
             f"Recommended duration uses {duration_sample_size} same-type duration samples from the {source_prefix} dataset."
@@ -311,122 +369,16 @@ def build_dataset_profiles(
         return []
     if source_prefix == "google" and not admin_config.enable_google_trends:
         return []
-
-    min_date = datetime.utcnow() - timedelta(days=admin_config.analysis_time_range_days)
-    row_count, newest_created_at, max_trend_score = (
-        db.query(
-            func.count(DatasetContent.dataset_id),
-            func.max(DatasetContent.created_at),
-            func.max(DatasetContent.trend_score),
+    profiles = [
+        build_dataset_profile_for_domain(
+            db,
+            domain=leaf_key,
+            source_prefix=source_prefix,
+            limit=limit,
         )
-        .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
-        .filter(DatasetContent.created_at >= min_date)
-        .one()
-    )
-    cache_key = (
-        source_prefix,
-        int(limit),
-        int(row_count or 0),
-        str(newest_created_at or ""),
-        round(float(max_trend_score or 0.0), 3),
-        int(admin_config.analysis_time_range_days),
-        int(admin_config.max_keywords_display),
-        int(admin_config.hook_analysis_duration),
-    )
-    cached = _PROFILE_CACHE.get(cache_key)
-    now = time.monotonic()
-    if cached and now - cached[0] <= PROFILE_CACHE_TTL_SECONDS:
-        return cached[1]
-
-    rows = (
-        db.query(DatasetContent)
-        .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
-        .filter(DatasetContent.created_at >= min_date)
-        .order_by(DatasetContent.trend_score.desc(), DatasetContent.views.desc(), DatasetContent.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-
-    grouped_rows: Dict[str, List[Dict[str, object]]] = defaultdict(list)
-    keyword_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
-    dimension_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
-    hook_scores: Dict[str, Dict[str, float]] = defaultdict(dict)
-    domain_durations: Dict[str, List[int]] = defaultdict(list)
-    source_counts: Dict[str, Counter[str]] = defaultdict(Counter)
-
-    for row in rows:
-        base_text = " ".join(part for part in [row.title or "", row.transcript or "", row.category or ""] if part).strip()
-        if not base_text:
-            continue
-        snapshot = _analyze_dataset_profile_snapshot(
-            base_text,
-            title=row.title,
-            category=row.category,
-            max_keywords=admin_config.max_keywords_display,
-            hook_duration=admin_config.hook_analysis_duration,
-        )
-        domain = str(snapshot["domain"])
-        weight = 1.0 + min(float(row.trend_score or 0.0) / 500000.0, 5.0)
-        grouped_rows[domain].append({"row": row, "snapshot": snapshot, "weight": weight})
-        source_counts[domain][str(row.source_platform or source_prefix)] += 1
-
-        for item in snapshot["nlp_result"].get("top_keywords", []):
-            _weighted_increment(keyword_scores[domain], item["keyword"], weight * float(item["score"]))
-        for item in snapshot["comparison_dimensions"]:
-            _weighted_increment(
-                dimension_scores[domain],
-                item["name"],
-                weight * float(item.get("confidence", 0.0)),
-            )
-        for term in snapshot["hook_terms"]:
-            _weighted_increment(hook_scores[domain], term, weight)
-        if row.duration_seconds:
-            domain_durations[domain].append(int(row.duration_seconds))
-
-    profiles: List[Dict[str, object]] = []
-    for domain, items in grouped_rows.items():
-        if not items:
-            continue
-        raw_top_keywords = [
-            {"keyword": keyword, "score": round(score, 3)}
-            for keyword, score in sorted(keyword_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:20]
-        ]
-        top_keywords = _clean_profile_keywords(raw_top_keywords, domain, max_items=10)
-        if not top_keywords:
-            fallback_keywords = [*DOMAIN_BASE.get(domain, []), *DOMAIN_HINTS.get(domain, [])][:10]
-            top_keywords = [{"keyword": keyword, "score": 0.0} for keyword in fallback_keywords]
-
-        top_dimensions = [
-            {"keyword": name, "score": round(score, 3)}
-            for name, score in sorted(dimension_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:8]
-        ]
-        raw_hook_keywords = [
-            {"keyword": keyword, "score": round(score, 3)}
-            for keyword, score in sorted(hook_scores[domain].items(), key=lambda item: (-item[1], item[0]))[:20]
-        ]
-        hook_keywords = _clean_profile_keywords(raw_hook_keywords, domain, max_items=8)
-        if not hook_keywords:
-            fallback_hooks = [*DOMAIN_HINTS.get(domain, []), *DOMAIN_BASE.get(domain, [])][:8]
-            hook_keywords = [{"keyword": keyword, "score": 0.0} for keyword in fallback_hooks]
-        exemplar_titles = [item["row"].title for item in items[:3]]
-        profiles.append(
-            {
-                "domain": domain,
-                "sample_size": len(items),
-                "top_keywords": top_keywords,
-                "top_dimensions": top_dimensions,
-                "hook_keywords": hook_keywords,
-                "recommended_duration": _duration_summary(domain_durations[domain], domain),
-                "exemplar_titles": exemplar_titles,
-                "source": source_prefix,
-                "source_platform_counts": dict(source_counts[domain]),
-            }
-        )
-
-    profiles.sort(key=lambda item: (item["domain"] == "general", -item["sample_size"], item["domain"]))
-    _PROFILE_CACHE.clear()
-    _PROFILE_CACHE[cache_key] = (now, profiles)
-    return profiles
+        for leaf_key in sorted(ready_leaf_keys(db))
+    ]
+    return [profile for profile in profiles if int(profile["sample_size"]) > 0]
 
 
 def _platform_key(source_platform: str | None, source_prefix: str) -> str:
@@ -437,6 +389,31 @@ def _platform_key(source_platform: str | None, source_prefix: str) -> str:
     return value or source_prefix
 
 
+def _high_performing_rows(
+    rows: List[DatasetContent],
+    *,
+    limit: int,
+) -> tuple[List[DatasetContent], Dict[int, float]]:
+    if not rows:
+        return [], {}
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            -float(row.trend_score or 0.0),
+            -int(row.views or 0),
+            int(row.dataset_id),
+        ),
+    )
+    selection_size = min(limit, max(10, math.ceil(len(ranked) * 0.4)))
+    selected = ranked[:selection_size]
+    denominator = max(len(selected) - 1, 1)
+    weights = {
+        int(row.dataset_id): 1.0 + 2.0 * (1.0 - (index / denominator))
+        for index, row in enumerate(selected)
+    }
+    return selected, weights
+
+
 def build_dataset_profile_for_domain(
     db: Session,
     *,
@@ -445,32 +422,28 @@ def build_dataset_profile_for_domain(
     limit: int = 150,
 ) -> Dict[str, object]:
     """Build recommendation evidence from the exact canonical category rows used."""
-    canonical_domain = normalize_domain(domain)
+    canonical_domain = normalize_taxonomy_leaf(domain)
+    keyword_domain = _keyword_domain(canonical_domain)
     admin_config = get_admin_config(db)
-    min_date = datetime.utcnow() - timedelta(days=admin_config.analysis_time_range_days)
-    rows = (
-        db.query(DatasetContent)
-        .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
-        .filter(DatasetContent.created_at >= min_date)
-        .filter(
-            func.lower(func.trim(DatasetContent.category)).in_(
-                category_query_values(canonical_domain)
-            )
+    eligible_rows: List[DatasetContent] = []
+    if canonical_domain in ready_leaf_keys(db):
+        eligible_rows = (
+            production_transcript_query(db, train_only=True)
+            .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
+            .filter(DatasetContent.taxonomy_leaf_key == canonical_domain)
+            .order_by(DatasetContent.trend_score.desc(), DatasetContent.dataset_id.asc())
+            .limit(max(limit * 3, 150))
+            .all()
         )
-        .order_by(
-            DatasetContent.trend_score.desc(),
-            DatasetContent.views.desc(),
-            DatasetContent.created_at.desc(),
-        )
-        .limit(limit)
-        .all()
-    )
+    rows, row_weights = _high_performing_rows(eligible_rows, limit=limit)
 
     keyword_scores: Dict[str, float] = {}
     dimension_scores: Dict[str, float] = {}
     hook_scores: Dict[str, float] = {}
     durations: List[int] = []
     platform_counts: Counter[str] = Counter()
+    transcript_source_counts: Counter[str] = Counter()
+    language_counts: Counter[str] = Counter()
 
     for row in rows:
         base_text = " ".join(
@@ -478,10 +451,10 @@ def build_dataset_profile_for_domain(
             for part in [row.title or "", row.transcript or "", row.category or ""]
             if part
         ).strip()
-        weight = 1.0 + min(float(row.trend_score or 0.0) / 500000.0, 5.0)
+        weight = row_weights.get(int(row.dataset_id), 1.0)
         for item in _fast_keyword_items(
             base_text,
-            canonical_domain,
+            keyword_domain,
             admin_config.max_keywords_display,
         ):
             _weighted_increment(
@@ -489,16 +462,18 @@ def build_dataset_profile_for_domain(
                 str(item["keyword"]),
                 weight * float(item["score"]),
             )
-        for name in DOMAIN_DIMENSIONS_ORDER.get(canonical_domain, [])[:8]:
-            if _keyword_is_domain_relevant(name, canonical_domain):
+        for name in DOMAIN_DIMENSIONS_ORDER.get(keyword_domain, [])[:8]:
+            if _keyword_is_domain_relevant(name, keyword_domain):
                 confidence = 1.0 if name.lower() in base_text.lower() else 0.35
                 _weighted_increment(dimension_scores, name, weight * confidence)
         hook_limit = min(12, max(4, int(admin_config.hook_analysis_duration / 15)))
         for term in _fast_dataset_tokens(base_text)[:hook_limit]:
             _weighted_increment(hook_scores, term, weight)
-        if row.duration_seconds and int(row.duration_seconds) > 0:
+        if row.duration_seconds and 0 < int(row.duration_seconds) <= 300:
             durations.append(int(row.duration_seconds))
         platform_counts[_platform_key(row.source_platform, source_prefix)] += 1
+        transcript_source_counts[str(row.transcript_source or "unknown")] += 1
+        language_counts[str(row.language or "und")] += 1
 
     raw_top_keywords = [
         {"keyword": keyword, "score": round(score, 3)}
@@ -508,7 +483,7 @@ def build_dataset_profile_for_domain(
     ]
     top_keywords = _clean_profile_keywords(
         raw_top_keywords,
-        canonical_domain,
+        keyword_domain,
         max_items=10,
     )
     top_dimensions = [
@@ -525,7 +500,7 @@ def build_dataset_profile_for_domain(
     ]
     hook_keywords = _clean_profile_keywords(
         raw_hook_keywords,
-        canonical_domain,
+        keyword_domain,
         max_items=8,
     )
 
@@ -536,6 +511,7 @@ def build_dataset_profile_for_domain(
     return {
         "domain": canonical_domain,
         "sample_size": sample_size,
+        "eligible_pool_size": len(eligible_rows),
         "top_keywords": top_keywords,
         "top_dimensions": top_dimensions,
         "hook_keywords": hook_keywords,
@@ -543,34 +519,55 @@ def build_dataset_profile_for_domain(
         "duration_samples": sorted(durations),
         "exemplar_titles": [str(row.title) for row in rows[:5]],
         "dataset_row_ids": [int(row.dataset_id) for row in rows],
-        "source": source_prefix,
+        "source_record_ids": [str(row.source_record_id) for row in rows],
+        "source": "youtube_cc_human_verified" if rows else "none",
+        "dataset_sources": sorted({str(row.dataset_source) for row in rows}),
+        "dataset_versions": sorted({str(row.dataset_version) for row in rows}),
         "source_platform_counts": dict(platform_counts),
+        "transcript_source_counts": dict(transcript_source_counts),
+        "language_counts": dict(language_counts),
+        "selection_rule": (
+            "top_40_percent_by_average_views_per_day_and_engagement_rate"
+            if rows
+            else "none"
+        ),
+        "license_name": "YouTube Creative Commons Attribution" if rows else "",
+        "verification_status": "human_verified" if rows else "",
     }
 
 
 def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[str, object]:
-    domain = normalize_domain(domain)
+    domain = normalize_taxonomy_leaf(domain)
     for profile in profiles:
         if profile["domain"] == domain:
             return profile
     return {
         "domain": domain,
         "sample_size": 0,
+        "eligible_pool_size": 0,
         "top_keywords": [
             {"keyword": keyword, "score": 0.0}
-            for keyword in DOMAIN_BASE.get(domain, [])[:8]
+            for keyword in DOMAIN_BASE.get(_keyword_domain(domain), [])[:8]
         ],
         "top_dimensions": [
             {"keyword": name, "score": 0.0}
-            for name in DOMAIN_DIMENSIONS_ORDER.get(domain, [])[:8]
+            for name in DOMAIN_DIMENSIONS_ORDER.get(_keyword_domain(domain), [])[:8]
         ],
         "hook_keywords": [],
         "recommended_duration": _duration_summary([], domain),
         "exemplar_titles": [],
         "duration_samples": [],
         "dataset_row_ids": [],
-        "source": "fallback",
+        "source_record_ids": [],
+        "source": "none",
+        "dataset_sources": [],
+        "dataset_versions": [],
         "source_platform_counts": {},
+        "transcript_source_counts": {},
+        "language_counts": {},
+        "selection_rule": "none",
+        "license_name": "",
+        "verification_status": "",
     }
 
 
@@ -597,7 +594,9 @@ def build_recommendation_from_text(
         profile_limit=profile_limit,
     )
     selected_domain = str(user_snapshot["domain"])
-    if float(classification.get("confidence", 0.0)) >= 0.45:
+    if classification.get("is_unknown"):
+        selected_domain = UNKNOWN_LEAF_KEY
+    elif float(classification.get("confidence", 0.0)) >= 0.45:
         selected_domain = str(classification["domain"])
     user_keywords = [item["keyword"] for item in user_snapshot["nlp_result"].get("top_keywords", [])]
     user_keywords.extend(user_snapshot["comparable_keywords"])
@@ -624,7 +623,8 @@ def build_recommendation_from_analysis_data(
     source_prefix: str = "youtube",
     profile_limit: int = 150,
 ) -> Dict[str, object]:
-    domain = normalize_domain(domain)
+    domain = normalize_taxonomy_leaf(domain)
+    keyword_domain = _keyword_domain(domain)
     profile = build_dataset_profile_for_domain(
         db,
         domain=domain,
@@ -652,7 +652,7 @@ def build_recommendation_from_analysis_data(
             continue
         if normalized_term in GENERIC_RECOMMENDATION_BLACKLIST:
             continue
-        if domain != "general" and not _keyword_is_domain_relevant(normalized_term, domain):
+        if keyword_domain != "general" and not _keyword_is_domain_relevant(normalized_term, keyword_domain):
             continue
         seen_hook_terms.add(normalized_term)
         hook_keywords.append({"keyword": term, "score": 0.0})
@@ -779,14 +779,22 @@ def build_recommendation_admin_report(db: Session, *, profile_limit: int = 150) 
     google_profiles = build_dataset_profiles(db, source_prefix="google", limit=profile_limit)
     tiktok_profiles = build_dataset_profiles(db, source_prefix="tiktok", limit=profile_limit)
 
-    total_datasets = db.query(DatasetContent).count()
-    with_duration = db.query(DatasetContent).filter(DatasetContent.duration_seconds.isnot(None)).count()
-    youtube_count = db.query(DatasetContent).filter(DatasetContent.source_platform.like("youtube%")).count()
-    google_count = db.query(DatasetContent).filter(DatasetContent.source_platform.like("google%")).count()
-    tiktok_count = db.query(DatasetContent).filter(DatasetContent.source_platform.like("tiktok%")).count()
+    production_query = production_transcript_query(db)
+    total_datasets = production_query.count()
+    with_duration = production_query.filter(DatasetContent.duration_seconds.isnot(None)).count()
+    youtube_count = production_transcript_query(db).filter(
+        DatasetContent.source_platform.like("youtube%")
+    ).count()
+    google_count = production_transcript_query(db).filter(
+        DatasetContent.source_platform.like("google%")
+    ).count()
+    tiktok_count = production_transcript_query(db).filter(
+        DatasetContent.source_platform.like("tiktok%")
+    ).count()
 
     recent_sources = (
-        db.query(DatasetContent.source_platform)
+        production_transcript_query(db)
+        .with_entities(DatasetContent.source_platform)
         .order_by(DatasetContent.created_at.desc())
         .limit(50)
         .all()

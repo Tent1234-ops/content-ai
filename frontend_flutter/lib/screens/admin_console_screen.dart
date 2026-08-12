@@ -90,9 +90,12 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     });
     try {
       final settings = await _repository.updateSettings({
-        'max_keywords_display': int.tryParse(_maxKeywordsController.text.trim()) ?? 10,
-        'hook_analysis_duration': int.tryParse(_hookDurationController.text.trim()) ?? 60,
-        'auto_scan_interval_hours': int.tryParse(_scanIntervalController.text.trim()) ?? 6,
+        'max_keywords_display':
+            int.tryParse(_maxKeywordsController.text.trim()) ?? 10,
+        'hook_analysis_duration':
+            int.tryParse(_hookDurationController.text.trim()) ?? 60,
+        'auto_scan_interval_hours':
+            int.tryParse(_scanIntervalController.text.trim()) ?? 6,
         'youtube_region': _youtubeRegionController.text.trim().toUpperCase(),
         'google_region': _googleRegionController.text.trim().toUpperCase(),
         'tiktok_region': _tiktokRegionController.text.trim().toUpperCase(),
@@ -139,12 +142,27 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                         spacing: 12,
                         runSpacing: 12,
                         children: [
-                          _AdminMetricCard(title: 'Datasets', value: '${overview.datasetTotal}'),
-                          _AdminMetricCard(title: 'Cluster Runs', value: '${overview.clusterRunTotal}'),
-                          _AdminMetricCard(title: 'Logs', value: '${overview.systemLogTotal}'),
-                          _AdminMetricCard(title: 'YouTube Rows', value: '${datasetHealth?.youtubeDatasetContents ?? 0}'),
-                          _AdminMetricCard(title: 'Google Rows', value: '${datasetHealth?.googleDatasetContents ?? 0}'),
-                          _AdminMetricCard(title: 'TikTok Rows', value: '${datasetHealth?.tiktokDatasetContents ?? 0}'),
+                          _AdminMetricCard(
+                              title: 'Datasets',
+                              value: '${overview.datasetTotal}'),
+                          _AdminMetricCard(
+                              title: 'Cluster Runs',
+                              value: '${overview.clusterRunTotal}'),
+                          _AdminMetricCard(
+                              title: 'Logs',
+                              value: '${overview.systemLogTotal}'),
+                          _AdminMetricCard(
+                              title: 'YouTube Rows',
+                              value:
+                                  '${datasetHealth?.youtubeDatasetContents ?? 0}'),
+                          _AdminMetricCard(
+                              title: 'Google Rows',
+                              value:
+                                  '${datasetHealth?.googleDatasetContents ?? 0}'),
+                          _AdminMetricCard(
+                              title: 'TikTok Rows',
+                              value:
+                                  '${datasetHealth?.tiktokDatasetContents ?? 0}'),
                         ],
                       ),
                       const SizedBox(height: 16),
@@ -162,9 +180,12 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                         enableGoogle: _enableGoogle,
                         enableTiktok: _enableTiktok,
                         saving: _savingSettings,
-                        onEnableYoutubeChanged: (value) => setState(() => _enableYoutube = value),
-                        onEnableGoogleChanged: (value) => setState(() => _enableGoogle = value),
-                        onEnableTiktokChanged: (value) => setState(() => _enableTiktok = value),
+                        onEnableYoutubeChanged: (value) =>
+                            setState(() => _enableYoutube = value),
+                        onEnableGoogleChanged: (value) =>
+                            setState(() => _enableGoogle = value),
+                        onEnableTiktokChanged: (value) =>
+                            setState(() => _enableTiktok = value),
                         onSave: _saveSettings,
                       ),
                       const SizedBox(height: 16),
@@ -191,9 +212,19 @@ class _ManagementCard extends StatelessWidget {
       child: Column(
         children: [
           ListTile(
+            leading: const Icon(Icons.fact_check_outlined),
+            title: const Text('Dataset Review'),
+            subtitle: const Text(
+              'Approve, reject, or relabel real YouTube CC transcript candidates',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.pushNamed(context, '/admin-dataset-review'),
+          ),
+          ListTile(
             leading: const Icon(Icons.storage_outlined),
             title: const Text('Datasets'),
-            subtitle: const Text('View, add, and update YouTube, Google, and TikTok records'),
+            subtitle: const Text(
+                'View, add, and update YouTube, Google, and TikTok records'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.pushNamed(context, '/admin-datasets'),
           ),
@@ -260,41 +291,81 @@ class _SettingsPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Analysis Settings', style: Theme.of(context).textTheme.titleMedium),
+            Text('Analysis Settings',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: TextField(controller: maxKeywordsController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Max keywords'))),
+                Expanded(
+                    child: TextField(
+                        controller: maxKeywordsController,
+                        keyboardType: TextInputType.number,
+                        decoration:
+                            const InputDecoration(labelText: 'Max keywords'))),
                 const SizedBox(width: 10),
-                Expanded(child: TextField(controller: hookDurationController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Hook duration sec'))),
+                Expanded(
+                    child: TextField(
+                        controller: hookDurationController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'Hook duration sec'))),
                 const SizedBox(width: 10),
-                Expanded(child: TextField(controller: scanIntervalController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Scan interval hr'))),
+                Expanded(
+                    child: TextField(
+                        controller: scanIntervalController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'Scan interval hr'))),
               ],
             ),
             const SizedBox(height: 12),
             Row(
               children: [
-                Expanded(child: TextField(controller: youtubeRegionController, decoration: const InputDecoration(labelText: 'YouTube region'))),
+                Expanded(
+                    child: TextField(
+                        controller: youtubeRegionController,
+                        decoration: const InputDecoration(
+                            labelText: 'YouTube region'))),
                 const SizedBox(width: 10),
-                Expanded(child: TextField(controller: googleRegionController, decoration: const InputDecoration(labelText: 'Google region'))),
+                Expanded(
+                    child: TextField(
+                        controller: googleRegionController,
+                        decoration:
+                            const InputDecoration(labelText: 'Google region'))),
                 const SizedBox(width: 10),
-                Expanded(child: TextField(controller: tiktokRegionController, decoration: const InputDecoration(labelText: 'TikTok region'))),
+                Expanded(
+                    child: TextField(
+                        controller: tiktokRegionController,
+                        decoration:
+                            const InputDecoration(labelText: 'TikTok region'))),
               ],
             ),
             const SizedBox(height: 8),
             Wrap(
               spacing: 12,
               children: [
-                FilterChip(label: const Text('YouTube'), selected: enableYoutube, onSelected: onEnableYoutubeChanged),
-                FilterChip(label: const Text('Google'), selected: enableGoogle, onSelected: onEnableGoogleChanged),
-                FilterChip(label: const Text('TikTok'), selected: enableTiktok, onSelected: onEnableTiktokChanged),
+                FilterChip(
+                    label: const Text('YouTube'),
+                    selected: enableYoutube,
+                    onSelected: onEnableYoutubeChanged),
+                FilterChip(
+                    label: const Text('Google'),
+                    selected: enableGoogle,
+                    onSelected: onEnableGoogleChanged),
+                FilterChip(
+                    label: const Text('TikTok'),
+                    selected: enableTiktok,
+                    onSelected: onEnableTiktokChanged),
               ],
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
               onPressed: !hasSettings || saving ? null : onSave,
               icon: saving
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.save_outlined),
               label: Text(saving ? 'Saving...' : 'Save settings'),
             ),
@@ -324,24 +395,40 @@ class _RecommendationCoreCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Recommendation Core', style: Theme.of(context).textTheme.titleMedium),
+            Text('Recommendation Core',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
               'Datasets ${datasetHealth?.totalDatasetContents ?? 0} | duration coverage ${(datasetHealth?.durationCoverageRatio ?? 0).toStringAsFixed(2)}',
             ),
             const SizedBox(height: 12),
-            _DomainBlock(title: 'YouTube domains', domains: profileHealth?.youtubeDomains ?? const []),
-            _DomainBlock(title: 'Google domains', domains: profileHealth?.googleDomains ?? const []),
-            _DomainBlock(title: 'TikTok domains', domains: profileHealth?.tiktokDomains ?? const []),
+            _DomainBlock(
+                title: 'YouTube domains',
+                domains: profileHealth?.youtubeDomains ?? const []),
+            _DomainBlock(
+                title: 'Google domains',
+                domains: profileHealth?.googleDomains ?? const []),
+            _DomainBlock(
+                title: 'TikTok domains',
+                domains: profileHealth?.tiktokDomains ?? const []),
             const SizedBox(height: 12),
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: _ProfilePreview(title: 'YouTube Profiles', profiles: report.youtubeProfiles)),
+                Expanded(
+                    child: _ProfilePreview(
+                        title: 'YouTube Profiles',
+                        profiles: report.youtubeProfiles)),
                 const SizedBox(width: 12),
-                Expanded(child: _ProfilePreview(title: 'Google Profiles', profiles: report.googleProfiles)),
+                Expanded(
+                    child: _ProfilePreview(
+                        title: 'Google Profiles',
+                        profiles: report.googleProfiles)),
                 const SizedBox(width: 12),
-                Expanded(child: _ProfilePreview(title: 'TikTok Profiles', profiles: report.tiktokProfiles)),
+                Expanded(
+                    child: _ProfilePreview(
+                        title: 'TikTok Profiles',
+                        profiles: report.tiktokProfiles)),
               ],
             ),
           ],
@@ -364,7 +451,8 @@ class _VisualSummaryCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Visual Summary', style: Theme.of(context).textTheme.titleMedium),
+            Text('Visual Summary',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             const Text('Top Sources'),
             SimpleBarChart(items: overview.topSources),
@@ -394,7 +482,8 @@ class _ComparisonCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('YouTube / Google / TikTok Comparison', style: Theme.of(context).textTheme.titleMedium),
+            Text('YouTube / Google / TikTok Comparison',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             if (comparisons.isEmpty)
               const Text('No comparable profiles yet')
@@ -404,17 +493,29 @@ class _ComparisonCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(item.domain, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        Text(item.domain,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.bold)),
                         const SizedBox(height: 4),
-                        Text('${_formatSource(item.leftSource)} ${item.leftSampleSize} | ${_formatSource(item.rightSource)} ${item.rightSampleSize}'),
-                        Text('${_formatSource(item.leftSource)} ${item.leftDuration.recommendedRange} | ${_formatSource(item.rightSource)} ${item.rightDuration.recommendedRange}'),
+                        Text(
+                            '${_formatSource(item.leftSource)} ${item.leftSampleSize} | ${_formatSource(item.rightSource)} ${item.rightSampleSize}'),
+                        Text(
+                            '${_formatSource(item.leftSource)} ${item.leftDuration.recommendedRange} | ${_formatSource(item.rightSource)} ${item.rightDuration.recommendedRange}'),
                         const SizedBox(height: 6),
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(child: _KeywordPreview(title: '${_formatSource(item.leftSource)} keywords', keywords: item.leftTopKeywords)),
+                            Expanded(
+                                child: _KeywordPreview(
+                                    title:
+                                        '${_formatSource(item.leftSource)} keywords',
+                                    keywords: item.leftTopKeywords)),
                             const SizedBox(width: 12),
-                            Expanded(child: _KeywordPreview(title: '${_formatSource(item.rightSource)} keywords', keywords: item.rightTopKeywords)),
+                            Expanded(
+                                child: _KeywordPreview(
+                                    title:
+                                        '${_formatSource(item.rightSource)} keywords',
+                                    keywords: item.rightTopKeywords)),
                           ],
                         ),
                       ],
@@ -448,7 +549,8 @@ class _DomainBlock extends StatelessWidget {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: domains.map((domain) => Chip(label: Text(domain))).toList(),
+              children:
+                  domains.map((domain) => Chip(label: Text(domain))).toList(),
             ),
         ],
       ),
@@ -475,7 +577,8 @@ class _ProfilePreview extends StatelessWidget {
         else
           ...visible.map((profile) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
-                child: Text('${profile.domain} | samples ${profile.sampleSize} | ${profile.duration.recommendedRange}'),
+                child: Text(
+                    '${profile.domain} | samples ${profile.sampleSize} | ${profile.duration.recommendedRange}'),
               )),
       ],
     );
@@ -490,7 +593,8 @@ class _KeywordPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final labels = keywords.take(4).map((item) => item.keyword.toString()).toList();
+    final labels =
+        keywords.take(4).map((item) => item.keyword.toString()).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database.models import Cluster, ClusterMembership, ClusterRun, DatasetContent, SystemLog
 from app.schemas.admin_report import AdminDatasetCreate, AdminDatasetUpdate
+from app.services.dataset_eligibility import validate_training_eligibility_values
 from app.services.persistence import log_system_event
 
 
@@ -41,7 +42,9 @@ def create_admin_dataset(
     payload: AdminDatasetCreate,
     user_id: int | None = None,
 ) -> DatasetContent:
-    item = DatasetContent(**payload.model_dump())
+    values = payload.model_dump()
+    validate_training_eligibility_values(values)
+    item = DatasetContent(**values)
     db.add(item)
     db.flush()
     log_system_event(
@@ -69,6 +72,11 @@ def update_admin_dataset(
     update_data = payload.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(item, key, value)
+    try:
+        validate_training_eligibility_values(item)
+    except ValueError:
+        db.rollback()
+        raise
     log_system_event(
         db,
         user_id=user_id,

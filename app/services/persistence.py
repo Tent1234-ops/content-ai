@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database.models import (
     AnalysisResult,
+    ClassificationModel,
     Cluster,
     ClusterMembership,
     ClusterRun,
@@ -361,9 +362,26 @@ def save_video_analysis_result(
             recommended_duration=recommended_duration,
         )
     )
+    classification = recommendation_payload.get("classification", {})
+    if not isinstance(classification, dict):
+        classification = {}
+    active_model = (
+        db.query(ClassificationModel)
+        .filter(ClassificationModel.is_active.is_(True))
+        .order_by(ClassificationModel.trained_at.desc(), ClassificationModel.model_id.desc())
+        .first()
+    )
     db.add(
         AnalysisResult(
             content_id=content.content_id,
+            classification_model_id=(active_model.model_id if active_model else None),
+            taxonomy_version=classification.get("taxonomy_version"),
+            taxonomy_leaf_key=classification.get("taxonomy_leaf_key"),
+            category_level_1=classification.get("category_level_1"),
+            category_level_2=classification.get("category_level_2"),
+            category_level_3=classification.get("category_level_3"),
+            classification_confidence=classification.get("confidence"),
+            classification_is_unknown=bool(classification.get("is_unknown", False)),
             summary=json.dumps(
                 {
                     "ai_analysis": analysis_payload,

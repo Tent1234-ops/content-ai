@@ -1,7 +1,6 @@
 import os
 import tempfile
 import unittest
-from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -17,7 +16,6 @@ from app.services.pipeline.core import normalize_asr_terms
 from app.services.pipeline.domain_rules import normalize_domain
 from app.services.recommendation import build_recommendation_from_analysis_data
 from models.speech_to_text import check_model_readiness, transcribe_with_meta
-from scripts.seed_demo_dataset import build_rows
 
 
 class Phase12AiEvidenceTests(unittest.TestCase):
@@ -30,33 +28,31 @@ class Phase12AiEvidenceTests(unittest.TestCase):
         self.db.close()
         self.engine.dispose()
 
-    def _seed_rows(self):
-        self.db.add_all(DatasetContent(**row) for row in build_rows())
+    def _seed_legacy_test_rows(self):
+        self.db.add_all(
+            DatasetContent(
+                title=f"test-only legacy row {index}",
+                transcript="synthetic test fixture",
+                category=category,
+                source_platform="youtube_seed",
+                dataset_source="demo_seed",
+                is_training_eligible=False,
+                is_active=False,
+            )
+            for index, category in enumerate(
+                ("smartphone", "food_drink", "skincare", "audio", "keyboard", "mouse", "fashion")
+            )
+        )
         self.db.commit()
 
-    def test_seed_has_24_rows_for_every_required_category(self):
-        counts = Counter(str(row["category"]) for row in build_rows())
-        self.assertEqual(
-            counts,
-            {
-                "smartphone": 24,
-                "food_drink": 24,
-                "skincare": 24,
-                "audio": 24,
-                "keyboard": 24,
-                "mouse": 24,
-                "fashion": 24,
-            },
-        )
-
-    def test_category_aliases_share_one_taxonomy(self):
+    def test_category_aliases_share_one_legacy_rule_taxonomy(self):
         self.assertEqual(normalize_domain("food"), "food_drink")
         self.assertEqual(normalize_domain("Food & Drink"), "food_drink")
         self.assertEqual(normalize_domain("mechanical keyboard"), "keyboard")
         self.assertEqual(normalize_domain("skin care"), "skincare")
 
-    def test_keyboard_recommendation_uses_exact_rows_and_complete_evidence(self):
-        self._seed_rows()
+    def test_legacy_rows_are_excluded_from_production_recommendation(self):
+        self._seed_legacy_test_rows()
         result = build_recommendation_from_analysis_data(
             self.db,
             domain="keyboard",
@@ -66,33 +62,24 @@ class Phase12AiEvidenceTests(unittest.TestCase):
             source_prefix="youtube",
             profile_limit=80,
         )
-
         profile = result["dataset_profile"]
         evidence = result["evidence"]
-        self.assertEqual(result["domain"], "keyboard")
-        self.assertEqual(profile["sample_size"], 24)
+        self.assertEqual(result["domain"], "unknown")
+        self.assertEqual(profile["sample_size"], 0)
         self.assertEqual(
             evidence["dataset_sample_size"],
             sum(evidence["source_platform_counts"].values()),
         )
-        self.assertGreater(len(evidence["exemplar_titles"]), 0)
-        self.assertEqual(evidence["duration_sample_size"], 24)
-        self.assertEqual(len(evidence["duration_samples"]), 24)
-        self.assertEqual(len(evidence["dataset_row_ids"]), 24)
-        self.assertNotIn("fallback rules", evidence["data_source_label"].lower())
+        self.assertEqual(evidence["exemplar_titles"], [])
+        self.assertEqual(evidence["duration_sample_size"], 0)
+        self.assertEqual(evidence["duration_samples"], [])
+        self.assertEqual(evidence["dataset_row_ids"], [])
+        self.assertIn("no eligible", evidence["data_source_label"].lower())
 
     def test_classification_confidence_is_not_forced_to_72_percent(self):
         profiles = [
-            {
-                "domain": "keyboard",
-                "sample_size": 5,
-                "term_weights": {"keyboard": 1.0},
-            },
-            {
-                "domain": "audio",
-                "sample_size": 5,
-                "term_weights": {"sound": 1.0},
-            },
+            {"domain": "keyboard", "sample_size": 5, "term_weights": {"keyboard": 1.0}},
+            {"domain": "audio", "sample_size": 5, "term_weights": {"sound": 1.0}},
         ]
         with (
             patch(
@@ -106,8 +93,9 @@ class Phase12AiEvidenceTests(unittest.TestCase):
                 text="mechanical keyboard sound",
                 title="keyboard review",
             )
-
-        self.assertEqual(result["domain"], "keyboard")
+        self.assertEqual(result["legacy_domain"], "keyboard")
+        self.assertEqual(result["domain"], "unknown")
+        self.assertTrue(result["is_unknown"])
         self.assertLess(result["confidence"], 0.72)
 
     def test_stt_auto_detect_does_not_force_thai(self):
@@ -120,7 +108,6 @@ class Phase12AiEvidenceTests(unittest.TestCase):
             patch.dict(os.environ, {"ASR_LANGUAGE": "auto"}),
         ):
             result = transcribe_with_meta("sample.wav", model_size="small")
-
         kwargs = model.transcribe.call_args.kwargs
         self.assertNotIn("language", kwargs)
         self.assertEqual(result["language"], "en")
@@ -132,13 +119,9 @@ class Phase12AiEvidenceTests(unittest.TestCase):
                 "app.services.pipeline.core.pythai_correct",
                 side_effect=AssertionError("unbounded spell correction must not run"),
             ),
-            patch.dict(
-                os.environ,
-                {"ANALYZE_ENABLE_THAI_SPELL_CORRECTION": "0"},
-            ),
+            patch.dict(os.environ, {"ANALYZE_ENABLE_THAI_SPELL_CORRECTION": "0"}),
         ):
             result = normalize_asr_terms("ทดสอบเสียงจากหูฟัง", aggressive=True)
-
         self.assertTrue(result)
 
     def test_model_readiness_checks_required_local_files(self):
@@ -150,12 +133,11 @@ class Phase12AiEvidenceTests(unittest.TestCase):
                 for name in ("config.json", "model.bin", "tokenizer.json"):
                     Path(model_dir, name).touch()
                 ready = check_model_readiness("small")
-
         self.assertFalse(missing["ready"])
         self.assertTrue(ready["ready"])
 
     def test_filename_fallback_caps_confidence_and_returns_warning(self):
-        self._seed_rows()
+        self._seed_legacy_test_rows()
         result = {
             "transcript": "keyboard review",
             "analysis": {
@@ -174,7 +156,6 @@ class Phase12AiEvidenceTests(unittest.TestCase):
             filename="keyboard_review.mp4",
             result=result,
         )
-
         self.assertLessEqual(recommendation["classification"]["confidence"], 0.25)
         self.assertEqual(recommendation["classification"]["input_source"], "filename_fallback")
         self.assertEqual(recommendation["evidence"]["warning"], "Filename fallback warning")
