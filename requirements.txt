@@ -17,6 +17,7 @@ faster-whisper
 scenedetect
 keybert
 scikit-learn
+joblib
 openai
 json5
 spacy

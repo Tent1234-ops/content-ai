@@ -63,7 +63,14 @@ TAXONOMY_NODES: tuple[TaxonomyNodeDefinition, ...] = (
         "โทรศัพท์",
         "electronics",
         ("phone", "smartphone", "mobile", "มือถือ", "โทรศัพท์", "สมาร์ตโฟน"),
-        ("รีวิวมือถือ", "รีวิวสมาร์ตโฟน", "smartphone review"),
+        (
+            "รีวิวสมาร์ตโฟน หลังใช้งาน กล้อง แบตเตอรี่ -เคส -ซ่อม -ไมค์ -ไฟฉาย",
+            "เปรียบเทียบมือถือ ประสิทธิภาพ กล้อง แบตเตอรี่ -เคส -ซ่อม",
+            "รีวิว iPhone หลังใช้งาน แบตเตอรี่ กล้อง -เคส -ซ่อม",
+            "Android smartphone long term review battery camera performance -case -repair -microphone -accessory",
+            "smartphone review display chipset battery camera -case -repair -mic -flashlight",
+            "iPhone review camera battery performance -case -repair -accessory",
+        ),
     ),
     _leaf(
         "camera",
@@ -71,7 +78,14 @@ TAXONOMY_NODES: tuple[TaxonomyNodeDefinition, ...] = (
         "กล้อง",
         "electronics",
         ("camera", "lens", "photography", "กล้อง", "เลนส์", "ถ่ายภาพ"),
-        ("รีวิวกล้อง", "รีวิวเลนส์", "camera review"),
+        (
+            "รีวิวกล้อง mirrorless autofocus คุณภาพไฟล์ -ไมค์ -สายคล้อง -กระเป๋า",
+            "รีวิวกล้อง DSLR เซนเซอร์ autofocus -ไมค์ -โทรศัพท์",
+            "รีวิวเลนส์กล้อง sharpness autofocus -สายคล้อง -กระเป๋า",
+            "mirrorless camera review autofocus image quality -phone -microphone -strap -bag",
+            "camera lens review sharpness autofocus photography -phone -strap -bag",
+            "DSLR camera long term review image quality -phone -microphone -windscreen",
+        ),
     ),
     _leaf(
         "laptop",
@@ -79,7 +93,14 @@ TAXONOMY_NODES: tuple[TaxonomyNodeDefinition, ...] = (
         "แล็ปท็อป",
         "electronics",
         ("laptop", "notebook", "แล็ปท็อป", "โน้ตบุ๊ก"),
-        ("รีวิวโน้ตบุ๊ก", "รีวิวแล็ปท็อป", "laptop review"),
+        (
+            "รีวิวโน้ตบุ๊ก หลังใช้งาน แบตเตอรี่ หน้าจอ ประสิทธิภาพ -กระเป๋า -มินิพีซี",
+            "รีวิวโน้ตบุ๊กเกมมิ่ง ประสิทธิภาพ ความร้อน แบตเตอรี่ -กระเป๋า",
+            "รีวิว MacBook หลังใช้งาน แบตเตอรี่ หน้าจอ -กระเป๋า",
+            "laptop long term review battery display keyboard -backpack -bag -mini pc -desktop",
+            "gaming laptop review performance thermals battery -backpack -mini pc -desktop",
+            "notebook review benchmark battery screen keyboard -bag -accessory -mini pc",
+        ),
     ),
     _leaf(
         "audio",

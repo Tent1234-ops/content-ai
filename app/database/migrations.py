@@ -41,6 +41,7 @@ PHASE13_MODEL_METRIC_COLUMNS = {
 }
 
 YOUTUBE_CC_DATASET_COLUMNS = {
+    "duration_seconds": "INT NULL",
     "collection_run_id": "INT NULL",
     "source_youtube_id": "VARCHAR(32) NULL",
     "source_channel_id": "VARCHAR(64) NULL",
@@ -68,7 +69,20 @@ YOUTUBE_CC_DATASET_COLUMNS = {
     "statistics_captured_at": "DATETIME NULL",
     "license_verified_at": "DATETIME NULL",
     "raw_metadata_json": "TEXT NULL",
+    "collection_strategy": "VARCHAR(50) NULL",
+    "average_views_per_day": "FLOAT NOT NULL DEFAULT 0",
+    "engagement_rate": "FLOAT NOT NULL DEFAULT 0",
     "is_training_eligible": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "is_keyword_recommendation_eligible": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "is_duration_recommendation_eligible": "BOOLEAN NOT NULL DEFAULT FALSE",
+}
+
+YOUTUBE_CC_COLLECTION_RUN_COLUMNS = {
+    "review_artifact_path": "VARCHAR(1024) NULL",
+    "review_artifact_sha256": "VARCHAR(64) NULL",
+    "duplicates_skipped": "INT NOT NULL DEFAULT 0",
+    "resume_count": "INT NOT NULL DEFAULT 0",
+    "last_resumed_at": "DATETIME NULL",
 }
 
 
@@ -262,6 +276,23 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
     with engine.begin() as connection:
         inspector = inspect(connection)
         tables = set(inspector.get_table_names())
+
+        if "dataset_collection_runs" in tables:
+            run_columns = {
+                column["name"]
+                for column in inspector.get_columns("dataset_collection_runs")
+            }
+            for column_name, sql_type in YOUTUBE_CC_COLLECTION_RUN_COLUMNS.items():
+                if column_name in run_columns:
+                    continue
+                connection.execute(
+                    text(
+                        "ALTER TABLE dataset_collection_runs "
+                        f"ADD COLUMN {column_name} {sql_type}"
+                    )
+                )
+                added_columns.append(f"dataset_collection_runs.{column_name}")
+
         if "dataset_contents" not in tables:
             return {
                 "added_columns": added_columns,
@@ -328,6 +359,27 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
             )
         )
         legacy_rows_deactivated = max(int(result.rowcount or 0), 0)
+
+        connection.execute(
+            text(
+                "UPDATE dataset_contents SET "
+                "is_keyword_recommendation_eligible = CASE "
+                "WHEN dataset_source = 'youtube_cc' "
+                "AND is_training_eligible = TRUE "
+                "AND is_active = TRUE THEN TRUE ELSE FALSE END"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE dataset_contents SET "
+                "is_duration_recommendation_eligible = CASE "
+                "WHEN dataset_source = 'youtube_cc' "
+                "AND is_training_eligible = TRUE "
+                "AND is_active = TRUE "
+                "AND duration_seconds > 0 "
+                "AND duration_seconds <= 300 THEN TRUE ELSE FALSE END"
+            )
+        )
 
         if connection.dialect.name == "mysql" and "dataset_collection_runs" in tables:
             inspector = inspect(connection)

@@ -117,11 +117,16 @@ class DatasetCollectionRun(Base):
     query_config_json = Column(Text, nullable=False)
     candidate_artifact_path = Column(String(1024))
     candidate_artifact_sha256 = Column(String(64))
+    review_artifact_path = Column(String(1024))
+    review_artifact_sha256 = Column(String(64))
     manifest_path = Column(String(1024))
     manifest_sha256 = Column(String(64))
     candidates_seen = Column(Integer, nullable=False, default=0)
     transcripts_collected = Column(Integer, nullable=False, default=0)
+    duplicates_skipped = Column(Integer, nullable=False, default=0)
     errors_count = Column(Integer, nullable=False, default=0)
+    resume_count = Column(Integer, nullable=False, default=0)
+    last_resumed_at = Column(DateTime)
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -206,7 +211,20 @@ class DatasetContent(Base):
     statistics_captured_at = Column(DateTime)
     license_verified_at = Column(DateTime)
     raw_metadata_json = Column(Text)
+    collection_strategy = Column(String(50))
+    average_views_per_day = Column(Float, nullable=False, default=0.0)
+    engagement_rate = Column(Float, nullable=False, default=0.0)
     is_training_eligible = Column(Boolean, nullable=False, default=False)
+    is_keyword_recommendation_eligible = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    is_duration_recommendation_eligible = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
     is_active = Column(Boolean, nullable=False, default=True)
     views = Column(Integer, nullable=False, default=0)
     likes = Column(Integer, nullable=False, default=0)

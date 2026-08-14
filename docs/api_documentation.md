@@ -35,7 +35,7 @@ Authorization: Bearer <access_token>
 
 ### `POST /analyze`
 
-รับ multipart video ความยาวไม่เกิน 300 วินาที แล้วคืน `job_id`
+รับ multipart video จากผู้ใช้ความยาวไม่เกิน 300 วินาที แล้วคืน `job_id`
 
 ```json
 {

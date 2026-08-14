@@ -333,6 +333,7 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
         "source_platform_counts": profile.get("source_platform_counts") or {},
         "transcript_source_counts": profile.get("transcript_source_counts") or {},
         "language_counts": profile.get("language_counts") or {},
+        "collection_strategy_counts": profile.get("collection_strategy_counts") or {},
         "selection_rule": profile.get("selection_rule") or "none",
         "license_name": profile.get("license_name") or "",
         "verification_status": profile.get("verification_status") or "",
@@ -429,6 +430,7 @@ def build_dataset_profile_for_domain(
     if canonical_domain in ready_leaf_keys(db):
         eligible_rows = (
             production_transcript_query(db, train_only=True)
+            .filter(DatasetContent.is_keyword_recommendation_eligible.is_(True))
             .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
             .filter(DatasetContent.taxonomy_leaf_key == canonical_domain)
             .order_by(DatasetContent.trend_score.desc(), DatasetContent.dataset_id.asc())
@@ -444,6 +446,7 @@ def build_dataset_profile_for_domain(
     platform_counts: Counter[str] = Counter()
     transcript_source_counts: Counter[str] = Counter()
     language_counts: Counter[str] = Counter()
+    collection_strategy_counts: Counter[str] = Counter()
 
     for row in rows:
         base_text = " ".join(
@@ -469,11 +472,18 @@ def build_dataset_profile_for_domain(
         hook_limit = min(12, max(4, int(admin_config.hook_analysis_duration / 15)))
         for term in _fast_dataset_tokens(base_text)[:hook_limit]:
             _weighted_increment(hook_scores, term, weight)
-        if row.duration_seconds and 0 < int(row.duration_seconds) <= 300:
+        if (
+            row.is_duration_recommendation_eligible
+            and row.duration_seconds
+            and int(row.duration_seconds) > 0
+        ):
             durations.append(int(row.duration_seconds))
         platform_counts[_platform_key(row.source_platform, source_prefix)] += 1
         transcript_source_counts[str(row.transcript_source or "unknown")] += 1
         language_counts[str(row.language or "und")] += 1
+        collection_strategy_counts[
+            str(row.collection_strategy or "classification_diverse")
+        ] += 1
 
     raw_top_keywords = [
         {"keyword": keyword, "score": round(score, 3)}
@@ -526,6 +536,7 @@ def build_dataset_profile_for_domain(
         "source_platform_counts": dict(platform_counts),
         "transcript_source_counts": dict(transcript_source_counts),
         "language_counts": dict(language_counts),
+        "collection_strategy_counts": dict(collection_strategy_counts),
         "selection_rule": (
             "top_40_percent_by_average_views_per_day_and_engagement_rate"
             if rows
@@ -565,6 +576,7 @@ def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[st
         "source_platform_counts": {},
         "transcript_source_counts": {},
         "language_counts": {},
+        "collection_strategy_counts": {},
         "selection_rule": "none",
         "license_name": "",
         "verification_status": "",
@@ -781,7 +793,9 @@ def build_recommendation_admin_report(db: Session, *, profile_limit: int = 150) 
 
     production_query = production_transcript_query(db)
     total_datasets = production_query.count()
-    with_duration = production_query.filter(DatasetContent.duration_seconds.isnot(None)).count()
+    with_duration = production_query.filter(
+        DatasetContent.is_duration_recommendation_eligible.is_(True)
+    ).count()
     youtube_count = production_transcript_query(db).filter(
         DatasetContent.source_platform.like("youtube%")
     ).count()

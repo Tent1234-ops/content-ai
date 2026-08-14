@@ -18,6 +18,7 @@ from app.database.migrations import (
     migrate_youtube_cc_dataset_schema,
 )
 from app.services.taxonomy import sync_taxonomy_registry, taxonomy_coverage
+from app.services.youtube_cc_dataset import repair_quota_waiting_run_statuses
 
 
 def main() -> int:
@@ -27,6 +28,7 @@ def main() -> int:
     db = SessionLocal()
     try:
         taxonomy = sync_taxonomy_registry(db)
+        quota_waiting_repair = repair_quota_waiting_run_statuses(db)
         coverage = taxonomy_coverage(db)
     finally:
         db.close()
@@ -36,6 +38,7 @@ def main() -> int:
                 "phase13_schema": phase13,
                 "youtube_cc_schema": youtube_cc,
                 "taxonomy_sync": taxonomy,
+                "quota_waiting_repair": quota_waiting_repair,
                 "coverage": coverage,
             },
             ensure_ascii=False,

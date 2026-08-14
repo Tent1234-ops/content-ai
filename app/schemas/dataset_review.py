@@ -15,6 +15,9 @@ class DatasetReviewRunItem(BaseModel):
     pending: int
     approved: int
     rejected: int
+    progress: dict[str, Any]
+    last_resumed_at: datetime | None = None
+    failure_message: str | None = None
 
 
 class DatasetReviewCandidateItem(BaseModel):
@@ -33,9 +36,14 @@ class DatasetReviewCandidateItem(BaseModel):
     transcript_preview: str
     evidence_terms: list[str]
     automated_checks: dict[str, bool]
+    dataset_usage: dict[str, bool]
     views: int
     likes: int
     comments: int
+    collection_strategy: str
+    average_views_per_day: float
+    engagement_rate: float
+    performance_rank_within_leaf: int
     review_status: Literal["pending", "approved", "rejected"]
     reviewed_leaf_key: str | None = None
     transcript_quality: str | None = None

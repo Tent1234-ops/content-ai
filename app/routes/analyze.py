@@ -3,7 +3,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.deps import require_roles
 from app.database.db import SessionLocal
@@ -11,6 +11,10 @@ from app.database.models import User
 from app.services.ai_pipeline import analyze_video as pipeline_analyze
 from app.services.classification import classify_text_domain
 from app.services.jobs import enqueue, update_current_job
+from app.services.media_validation import (
+    MediaValidationError,
+    validate_user_upload_duration,
+)
 from app.services.nlp import run_nlp_pipeline
 from app.services.persistence import save_video_analysis_result
 from app.services.recommendation import build_recommendation_from_analysis_data
@@ -24,6 +28,16 @@ def _save_upload(file: UploadFile) -> str:
     file_path = os.path.join("videos", f"{uuid.uuid4().hex}_{safe_name}")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+    return file_path
+
+
+def _save_validated_upload(file: UploadFile) -> str:
+    file_path = _save_upload(file)
+    try:
+        validate_user_upload_duration(file_path)
+    except MediaValidationError as exc:
+        Path(file_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return file_path
 
 
@@ -139,7 +153,7 @@ async def analyze(
     current_user: User = Depends(require_roles("admin", "user")),
 ):
     print(f"[analyze] received upload: {file.filename}", flush=True)
-    file_path = _save_upload(file)
+    file_path = _save_validated_upload(file)
     filename = Path(file.filename or file_path).name
     job_id = enqueue(analyze_video_job, file_path, filename, current_user.user_id)
     return {"job_id": job_id}
@@ -151,7 +165,7 @@ async def analyze_and_save(
     current_user: User = Depends(require_roles("admin", "user")),
 ):
     print(f"[analyze/save] received upload: {file.filename}", flush=True)
-    file_path = _save_upload(file)
+    file_path = _save_validated_upload(file)
     filename = Path(file.filename or file_path).name
     print(f"[analyze/save] saved file to {file_path}, enqueueing analysis+save job", flush=True)
     job_id = enqueue(analyze_and_save_video_job, file_path, filename, current_user.user_id)

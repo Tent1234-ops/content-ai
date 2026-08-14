@@ -23,8 +23,13 @@ from app.database.migrations import (
 from app.services.dataset_contract import DEFAULT_YOUTUBE_CC_DATASET_VERSION
 from app.services.taxonomy import ACTIVE_LEAF_KEYS, sync_taxonomy_registry
 from app.services.youtube_cc_dataset import (
+    DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF,
     YouTubeCCDatasetError,
+    YouTubeQuotaExceededError,
+    YouTubeTranscriptProviderBlockedError,
     collect_youtube_cc_candidates,
+    repair_quota_waiting_run_statuses,
+    resume_youtube_cc_collection,
 )
 
 
@@ -36,7 +41,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Collect real YouTube Creative Commons videos and public captions. "
-            "The generated review CSV contains no automatic approvals."
+            "Source video duration is unrestricted; model text uses the first "
+            "300 transcript seconds. The generated review CSV contains no "
+            "automatic approvals."
         )
     )
     parser.add_argument("--dataset-version", default=DEFAULT_YOUTUBE_CC_DATASET_VERSION)
@@ -47,15 +54,71 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--languages", default="th,en")
     parser.add_argument("--target-per-leaf", type=int, default=50)
+    parser.add_argument(
+        "--min-thai-per-leaf",
+        type=int,
+        default=None,
+        help=(
+            "Minimum Thai transcripts reserved per leaf; defaults to 40%% of "
+            "--target-per-leaf when Thai is selected"
+        ),
+    )
+    parser.add_argument(
+        "--max-videos-per-channel-per-leaf",
+        type=int,
+        default=DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF,
+        help="Maximum accepted videos from one channel in one leaf (default: 3)",
+    )
+    parser.add_argument(
+        "--performance-per-leaf",
+        type=int,
+        default=None,
+        help=(
+            "Rows per leaf discovered with order=viewCount for recommendation evidence; "
+            "defaults to 30%% of --target-per-leaf"
+        ),
+    )
     parser.add_argument("--region", default=settings.youtube_region)
-    parser.add_argument("--max-pages-per-query", type=int, default=2)
+    parser.add_argument(
+        "--max-pages-per-query",
+        type=int,
+        default=None,
+        help="Page budget per query for this execution (new runs default to 2)",
+    )
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument(
         "--output-dir",
         type=Path,
         help="Optional output directory; defaults to data/raw/youtube_cc/<version>",
     )
+    parser.add_argument(
+        "--resume-run-id",
+        type=int,
+        help=(
+            "Resume an existing unfinished run from its saved page tokens. "
+            "Runs with human review events are immutable and cannot be resumed."
+        ),
+    )
     return parser.parse_args()
+
+
+def _print_progress(manifest: dict) -> None:
+    progress = manifest.get("progress") or {}
+    leaf_parts = []
+    for leaf in progress.get("by_leaf") or []:
+        languages = leaf.get("language_counts") or {}
+        leaf_parts.append(
+            f"{leaf.get('leaf_key')} {leaf.get('accepted', 0)}/{leaf.get('target', 0)} "
+            f"(TH {languages.get('th', 0)}/{leaf.get('thai_minimum', 0)}, "
+            f"channels {leaf.get('unique_channels', 0)})"
+        )
+    print(
+        f"[run {manifest.get('collection_run_id')}] {manifest.get('status')} | "
+        f"{progress.get('accepted_total', 0)}/{progress.get('target_total', 0)} "
+        f"({progress.get('percent', 0)}%) | "
+        + "; ".join(leaf_parts),
+        flush=True,
+    )
 
 
 def main() -> int:
@@ -64,7 +127,7 @@ def main() -> int:
         print("ERROR: YOUTUBE_API_KEY is not configured in .env", file=sys.stderr)
         return 1
 
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S%f")
     raw_dir = args.output_dir or ROOT / "data" / "raw" / "youtube_cc" / args.dataset_version
     candidate_path = raw_dir / f"candidates-{stamp}.jsonl"
     review_path = ROOT / "data" / "reviews" / "youtube_cc" / args.dataset_version / f"review-{stamp}.csv"
@@ -76,22 +139,42 @@ def main() -> int:
     db = SessionLocal()
     try:
         sync_taxonomy_registry(db)
-        result = collect_youtube_cc_candidates(
-            db,
-            api_key=settings.youtube_api_key,
-            candidate_path=candidate_path,
-            review_path=review_path,
-            manifest_path=manifest_path,
-            dataset_version=args.dataset_version,
-            leaf_keys=_csv_values(args.leaves),
-            target_per_leaf=args.target_per_leaf,
-            languages=_csv_values(args.languages),
-            region_code=args.region,
-            max_pages_per_query=args.max_pages_per_query,
-            timeout_seconds=args.timeout,
-        )
+        repair_quota_waiting_run_statuses(db)
+        if args.resume_run_id is not None:
+            result = resume_youtube_cc_collection(
+                db,
+                collection_run_id=args.resume_run_id,
+                api_key=settings.youtube_api_key,
+                max_pages_per_query=args.max_pages_per_query,
+                timeout_seconds=args.timeout,
+                progress_callback=_print_progress,
+            )
+        else:
+            result = collect_youtube_cc_candidates(
+                db,
+                api_key=settings.youtube_api_key,
+                candidate_path=candidate_path,
+                review_path=review_path,
+                manifest_path=manifest_path,
+                dataset_version=args.dataset_version,
+                leaf_keys=_csv_values(args.leaves),
+                target_per_leaf=args.target_per_leaf,
+                performance_target_per_leaf=args.performance_per_leaf,
+                languages=_csv_values(args.languages),
+                min_thai_per_leaf=args.min_thai_per_leaf,
+                max_videos_per_channel_per_leaf=(
+                    args.max_videos_per_channel_per_leaf
+                ),
+                region_code=args.region,
+                max_pages_per_query=args.max_pages_per_query or 2,
+                timeout_seconds=args.timeout,
+                progress_callback=_print_progress,
+            )
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        print(f"\nHuman review file: {review_path}")
+        result_review_path = (
+            result.get("human_review_template") or {}
+        ).get("path", review_path)
+        print(f"\nHuman review file: {result_review_path}")
         print("Fill decision/reviewed_leaf_key/quality/reviewer/reviewed_at before import.")
         return 0
     finally:
@@ -101,6 +184,23 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except YouTubeQuotaExceededError as exc:
+        print(
+            "QUOTA_WAITING: YouTube search quota is exhausted. "
+            "This run was checkpointed and can be resumed after reset.\n"
+            f"{exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    except YouTubeTranscriptProviderBlockedError as exc:
+        print(
+            "TRANSCRIPT_WAITING: YouTube blocked transcript requests from this IP. "
+            "The run was checkpointed; resume it after the block clears or from a "
+            "permitted network.\n"
+            f"{exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(3)
     except YouTubeCCDatasetError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1)

@@ -124,6 +124,8 @@ class Phase13TaxonomySchemaTests(unittest.TestCase):
                     license_verified_at=now,
                     raw_metadata_json=json.dumps({"license": "creativeCommon"}),
                     is_training_eligible=True,
+                    is_keyword_recommendation_eligible=True,
+                    is_duration_recommendation_eligible=True,
                     is_active=True,
                     duration_seconds=120,
                     published_at=now,

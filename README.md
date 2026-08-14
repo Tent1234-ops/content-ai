@@ -19,7 +19,7 @@ Creative Commons ในหมวดเดียวกันที่ผ่าน
 ระบบไม่มี demo seed สำหรับ Classification หรือ Recommendation อีกต่อไป ข้อมูลหนึ่งแถวจะถูกใช้จริงได้เมื่อผ่านเงื่อนไขทั้งหมด:
 
 - YouTube API ยืนยัน `status.license=creativeCommon`
-- วิดีโอยาวไม่เกิน 300 วินาที
+- วิดีโอต้นทางมี duration ที่ตรวจสอบได้ โดยไม่จำกัดความยาวของ source video
 - มี transcript ภาษาไทยหรืออังกฤษจาก public caption
 - คนตรวจวิดีโอ, transcript และหมวดหมู่ แล้วระบุ `decision=approve`
 - มี reviewer, reviewed time, transcript quality และ license provenance ครบ
@@ -28,6 +28,11 @@ Creative Commons ในหมวดเดียวกันที่ผ่าน
 
 Search query ใช้ค้นหา candidate เท่านั้น ไม่ถือเป็น label จริง ระบบจะไม่เปิดหมวดให้ AI
 จนกว่าจะมีข้อมูลที่ผ่าน human review อย่างน้อย 30 คลิปในหมวดนั้น
+
+Dataset จะเก็บ transcript ช่วง 300 วินาทีแรกของวิดีโอต้นทาง เพื่อให้ training input
+สอดคล้องกับคลิปผู้ใช้ที่อัปโหลดได้ไม่เกิน 5 นาที แถวที่ผ่าน review ใช้ฝึก Classification
+และเป็นหลักฐาน Keyword Recommendation ได้ทุกความยาว แต่จะใช้เป็นหลักฐาน Recommended
+Duration เฉพาะเมื่อ source video ยาวไม่เกิน 300 วินาที
 
 ## Taxonomy V1
 
@@ -119,15 +124,52 @@ python -B scripts/collect_youtube_cc_candidates.py `
   --region TH
 ```
 
-เมื่อทดสอบผ่านแล้วจึงเก็บครบทุกหมวด:
+เมื่อทดสอบผ่านแล้วให้เก็บครั้งละ 2-3 หมวดเพื่อควบคุม YouTube search quota:
 
 ```powershell
 python -B scripts/collect_youtube_cc_candidates.py `
+  --leaves phone,camera,laptop `
   --target-per-leaf 50 `
+  --performance-per-leaf 15 `
+  --min-thai-per-leaf 20 `
+  --max-videos-per-channel-per-leaf 3 `
   --languages th,en `
   --region TH `
-  --max-pages-per-query 2
+  --max-pages-per-query 1
 ```
+
+The 50-row target is split into 15 `recommendation_high_performance` candidates
+discovered with `order=viewCount` and 35 `classification_diverse` candidates
+discovered with `order=relevance`. Existing YouTube IDs and transcript hashes in
+both `dataset_contents` and earlier collection artifacts are skipped. Source videos
+may be longer than 5 minutes; the collector keeps their full duration metadata and
+uses the first 300 transcript seconds as the model input.
+
+ค่าเริ่มต้นสำรองอย่างน้อย 40% ของ candidate ในแต่ละ leaf ให้ transcript ภาษาไทย
+(`20/50`) และรับไม่เกิน 3 คลิปจาก Channel ID เดียวกันต่อ leaf กติกานี้นับร่วมกับ
+candidate artifacts และ production dataset เดิม การข้ามเพราะ language reservation หรือ
+channel cap ถูกบันทึกเป็น `quality_filters` ไม่ถูกนับเป็น collection error
+
+If a schema-version-4 run ends as `partial` or `quota_waiting`, continue it from
+the saved page tokens:
+
+```powershell
+python -B scripts/collect_youtube_cc_candidates.py `
+  --resume-run-id YOUR_RUN_ID `
+  --max-pages-per-query 1
+```
+
+A run with any human review event cannot be resumed because its candidate
+artifact is immutable. Start a new run instead; cross-run deduplication keeps
+previous approved, rejected, and pending candidates out of the new artifact.
+Runs created under the old five-minute source filter, including local run 2, also
+must not be resumed because pages already scanned by that run omitted long videos.
+Start a new run after API quota is available; the 35 preserved candidates from run 2
+will be skipped automatically.
+
+ระหว่างรัน CLI จะแสดง progress แยก leaf, Thai transcript และจำนวนช่องหลังทุก checkpoint
+หน้า Admin `Dataset Review` แสดงข้อมูลชุดเดียวกัน เมื่อ YouTube ตอบ HTTP 429 ระบบใช้สถานะ
+`quota_waiting`, เก็บ checkpoint และไม่นับเหตุการณ์นี้เป็น data error
 
 ผลลัพธ์ถูกแยกเป็น:
 
@@ -183,6 +225,51 @@ python -B scripts/verify_submission_dataset.py --require-ready
 30 ตัวอย่างจริงที่ผ่านกติกา production ไม่ได้หมายถึงโมเดลผ่านเกณฑ์ความแม่นยำ 80% แล้ว
 
 รายละเอียดเพิ่มเติมอยู่ใน [YouTube CC dataset guide](docs/youtube_cc_dataset.md)
+
+### 5. Train And Evaluate Classification Models
+
+ตรวจ split และสร้าง artifact ล่วงหน้าได้แม้ Dataset ยังไม่ครบ โดยคำสั่งนี้จะไม่ train
+และไม่สร้างแถวใน `classification_models`:
+
+```powershell
+python -B scripts/train_classification_models.py `
+  --prepare-only `
+  --model-version readiness-check-v1
+```
+
+เมื่อทั้ง 12 หมวดมีอย่างน้อย 30 ตัวอย่างจริง และทุกหมวดมีข้อมูลใน
+train/validation/test ให้รัน benchmark:
+
+```powershell
+python -B scripts/train_classification_models.py `
+  --model-version taxonomy-v1-run1 `
+  --require-ready
+```
+
+Pipeline เปรียบเทียบ `TF-IDF + Logistic Regression`, `TF-IDF + ComplementNB`
+และ `TF-IDF + SGD Logistic` โดยรายงาน Accuracy, Macro Precision, Macro Recall,
+Macro F1, รายหมวด และ Confusion Matrix แยก validation/test และภาษา
+ไทย/อังกฤษ ระบบรองรับ `Unknown/Other` ด้วย confidence rejection ที่ค่าเริ่มต้น
+`0.60` โดยไม่สร้างตัวอย่าง Unknown ปลอม
+
+โมเดลจะได้สถานะ `qualified` เมื่อ validation/test Accuracy และ Macro F1 ผ่าน
+`0.80` ทุกค่า แต่ `is_active` ยังคงเป็น `false` เพื่อป้องกันการนำโมเดลที่ยังไม่
+เชื่อม runtime ไปใช้โดยไม่ตั้งใจ ผลและ promotion gate ถูกบันทึกใน
+`classification_models` และ `model_evaluation_metrics`; artifact อยู่ใต้
+`artifacts/classification_training/` ซึ่งไม่ถูก commit
+
+ระหว่างที่ Dataset ยังไม่ครบ สามารถใช้ข้อมูล human-reviewed ที่มีอยู่ตรวจเฉพาะ
+การทำงานทางเทคนิคได้:
+
+```powershell
+python -B scripts/train_classification_models.py `
+  --smoke-test `
+  --model-version phase16-smoke-v1
+```
+
+ผลจากคำสั่งนี้มีสถานะ `smoke_test_only` เสมอ ไม่ผ่าน promotion gate และไม่ถูก
+ตั้ง Active แม้คะแนนเชิงตัวเลขบางค่าจะถึง 0.80 โดย pipeline จะโหลด artifact
+กลับมาทำนายหนึ่งตัวอย่างและบันทึก `reload_classify_passed` เป็นหลักฐานด้วย
 
 ## Analyze Workflow
 

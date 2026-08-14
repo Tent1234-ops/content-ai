@@ -18,6 +18,7 @@ from app.routes import admin, admin_scanner, analyze, auth, classification, clus
 from app.services.trending_fetcher import start_trending_fetcher, stop_trending_fetcher
 from app.services.live_trend_snapshots import get_live_provider_health
 from app.services.taxonomy import sync_taxonomy_registry
+from app.services.youtube_cc_dataset import repair_quota_waiting_run_statuses
 from models.speech_to_text import check_model_readiness
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
@@ -87,6 +88,7 @@ phase11_migration_status = {}
 phase13_migration_status = {}
 youtube_cc_migration_status = {}
 taxonomy_seed_status = {}
+youtube_quota_repair_status = {}
 try:
     phase11_migration_status = archive_phase10_notification_tables(engine)
     Base.metadata.create_all(bind=engine)
@@ -95,6 +97,9 @@ try:
     taxonomy_db = SessionLocal()
     try:
         taxonomy_seed_status = sync_taxonomy_registry(taxonomy_db)
+        youtube_quota_repair_status = repair_quota_waiting_run_statuses(
+            taxonomy_db
+        )
     finally:
         taxonomy_db.close()
 except (SQLAlchemyError, Exception) as exc:

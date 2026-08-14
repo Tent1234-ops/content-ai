@@ -31,6 +31,9 @@ class DatasetReviewRun {
     required this.pending,
     required this.approved,
     required this.rejected,
+    required this.progress,
+    this.lastResumedAt,
+    this.failureMessage,
   });
 
   final int collectionRunId;
@@ -41,6 +44,9 @@ class DatasetReviewRun {
   final int pending;
   final int approved;
   final int rejected;
+  final DatasetCollectionProgress progress;
+  final DateTime? lastResumedAt;
+  final String? failureMessage;
 
   factory DatasetReviewRun.fromJson(Map<String, dynamic> json) {
     return DatasetReviewRun(
@@ -52,6 +58,103 @@ class DatasetReviewRun {
       pending: (json['pending'] as num?)?.toInt() ?? 0,
       approved: (json['approved'] as num?)?.toInt() ?? 0,
       rejected: (json['rejected'] as num?)?.toInt() ?? 0,
+      progress: DatasetCollectionProgress.fromJson(
+        Map<String, dynamic>.from((json['progress'] as Map?) ?? const {}),
+      ),
+      lastResumedAt:
+          DateTime.tryParse(json['last_resumed_at']?.toString() ?? ''),
+      failureMessage: json['failure_message']?.toString(),
+    );
+  }
+}
+
+class DatasetCollectionLeafProgress {
+  const DatasetCollectionLeafProgress({
+    required this.leafKey,
+    required this.target,
+    required this.accepted,
+    required this.percent,
+    required this.languageCounts,
+    required this.thaiMinimum,
+    required this.thaiRemaining,
+    required this.uniqueChannels,
+    required this.minimumUniqueChannelsExpected,
+    required this.maxVideosPerChannel,
+    required this.complete,
+  });
+
+  final String leafKey;
+  final int target;
+  final int accepted;
+  final double percent;
+  final Map<String, int> languageCounts;
+  final int thaiMinimum;
+  final int thaiRemaining;
+  final int uniqueChannels;
+  final int minimumUniqueChannelsExpected;
+  final int maxVideosPerChannel;
+  final bool complete;
+
+  factory DatasetCollectionLeafProgress.fromJson(Map<String, dynamic> json) {
+    return DatasetCollectionLeafProgress(
+      leafKey: json['leaf_key']?.toString() ?? '',
+      target: (json['target'] as num?)?.toInt() ?? 0,
+      accepted: (json['accepted'] as num?)?.toInt() ?? 0,
+      percent: (json['percent'] as num?)?.toDouble() ?? 0,
+      languageCounts: (json['language_counts'] as Map? ?? const {}).map(
+        (key, value) => MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+      ),
+      thaiMinimum: (json['thai_minimum'] as num?)?.toInt() ?? 0,
+      thaiRemaining: (json['thai_remaining'] as num?)?.toInt() ?? 0,
+      uniqueChannels: (json['unique_channels'] as num?)?.toInt() ?? 0,
+      minimumUniqueChannelsExpected:
+          (json['minimum_unique_channels_expected'] as num?)?.toInt() ?? 0,
+      maxVideosPerChannel:
+          (json['max_videos_per_channel'] as num?)?.toInt() ?? 0,
+      complete: json['complete'] as bool? ?? false,
+    );
+  }
+}
+
+class DatasetCollectionProgress {
+  const DatasetCollectionProgress({
+    required this.targetTotal,
+    required this.acceptedTotal,
+    required this.percent,
+    required this.languageCounts,
+    required this.uniqueChannels,
+    required this.completeLeaves,
+    required this.leafCount,
+    required this.byLeaf,
+  });
+
+  final int targetTotal;
+  final int acceptedTotal;
+  final double percent;
+  final Map<String, int> languageCounts;
+  final int uniqueChannels;
+  final int completeLeaves;
+  final int leafCount;
+  final List<DatasetCollectionLeafProgress> byLeaf;
+
+  factory DatasetCollectionProgress.fromJson(Map<String, dynamic> json) {
+    return DatasetCollectionProgress(
+      targetTotal: (json['target_total'] as num?)?.toInt() ?? 0,
+      acceptedTotal: (json['accepted_total'] as num?)?.toInt() ?? 0,
+      percent: (json['percent'] as num?)?.toDouble() ?? 0,
+      languageCounts: (json['language_counts'] as Map? ?? const {}).map(
+        (key, value) => MapEntry(key.toString(), (value as num?)?.toInt() ?? 0),
+      ),
+      uniqueChannels: (json['unique_channels'] as num?)?.toInt() ?? 0,
+      completeLeaves: (json['complete_leaves'] as num?)?.toInt() ?? 0,
+      leafCount: (json['leaf_count'] as num?)?.toInt() ?? 0,
+      byLeaf: (json['by_leaf'] as List<dynamic>? ?? const [])
+          .map(
+            (item) => DatasetCollectionLeafProgress.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList(),
     );
   }
 }
@@ -107,6 +210,7 @@ class DatasetReviewCandidate {
     required this.transcriptPreview,
     required this.evidenceTerms,
     required this.automatedChecks,
+    required this.datasetUsage,
     required this.views,
     required this.likes,
     required this.comments,
@@ -133,6 +237,7 @@ class DatasetReviewCandidate {
   final String transcriptPreview;
   final List<String> evidenceTerms;
   final Map<String, bool> automatedChecks;
+  final Map<String, bool> datasetUsage;
   final int views;
   final int likes;
   final int comments;
@@ -167,6 +272,12 @@ class DatasetReviewCandidate {
           .toList(),
       automatedChecks: Map<String, bool>.from(
         (json['automated_checks'] as Map?)?.map(
+              (key, value) => MapEntry(key.toString(), value == true),
+            ) ??
+            const {},
+      ),
+      datasetUsage: Map<String, bool>.from(
+        (json['dataset_usage'] as Map?)?.map(
               (key, value) => MapEntry(key.toString(), value == true),
             ) ??
             const {},

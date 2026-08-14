@@ -10,8 +10,8 @@ from sqlalchemy.orm import Query, Session
 from app.database.models import DatasetContent
 from app.services.dataset_contract import (
     ACCEPTED_TRANSCRIPT_QUALITIES,
-    MAX_VIDEO_DURATION_SECONDS,
     PRODUCTION_SPLITS,
+    RECOMMENDATION_DURATION_MAX_SECONDS,
     SUPPORTED_CAPTION_TYPES,
     SUPPORTED_TRANSCRIPT_LANGUAGES,
     TRANSCRIPT_WINDOW_SECONDS,
@@ -82,7 +82,6 @@ def production_transcript_conditions(*, train_only: bool = False):
         DatasetContent.transcript_window_seconds == TRANSCRIPT_WINDOW_SECONDS,
         DatasetContent.transcript_end_seconds <= TRANSCRIPT_WINDOW_SECONDS,
         DatasetContent.duration_seconds > 0,
-        DatasetContent.duration_seconds <= MAX_VIDEO_DURATION_SECONDS,
     ]
     if train_only:
         conditions.append(DatasetContent.data_split == "train")
@@ -174,8 +173,16 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
     if transcript_end is None or not 0 <= float(transcript_end) <= TRANSCRIPT_WINDOW_SECONDS:
         errors.append("transcript_end_seconds")
     duration = value("duration_seconds")
-    if duration is None or not 0 < int(duration) <= MAX_VIDEO_DURATION_SECONDS:
+    if duration is None or int(duration) <= 0:
         errors.append("duration_seconds")
+    if not bool(value("is_keyword_recommendation_eligible")):
+        errors.append("is_keyword_recommendation_eligible")
+    expected_duration_eligibility = bool(
+        duration is not None
+        and 0 < int(duration) <= RECOMMENDATION_DURATION_MAX_SECONDS
+    )
+    if bool(value("is_duration_recommendation_eligible")) != expected_duration_eligibility:
+        errors.append("is_duration_recommendation_eligible")
     if not bool(value("is_active")):
         errors.append("is_active")
 

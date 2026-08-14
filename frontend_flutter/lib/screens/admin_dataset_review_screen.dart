@@ -167,6 +167,11 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                   if (queue != null) ...[
                     _ReviewSummaryBand(summary: queue.summary),
                     const SizedBox(height: 16),
+                    _CollectionRunProgress(
+                      runs: queue.runs,
+                      taxonomy: queue.taxonomy,
+                    ),
+                    const SizedBox(height: 16),
                     _ReviewFilters(
                       searchController: _searchController,
                       status: _status,
@@ -279,6 +284,163 @@ class _SummaryMetric extends StatelessWidget {
         children: [
           Text('$value', style: Theme.of(context).textTheme.headlineSmall),
           Text(label, style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
+    );
+  }
+}
+
+class _CollectionRunProgress extends StatelessWidget {
+  const _CollectionRunProgress({
+    required this.runs,
+    required this.taxonomy,
+  });
+
+  final List<DatasetReviewRun> runs;
+  final List<DatasetReviewTaxonomyLeaf> taxonomy;
+
+  String _leafLabel(String key) {
+    for (final leaf in taxonomy) {
+      if (leaf.leafKey == key) return leaf.level3;
+    }
+    return key;
+  }
+
+  String _statusLabel(String status) {
+    return switch (status) {
+      'quota_waiting' => 'Waiting for YouTube quota',
+      'running' => 'Collecting',
+      'collected' => 'Collection complete',
+      'partial' => 'Partial collection',
+      'review_pending' => 'Waiting for review',
+      'partially_reviewed' => 'Partially reviewed',
+      'reviewed' => 'Review complete',
+      'failed' => 'Collection failed',
+      _ => status.replaceAll('_', ' '),
+    };
+  }
+
+  IconData _statusIcon(String status) {
+    return switch (status) {
+      'quota_waiting' => Icons.schedule_outlined,
+      'running' => Icons.sync,
+      'collected' || 'reviewed' => Icons.check_circle_outline,
+      'failed' => Icons.error_outline,
+      _ => Icons.data_usage_outlined,
+    };
+  }
+
+  Color? _statusColor(BuildContext context, String status) {
+    return switch (status) {
+      'quota_waiting' => Colors.orange.shade800,
+      'running' => Theme.of(context).colorScheme.primary,
+      'collected' || 'reviewed' => Colors.green.shade700,
+      'failed' => Theme.of(context).colorScheme.error,
+      _ => null,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (runs.isEmpty) return const SizedBox.shrink();
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Text(
+              'Collection progress',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+          ...runs.map((run) {
+            final progress = run.progress;
+            final languageCounts = progress.languageCounts;
+            final statusColor = _statusColor(context, run.status);
+            return ExpansionTile(
+              initiallyExpanded:
+                  run.status == 'running' || run.status == 'quota_waiting',
+              leading: Icon(
+                _statusIcon(run.status),
+                color: statusColor,
+              ),
+              title: Text(
+                'Run ${run.collectionRunId} · ${_statusLabel(run.status)}',
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${progress.acceptedTotal}/${progress.targetTotal} candidates'
+                      ' · TH ${languageCounts['th'] ?? 0}'
+                      ' · EN ${languageCounts['en'] ?? 0}'
+                      ' · ${progress.uniqueChannels} channels',
+                    ),
+                    const SizedBox(height: 6),
+                    LinearProgressIndicator(
+                      value: progress.targetTotal <= 0
+                          ? 0
+                          : (progress.percent / 100).clamp(0, 1),
+                    ),
+                  ],
+                ),
+              ),
+              children: [
+                if (run.status == 'quota_waiting')
+                  const ListTile(
+                    dense: true,
+                    leading: Icon(Icons.info_outline),
+                    title: Text(
+                      'Checkpoint saved. Resume this run after the YouTube quota resets.',
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  child: Wrap(
+                    spacing: 24,
+                    runSpacing: 16,
+                    children: progress.byLeaf.map((leaf) {
+                      final thai = leaf.languageCounts['th'] ?? 0;
+                      final english = leaf.languageCounts['en'] ?? 0;
+                      return SizedBox(
+                        width: 270,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${_leafLabel(leaf.leafKey)} '
+                              '${leaf.accepted}/${leaf.target}',
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'TH $thai/${leaf.thaiMinimum} · EN $english · '
+                              '${leaf.uniqueChannels} channels · '
+                              'max ${leaf.maxVideosPerChannel}/channel',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: 6),
+                            LinearProgressIndicator(
+                              value: leaf.target <= 0
+                                  ? 0
+                                  : (leaf.percent / 100).clamp(0, 1),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            );
+          }),
         ],
       ),
     );
@@ -501,6 +663,23 @@ class _CandidateReviewCard extends StatelessWidget {
                   ),
                   label: Text(
                     'Automated checks $passedChecks/${candidate.automatedChecks.length}',
+                  ),
+                ),
+                const Chip(
+                  avatar: Icon(Icons.model_training_outlined, size: 18),
+                  label: Text('Classification + keywords'),
+                ),
+                Chip(
+                  avatar: Icon(
+                    candidate.datasetUsage['duration_recommendation'] == true
+                        ? Icons.schedule_outlined
+                        : Icons.timer_off_outlined,
+                    size: 18,
+                  ),
+                  label: Text(
+                    candidate.datasetUsage['duration_recommendation'] == true
+                        ? 'Duration evidence'
+                        : 'Excluded from duration evidence',
                   ),
                 ),
                 ...candidate.evidenceTerms.take(6).map(

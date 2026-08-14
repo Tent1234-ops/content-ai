@@ -513,8 +513,8 @@ class _UploadScreenState extends State<UploadScreen> {
                             text: 'Use clear audio for better transcription'),
                         const SizedBox(height: 8),
                         _TipRow(
-                            text:
-                                'Keep videos between 30 seconds to 10 minutes'),
+                          text: 'Videos must be no longer than 5 minutes',
+                        ),
                         const SizedBox(height: 8),
                         _TipRow(text: 'MP4, WebM, or MOV formats work best'),
                       ],
