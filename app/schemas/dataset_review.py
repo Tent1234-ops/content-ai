@@ -31,6 +31,10 @@ class DatasetReviewCandidateItem(BaseModel):
     proposed_leaf_key: str
     transcript_language: str
     caption_type: str
+    transcript_acquisition_method: str
+    transcript_scope: str
+    transcript_timestamps_available: bool
+    view_metric_version: str
     duration_seconds: int
     transcript: str
     transcript_preview: str
@@ -79,3 +83,31 @@ class DatasetReviewDecisionResponse(BaseModel):
     review_event_id: int | None = None
     run_status: str
     coverage: dict[str, Any]
+
+
+class NotebookLMTranscriptCandidateRequest(BaseModel):
+    video_url: str = Field(min_length=11, max_length=2048)
+    transcript: str = Field(min_length=80, max_length=2_000_000)
+    proposed_leaf_key: str = Field(min_length=1, max_length=100)
+    transcript_language: Literal["th", "en"] = "th"
+    caption_type: Literal["manual", "auto_generated", "unspecified"] = (
+        "unspecified"
+    )
+    collection_strategy: Literal[
+        "classification_diverse",
+        "recommendation_high_performance",
+    ] = "classification_diverse"
+    collection_run_id: int | None = Field(default=None, ge=1)
+    dataset_version: str = Field(
+        default="youtube-cc-th-v1",
+        min_length=1,
+        max_length=100,
+    )
+
+
+class NotebookLMTranscriptCandidateResponse(BaseModel):
+    status: Literal["candidate_created"]
+    collection_run_id: int
+    candidate_count: int
+    candidate_artifact_sha256: str
+    candidate: DatasetReviewCandidateItem

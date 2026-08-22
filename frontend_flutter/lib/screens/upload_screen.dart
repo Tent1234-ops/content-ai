@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/recommendation_result.dart';
 import '../repositories/analysis_repository.dart';
+import '../services/video_metadata_reader.dart';
 import '../state/auth_scope.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
@@ -17,6 +18,8 @@ class UploadScreen extends StatefulWidget {
 }
 
 class _UploadScreenState extends State<UploadScreen> {
+  static const _maximumVideoDuration = Duration(minutes: 5);
+
   final _repository = AnalysisRepository();
   String? _error;
   bool _loading = false;
@@ -25,6 +28,7 @@ class _UploadScreenState extends State<UploadScreen> {
   Uint8List? _selectedFileBytes;
   Stream<List<int>>? _selectedFileStream;
   int? _selectedFileSize;
+  Duration? _selectedDuration;
   int _uploadProgress = 0;
   String _statusMessage = '';
   String? _suggestedTopic;
@@ -64,6 +68,27 @@ class _UploadScreenState extends State<UploadScreen> {
         return;
       }
 
+      Duration? selectedDuration;
+      try {
+        selectedDuration = await readVideoDuration(
+          fileName: selectedFile.name,
+          filePath: selectedPath,
+          fileBytes: selectedBytes,
+        );
+      } catch (_) {
+        selectedDuration = null;
+      }
+
+      if (!mounted) return;
+      if (selectedDuration == null) {
+        await _showMetadataErrorDialog();
+        return;
+      }
+      if (selectedDuration > _maximumVideoDuration) {
+        await _showVideoTooLongDialog(selectedDuration);
+        return;
+      }
+
       final fileSizeMB = (selectedFile.size / (1024 * 1024)).toStringAsFixed(1);
 
       setState(() {
@@ -72,9 +97,11 @@ class _UploadScreenState extends State<UploadScreen> {
         _selectedFileBytes = selectedBytes;
         _selectedFileStream = selectedStream;
         _selectedFileSize = selectedFile.size;
+        _selectedDuration = selectedDuration;
         _error = null;
         _uploadProgress = 0;
-        _statusMessage = 'File ready ($fileSizeMB MB)';
+        _statusMessage =
+            'File ready ($fileSizeMB MB, ${_formatDuration(selectedDuration!)})';
       });
 
       if (!mounted) return;
@@ -142,6 +169,11 @@ class _UploadScreenState extends State<UploadScreen> {
       );
     } catch (error) {
       if (!mounted) return;
+      if (_isDurationLimitError(error)) {
+        await _showVideoTooLongDialog(_selectedDuration);
+        if (mounted) _clearSelection();
+        return;
+      }
       setState(() {
         _error = error.toString();
         _statusMessage = 'Error: ${error.toString()}';
@@ -154,7 +186,7 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   Future<AnalysisResultViewData> _pollAnalysisJob(String jobId) async {
-    for (var attempt = 0; attempt < 180; attempt++) {
+    while (true) {
       final job = await _repository.getAnalysisJob(jobId);
       if (!mounted) {
         throw Exception('Upload screen was closed.');
@@ -196,17 +228,14 @@ class _UploadScreenState extends State<UploadScreen> {
 
       await Future.delayed(const Duration(seconds: 2));
     }
-    throw Exception(
-      'Analysis did not finish within 6 minutes. Please try again or use a shorter clip.',
-    );
   }
 
   String _messageForStage(String stage) {
     switch (stage) {
       case 'extracting_audio':
-        return 'Extracting hook audio...';
+        return 'Extracting audio from full video...';
       case 'transcribing':
-        return 'Generating transcript...';
+        return 'Generating full video transcript...';
       case 'normalizing_transcript':
         return 'Cleaning transcript...';
       case 'classifying':
@@ -227,6 +256,7 @@ class _UploadScreenState extends State<UploadScreen> {
       _selectedFileBytes = null;
       _selectedFileStream = null;
       _selectedFileSize = null;
+      _selectedDuration = null;
       _uploadProgress = 0;
       _statusMessage = '';
       _error = null;
@@ -306,32 +336,33 @@ class _UploadScreenState extends State<UploadScreen> {
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 8),
-                      _AnalysisFeature(
+                      const _AnalysisFeature(
                         icon: Icons.subtitles_outlined,
                         title: 'Transcript',
                         description: 'Auto-generated from your video',
                       ),
                       const SizedBox(height: 8),
-                      _AnalysisFeature(
+                      const _AnalysisFeature(
                         icon: Icons.category_outlined,
                         title: 'Content Classification',
                         description: 'AI-predicted domain/category',
                       ),
                       const SizedBox(height: 8),
-                      _AnalysisFeature(
+                      const _AnalysisFeature(
                         icon: Icons.key_outlined,
                         title: 'Keywords & Gaps',
                         description:
                             'Missing keywords compared to top performers',
                       ),
                       const SizedBox(height: 8),
-                      _AnalysisFeature(
+                      const _AnalysisFeature(
                         icon: Icons.lightbulb_outline,
                         title: 'Hook Suggestions',
-                        description: 'Recommended first 60 seconds keywords',
+                        description:
+                            'Opening-segment keywords based on the configured hook duration',
                       ),
                       const SizedBox(height: 8),
-                      _AnalysisFeature(
+                      const _AnalysisFeature(
                         icon: Icons.schedule_outlined,
                         title: 'Duration Recommendation',
                         description: 'Optimal video length for your domain',
@@ -449,7 +480,7 @@ class _UploadScreenState extends State<UploadScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        '${_uploadProgress}% complete',
+                        '$_uploadProgress% complete',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -486,7 +517,7 @@ class _UploadScreenState extends State<UploadScreen> {
               // Tips Card
               if (!_loading)
                 Card(
-                  color: Theme.of(context).colorScheme.surfaceVariant,
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   child: Padding(
                     padding: const EdgeInsets.all(12),
                     child: Column(
@@ -509,14 +540,16 @@ class _UploadScreenState extends State<UploadScreen> {
                           ],
                         ),
                         const SizedBox(height: 12),
-                        _TipRow(
+                        const _TipRow(
                             text: 'Use clear audio for better transcription'),
                         const SizedBox(height: 8),
-                        _TipRow(
+                        const _TipRow(
                           text: 'Videos must be no longer than 5 minutes',
                         ),
                         const SizedBox(height: 8),
-                        _TipRow(text: 'MP4, WebM, or MOV formats work best'),
+                        const _TipRow(
+                          text: 'MP4, WebM, or MOV formats work best',
+                        ),
                       ],
                     ),
                   ),
@@ -526,6 +559,58 @@ class _UploadScreenState extends State<UploadScreen> {
         ),
       ),
     );
+  }
+}
+
+extension on _UploadScreenState {
+  Future<void> _showVideoTooLongDialog(Duration? duration) {
+    final detail = duration == null
+        ? ''
+        : '\nความยาววิดีโอที่เลือก: ${_formatDuration(duration)}';
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('วิดีโอยาวเกินกำหนด'),
+        content: Text('อัปโหลดวิดีโอได้สูงสุด 5 นาที$detail'),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ตกลง'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showMetadataErrorDialog() {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('ไม่สามารถอ่านความยาววิดีโอได้'),
+        content: const Text(
+          'กรุณาเลือกไฟล์ MP4, WebM หรือ MOV ที่เบราว์เซอร์รองรับ',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('ตกลง'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _isDurationLimitError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('5-minute upload limit') ||
+        message.contains('maximum video duration') ||
+        message.contains('300 seconds');
+  }
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes;
+    final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 }
 

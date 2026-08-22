@@ -27,6 +27,10 @@ from app.services.live_trend_snapshots import (
     refresh_global_live_trends,
 )
 from app.services.trend_watch_sessions import start_trend_watch_session
+from app.services.view_metrics import (
+    YOUTUBE_PLAY_START_VIEW_V2,
+    YOUTUBE_QUALIFIED_VIEW_V1,
+)
 
 
 class LiveTrendSnapshotTests(unittest.TestCase):
@@ -123,6 +127,25 @@ class LiveTrendSnapshotTests(unittest.TestCase):
                     trend_score=730,
                     source="youtube_live",
                 )
+            ]
+
+        return fetcher
+
+    @staticmethod
+    def _youtube_versioned_metric(views, version):
+        def fetcher(_region, _limit):
+            return "live", [
+                {
+                    "title": "Versioned momentum",
+                    "category": "Technology",
+                    "video_url": "https://youtube.example/versioned-momentum",
+                    "views": views,
+                    "likes": 100,
+                    "comments": 10,
+                    "trend_score": 730,
+                    "source": "youtube_live",
+                    "view_metric_version": version,
+                }
             ]
 
         return fetcher
@@ -438,6 +461,52 @@ class LiveTrendSnapshotTests(unittest.TestCase):
         self.assertEqual(item["change_label"], "Baseline")
         self.assertEqual(item["engagement_rate_per_minute"], 0)
         self.assertFalse(item["is_meaningful_rising"])
+
+    def test_youtube_momentum_resets_when_view_metric_version_changes(self):
+        empty = self._empty_provider
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": self._youtube_versioned_metric(
+                    1_000,
+                    YOUTUBE_QUALIFIED_VIEW_V1,
+                ),
+                "google": empty,
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+        self._backdate_latest_run()
+        watch_session = self._start_watch_session()
+        refresh_global_live_trends(
+            region="TH",
+            limit=50,
+            fetchers={
+                "youtube": self._youtube_versioned_metric(
+                    50_000,
+                    YOUTUBE_PLAY_START_VIEW_V2,
+                ),
+                "google": empty,
+                "tiktok": empty,
+            },
+            db=self.db,
+        )
+
+        result = compare_live_trend_snapshot(
+            db=self.db,
+            user=self.user,
+            watch_session=watch_session,
+            region="TH",
+            limit=50,
+        )
+        item = result["platforms"]["youtube"]["items"][0]
+
+        self.assertEqual(item["change_kind"], "metric_baseline")
+        self.assertEqual(item["engagement_delta"], 0)
+        self.assertEqual(item["engagement_rate_per_minute"], 0)
+        self.assertFalse(item["has_previous_snapshot"])
+        self.assertTrue(item["metric_version_changed"])
 
     def test_google_momentum_uses_rank_movement(self):
         empty = self._empty_provider

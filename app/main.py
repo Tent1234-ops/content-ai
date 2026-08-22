@@ -12,6 +12,7 @@ from app.database.db import Base, DB_BOOTSTRAP_ERROR, SessionLocal, engine
 from app.database.migrations import (
     archive_phase10_notification_tables,
     migrate_phase13_taxonomy_schema,
+    migrate_view_metric_schema,
     migrate_youtube_cc_dataset_schema,
 )
 from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, dataset_review, datasets, nlp, recommendation, trends, notifications, follows
@@ -87,6 +88,7 @@ db_init_status = "ok"
 phase11_migration_status = {}
 phase13_migration_status = {}
 youtube_cc_migration_status = {}
+view_metric_migration_status = {}
 taxonomy_seed_status = {}
 youtube_quota_repair_status = {}
 try:
@@ -94,6 +96,7 @@ try:
     Base.metadata.create_all(bind=engine)
     phase13_migration_status = migrate_phase13_taxonomy_schema(engine)
     youtube_cc_migration_status = migrate_youtube_cc_dataset_schema(engine)
+    view_metric_migration_status = migrate_view_metric_schema(engine)
     taxonomy_db = SessionLocal()
     try:
         taxonomy_seed_status = sync_taxonomy_registry(taxonomy_db)
@@ -135,6 +138,7 @@ def root():
         "status": "ok",
         "db_init": db_init_status,
         "youtube_cc_schema": youtube_cc_migration_status,
+        "view_metric_schema": view_metric_migration_status,
         "taxonomy": taxonomy_seed_status,
     }
 
@@ -148,6 +152,7 @@ def health():
         "phase11_archived_tables": phase11_migration_status,
         "phase13_schema": phase13_migration_status,
         "youtube_cc_schema": youtube_cc_migration_status,
+        "view_metric_schema": view_metric_migration_status,
         "taxonomy": taxonomy_seed_status,
     }
     live_trends = {
@@ -166,6 +171,7 @@ def health():
             "phase11_archived_tables": phase11_migration_status,
             "phase13_schema": phase13_migration_status,
             "youtube_cc_schema": youtube_cc_migration_status,
+            "view_metric_schema": view_metric_migration_status,
             "taxonomy": taxonomy_seed_status,
             "error": f"{exc.__class__.__name__}: {exc}",
         }

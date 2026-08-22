@@ -15,6 +15,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from app.database.db import Base, SessionLocal, engine
 from app.database.migrations import (
     migrate_phase13_taxonomy_schema,
+    migrate_view_metric_schema,
     migrate_youtube_cc_dataset_schema,
 )
 from app.services.taxonomy import sync_taxonomy_registry, taxonomy_coverage
@@ -25,6 +26,7 @@ def main() -> int:
     Base.metadata.create_all(bind=engine)
     phase13 = migrate_phase13_taxonomy_schema(engine)
     youtube_cc = migrate_youtube_cc_dataset_schema(engine)
+    view_metrics = migrate_view_metric_schema(engine)
     db = SessionLocal()
     try:
         taxonomy = sync_taxonomy_registry(db)
@@ -37,6 +39,7 @@ def main() -> int:
             {
                 "phase13_schema": phase13,
                 "youtube_cc_schema": youtube_cc,
+                "view_metric_schema": view_metrics,
                 "taxonomy_sync": taxonomy,
                 "quota_waiting_repair": quota_waiting_repair,
                 "coverage": coverage,

@@ -6,12 +6,15 @@ import html
 import io
 import json
 import math
+import random
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -24,11 +27,15 @@ from app.database.models import (
 )
 from app.services.dataset_contract import (
     ACCEPTED_TRANSCRIPT_QUALITIES,
+    DEFAULT_COLLECTION_LANGUAGES,
     DEFAULT_YOUTUBE_CC_DATASET_VERSION,
+    NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
     RECOMMENDATION_DURATION_MAX_SECONDS,
     SPLIT_STRATEGY,
     SUPPORTED_CAPTION_TYPES,
     SUPPORTED_TRANSCRIPT_LANGUAGES,
+    TRANSCRIPT_SCOPE_FIRST_WINDOW,
+    TRANSCRIPT_SCOPE_FULL_VIDEO,
     TRANSCRIPT_WINDOW_SECONDS,
     YOUTUBE_CC_DATASET_SOURCE,
     YOUTUBE_CC_LABEL_SOURCE,
@@ -36,6 +43,7 @@ from app.services.dataset_contract import (
     YOUTUBE_CC_LICENSE_URL,
     YOUTUBE_CC_TRANSCRIPT_SOURCE,
     YOUTUBE_CC_VERIFICATION_STATUS,
+    YOUTUBE_TRANSCRIPT_API_ACQUISITION,
     channel_dataset_split,
 )
 from app.services.dataset_eligibility import validate_training_eligibility_values
@@ -49,6 +57,7 @@ from app.services.taxonomy import (
     taxonomy_coverage,
     taxonomy_path,
 )
+from app.services.view_metrics import resolve_view_metric_version
 
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
@@ -61,6 +70,11 @@ COLLECTION_STRATEGIES = (
 COLLECTION_SCHEMA_VERSION = 4
 DEFAULT_THAI_TARGET_RATIO = 0.40
 DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF = 3
+DEFAULT_TRANSCRIPT_DELAY_SECONDS = 60.0
+DEFAULT_TRANSCRIPT_JITTER_SECONDS = 30.0
+DEFAULT_MAX_TRANSCRIPT_ATTEMPTS_PER_EXECUTION = 3
+DEFAULT_RESUME_COOLDOWN_MINUTES = 30.0
+DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS = 24.0
 REVIEW_FIELDS = (
     "candidate_sha256",
     "source_youtube_id",
@@ -70,6 +84,7 @@ REVIEW_FIELDS = (
     "proposed_leaf_key",
     "transcript_language",
     "caption_type",
+    "view_metric_version",
     "duration_seconds",
     "transcript_preview",
     "decision",
@@ -79,6 +94,7 @@ REVIEW_FIELDS = (
     "reviewed_at",
     "review_notes",
 )
+OPTIONAL_REVIEW_FIELDS = {"view_metric_version"}
 
 
 class YouTubeCCDatasetError(RuntimeError):
@@ -106,6 +122,33 @@ class YouTubeTranscriptProviderBlockedError(YouTubeCCDatasetError):
         )
 
 
+class YouTubeCollectionResumeCooldownError(YouTubeCCDatasetError):
+    def __init__(
+        self,
+        *,
+        collection_run_id: int,
+        status: str,
+        retry_at: datetime,
+        remaining_seconds: float,
+    ):
+        self.collection_run_id = collection_run_id
+        self.status = status
+        self.retry_at = retry_at.astimezone(timezone.utc)
+        self.remaining_seconds = max(0.0, remaining_seconds)
+        super().__init__(
+            f"Collection run {collection_run_id} is still in its {status} "
+            f"cooldown; retry at {_iso_z(self.retry_at)}"
+        )
+
+
+class _CollectionPacingPause(RuntimeError):
+    def __init__(self, attempts: int):
+        self.attempts = attempts
+        super().__init__(
+            f"Transcript pacing budget reached after {attempts} attempts"
+        )
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -125,6 +168,28 @@ def _parse_datetime(value: Any, *, field: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _manifest_checkpoint_time(
+    manifest: dict[str, Any],
+    collection_run: DatasetCollectionRun,
+) -> datetime:
+    raw_updated_at = str(manifest.get("updated_at") or "").strip()
+    if raw_updated_at:
+        try:
+            parsed = datetime.fromisoformat(raw_updated_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise YouTubeCCDatasetError(
+                f"Invalid collection manifest updated_at: {raw_updated_at}"
+            ) from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    fallback = collection_run.last_resumed_at or collection_run.started_at
+    if fallback.tzinfo is None:
+        fallback = fallback.replace(tzinfo=timezone.utc)
+    return fallback.astimezone(timezone.utc)
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -310,6 +375,11 @@ def fetch_public_transcript(
     return {
         "language": language,
         "caption_type": "auto_generated" if is_generated else "manual",
+        "transcript_source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+        "transcript_acquisition_method": YOUTUBE_TRANSCRIPT_API_ACQUISITION,
+        "transcript_scope": TRANSCRIPT_SCOPE_FIRST_WINDOW,
+        "transcript_timestamps_available": True,
+        "transcript_window_seconds": TRANSCRIPT_WINDOW_SECONDS,
         "segments": segments,
         "segment_count": len(segments),
         "start_seconds": float(segments[0]["start"]),
@@ -383,6 +453,10 @@ def _make_candidate(
         "region_code": region_code,
         "collected_at": _iso_z(collected_at),
         "statistics_captured_at": _iso_z(collected_at),
+        "view_metric_version": resolve_view_metric_version(
+            "youtube",
+            collected_at,
+        ),
         "license_verified_at": _iso_z(collected_at),
         "source_youtube_id": video_id,
         "source_record_id": video_id,
@@ -400,7 +474,19 @@ def _make_candidate(
         "youtube_license_code": str(status.get("license") or ""),
         "license_name": YOUTUBE_CC_LICENSE_NAME,
         "license_url": YOUTUBE_CC_LICENSE_URL,
-        "transcript_source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+        "transcript_source": str(
+            transcript.get("transcript_source") or YOUTUBE_CC_TRANSCRIPT_SOURCE
+        ),
+        "transcript_acquisition_method": str(
+            transcript.get("transcript_acquisition_method")
+            or YOUTUBE_TRANSCRIPT_API_ACQUISITION
+        ),
+        "transcript_scope": str(
+            transcript.get("transcript_scope") or TRANSCRIPT_SCOPE_FIRST_WINDOW
+        ),
+        "transcript_timestamps_available": bool(
+            transcript.get("transcript_timestamps_available", True)
+        ),
         "transcript_language": transcript["language"],
         "caption_type": transcript["caption_type"],
         "transcript": transcript["transcript"],
@@ -409,7 +495,10 @@ def _make_candidate(
         "transcript_segment_count": transcript["segment_count"],
         "transcript_start_seconds": transcript["start_seconds"],
         "transcript_end_seconds": transcript["end_seconds"],
-        "transcript_window_seconds": TRANSCRIPT_WINDOW_SECONDS,
+        "transcript_window_seconds": int(
+            transcript.get("transcript_window_seconds")
+            or TRANSCRIPT_WINDOW_SECONDS
+        ),
         "raw_metadata": {
             "snippet": snippet,
             "contentDetails": content_details,
@@ -440,6 +529,11 @@ def _review_csv_text(candidates: Sequence[dict[str, Any]]) -> str:
                 "proposed_leaf_key": candidate["proposed_leaf_key"],
                 "transcript_language": candidate["transcript_language"],
                 "caption_type": candidate["caption_type"],
+                "view_metric_version": resolve_view_metric_version(
+                    "youtube",
+                    candidate.get("statistics_captured_at"),
+                    candidate.get("view_metric_version"),
+                ),
                 "duration_seconds": candidate["duration_seconds"],
                 "transcript_preview": transcript[:500],
                 "decision": "",
@@ -498,11 +592,17 @@ def _quality_collection_settings(
     max_videos_per_channel_per_leaf: int,
 ) -> tuple[int, int]:
     if min_thai_per_leaf is None:
-        min_thai_per_leaf = (
-            math.ceil(target_per_leaf * DEFAULT_THAI_TARGET_RATIO)
-            if "th" in languages
-            else 0
-        )
+        normalized_languages = {
+            str(language).lower() for language in languages
+        }
+        if normalized_languages == {"th"}:
+            min_thai_per_leaf = target_per_leaf
+        elif "th" in normalized_languages:
+            min_thai_per_leaf = math.ceil(
+                target_per_leaf * DEFAULT_THAI_TARGET_RATIO
+            )
+        else:
+            min_thai_per_leaf = 0
     if not 0 <= min_thai_per_leaf <= target_per_leaf:
         raise YouTubeCCDatasetError(
             "min_thai_per_leaf must be between 0 and target_per_leaf"
@@ -518,9 +618,21 @@ def _quality_collection_settings(
     return min_thai_per_leaf, max_videos_per_channel_per_leaf
 
 
-def _queries_by_leaf(leaf_keys: Sequence[str]) -> dict[str, list[str]]:
+def _query_language(query: str) -> str:
+    return "th" if re.search(r"[\u0E00-\u0E7F]", query) else "en"
+
+
+def _queries_by_leaf(
+    leaf_keys: Sequence[str],
+    languages: Sequence[str],
+) -> dict[str, list[str]]:
+    selected_languages = {str(language).lower() for language in languages}
     return {
-        leaf_key: list(collection_queries_for_leaf(leaf_key))
+        leaf_key: [
+            query
+            for query in collection_queries_for_leaf(leaf_key)
+            if _query_language(query) in selected_languages
+        ]
         for leaf_key in leaf_keys
     }
 
@@ -557,9 +669,16 @@ def _upgrade_empty_run_quality_config(
             "schema_version": COLLECTION_SCHEMA_VERSION,
             "min_thai_per_leaf": min_thai,
             "max_videos_per_channel_per_leaf": channel_cap,
-            "language_balance_policy": "reserve_minimum_thai_v1",
+            "language_balance_policy": (
+                "thai_only_v1"
+                if set(languages) == {"th"}
+                else "reserve_minimum_thai_v1"
+            ),
             "channel_diversity_policy": "max_per_channel_per_leaf_v1",
-            "queries_by_leaf": _queries_by_leaf(upgraded["leaf_keys"]),
+            "queries_by_leaf": _queries_by_leaf(
+                upgraded["leaf_keys"],
+                languages,
+            ),
         }
     )
     collection_run.run_key = _sha256_text(_canonical_json(upgraded))
@@ -663,11 +782,51 @@ def repair_quota_waiting_run_statuses(db: Session) -> dict[str, Any]:
     return {"repaired": len(repaired_ids), "run_ids": repaired_ids, "warnings": warnings}
 
 
+def _existing_training_language_counts_by_leaf(
+    db: Session,
+    *,
+    leaf_keys: Sequence[str] | None = None,
+    exclude_collection_run_id: int | None = None,
+) -> dict[str, Counter[str]]:
+    query = db.query(
+        DatasetContent.taxonomy_leaf_key,
+        DatasetContent.language,
+    ).filter(
+        DatasetContent.is_training_eligible.is_(True),
+        DatasetContent.is_active.is_(True),
+    )
+    normalized_leaves = tuple(
+        normalize_taxonomy_leaf(leaf_key) for leaf_key in (leaf_keys or ())
+    )
+    if normalized_leaves:
+        query = query.filter(DatasetContent.taxonomy_leaf_key.in_(normalized_leaves))
+    if exclude_collection_run_id is not None:
+        query = query.filter(
+            (DatasetContent.collection_run_id.is_(None))
+            | (DatasetContent.collection_run_id != exclude_collection_run_id)
+        )
+
+    counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for leaf_key, language in query.all():
+        normalized_leaf = normalize_taxonomy_leaf(leaf_key)
+        if normalized_leaf not in ACTIVE_LEAF_KEYS:
+            continue
+        normalized_language = str(language or "und").lower().split("-", 1)[0]
+        counts[normalized_leaf][normalized_language] += 1
+    return counts
+
+
 def _dedup_catalog(
     db: Session,
     *,
     exclude_run_id: int,
+    channel_languages: Sequence[str] | None = None,
 ) -> tuple[set[str], set[str], Counter[tuple[str, str]], dict[str, Any]]:
+    normalized_channel_languages = {
+        str(language).lower().split("-", 1)[0]
+        for language in (channel_languages or ())
+        if str(language).strip()
+    }
     video_ids: set[str] = set()
     transcript_hashes: set[str] = set()
     channel_leaf_counts: Counter[tuple[str, str]] = Counter()
@@ -677,11 +836,12 @@ def _dedup_catalog(
             DatasetContent.transcript_sha256,
             DatasetContent.taxonomy_leaf_key,
             DatasetContent.source_channel_id,
+            DatasetContent.language,
         )
         .filter(DatasetContent.source_youtube_id.isnot(None))
         .all()
     )
-    for video_id, transcript_hash, leaf_key, channel_id in database_rows:
+    for video_id, transcript_hash, leaf_key, channel_id, language in database_rows:
         normalized_video_id = str(video_id or "").strip()
         normalized_transcript_hash = str(transcript_hash or "").strip()
         normalized_leaf = normalize_taxonomy_leaf(leaf_key)
@@ -690,13 +850,28 @@ def _dedup_catalog(
             video_ids.add(normalized_video_id)
         if normalized_transcript_hash:
             transcript_hashes.add(normalized_transcript_hash)
-        if normalized_leaf in ACTIVE_LEAF_KEYS and normalized_channel:
+        normalized_language = str(language or "und").lower().split("-", 1)[0]
+        if (
+            normalized_leaf in ACTIVE_LEAF_KEYS
+            and normalized_channel
+            and (
+                not normalized_channel_languages
+                or normalized_language in normalized_channel_languages
+            )
+        ):
             channel_leaf_counts[(normalized_leaf, normalized_channel)] += 1
+    training_language_counts = _existing_training_language_counts_by_leaf(
+        db,
+        exclude_collection_run_id=exclude_run_id,
+    )
     database_video_count = len(video_ids)
     database_transcript_count = len(transcript_hashes)
     artifact_rows = 0
     artifact_runs = 0
+    excluded_artifacts = 0
+    excluded_artifact_rows = 0
     warnings: list[str] = []
+    seen_excluded_paths: set[Path] = set()
 
     runs = (
         db.query(DatasetCollectionRun)
@@ -729,10 +904,78 @@ def _dedup_catalog(
                     candidate.get("proposed_leaf_key")
                 )
                 channel_id = str(candidate.get("channel_id") or "").strip()
-                if leaf_key in ACTIVE_LEAF_KEYS and channel_id:
+                candidate_language = str(
+                    candidate.get("transcript_language") or "und"
+                ).lower().split("-", 1)[0]
+                if (
+                    leaf_key in ACTIVE_LEAF_KEYS
+                    and channel_id
+                    and (
+                        not normalized_channel_languages
+                        or candidate_language in normalized_channel_languages
+                    )
+                ):
                     channel_leaf_counts[(leaf_key, channel_id)] += 1
             if transcript_hash:
                 transcript_hashes.add(transcript_hash)
+
+        try:
+            run_config = json.loads(run.query_config_json or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            warnings.append(
+                f"run {run.collection_run_id}: invalid query config while "
+                f"loading excluded artifacts ({exc})"
+            )
+            continue
+        for history_entry in run_config.get("language_retarget_history") or []:
+            raw_excluded_path = str(
+                (history_entry or {}).get("excluded_artifact_path") or ""
+            ).strip()
+            if not raw_excluded_path:
+                continue
+            excluded_path = _resolve_project_path(raw_excluded_path)
+            if excluded_path in seen_excluded_paths:
+                continue
+            seen_excluded_paths.add(excluded_path)
+            if not excluded_path.is_file():
+                warnings.append(
+                    f"run {run.collection_run_id}: excluded artifact not found: "
+                    f"{excluded_path}"
+                )
+                continue
+            expected_hash = str(
+                (history_entry or {}).get("excluded_artifact_sha256") or ""
+            ).strip()
+            actual_hash = _sha256_file(excluded_path)
+            if expected_hash and expected_hash != actual_hash:
+                warnings.append(
+                    f"run {run.collection_run_id}: excluded artifact hash mismatch: "
+                    f"{excluded_path}"
+                )
+                continue
+            try:
+                excluded_candidates = _load_candidates(
+                    excluded_path,
+                    allow_empty=True,
+                )
+            except YouTubeCCDatasetError as exc:
+                warnings.append(
+                    f"run {run.collection_run_id}: excluded artifact invalid: {exc}"
+                )
+                continue
+            excluded_artifacts += 1
+            excluded_artifact_rows += len(excluded_candidates)
+            for candidate in excluded_candidates.values():
+                video_id = str(
+                    candidate.get("source_youtube_id") or ""
+                ).strip()
+                transcript_hash = str(
+                    candidate.get("transcript_sha256") or ""
+                ).strip()
+                if video_id:
+                    video_ids.add(video_id)
+                if transcript_hash:
+                    transcript_hashes.add(transcript_hash)
 
     channels_by_leaf: dict[str, set[str]] = defaultdict(set)
     for leaf_key, channel_id in channel_leaf_counts:
@@ -743,23 +986,38 @@ def _dedup_catalog(
         "database_transcript_hashes": database_transcript_count,
         "prior_artifact_runs": artifact_runs,
         "prior_artifact_rows": artifact_rows,
+        "prior_excluded_artifacts": excluded_artifacts,
+        "prior_excluded_artifact_rows": excluded_artifact_rows,
         "catalog_video_ids": len(video_ids),
         "catalog_transcript_hashes": len(transcript_hashes),
         "catalog_unique_channels_by_leaf": {
             leaf_key: len(channel_ids)
             for leaf_key, channel_ids in channels_by_leaf.items()
         },
+        "existing_training_language_counts_by_leaf": {
+            leaf_key: dict(sorted(language_counts.items()))
+            for leaf_key, language_counts in training_language_counts.items()
+        },
         "warnings": warnings,
     }
 
 
 def _annotate_performance_ranks(candidates: Sequence[dict[str, Any]]) -> None:
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for candidate in candidates:
         candidate.update(_performance_metrics(candidate))
-        grouped[normalize_taxonomy_leaf(candidate.get("proposed_leaf_key"))].append(
-            candidate
+        metric_version = resolve_view_metric_version(
+            "youtube",
+            candidate.get("statistics_captured_at"),
+            candidate.get("view_metric_version"),
         )
+        candidate["view_metric_version"] = metric_version
+        grouped[
+            (
+                normalize_taxonomy_leaf(candidate.get("proposed_leaf_key")),
+                metric_version,
+            )
+        ].append(candidate)
     for rows in grouped.values():
         ranked = sorted(
             rows,
@@ -835,11 +1093,12 @@ def _quality_values_for_progress(
         and run_config.get("source_video_duration_policy")
         == "unrestricted_positive_duration"
     ):
-        min_thai = (
-            math.ceil(target * DEFAULT_THAI_TARGET_RATIO)
-            if "th" in languages
-            else 0
-        )
+        if set(languages) == {"th"}:
+            min_thai = target
+        elif "th" in languages:
+            min_thai = math.ceil(target * DEFAULT_THAI_TARGET_RATIO)
+        else:
+            min_thai = 0
     else:
         min_thai = 0
     channel_cap = int(
@@ -860,8 +1119,12 @@ def _collection_progress(
     candidates: Sequence[dict[str, Any]],
     run_config: dict[str, Any],
     accepted_by_strategy: dict[str, Counter[str]] | None = None,
+    existing_training_language_counts_by_leaf: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     accepted_by_strategy = accepted_by_strategy or _accepted_counts(candidates)
+    existing_training_language_counts_by_leaf = (
+        existing_training_language_counts_by_leaf or {}
+    )
     languages_by_leaf = _language_counts_by_leaf(candidates)
     _channel_counts, channels_by_leaf = _channel_counts_by_leaf(candidates)
     configured_leaves = [
@@ -895,10 +1158,16 @@ def _collection_progress(
             counts[leaf_key] for counts in accepted_by_strategy.values()
         )
         language_counts = Counter(languages_by_leaf[leaf_key])
+        existing_language_counts = Counter(
+            existing_training_language_counts_by_leaf.get(leaf_key) or {}
+        )
+        cumulative_language_counts = existing_language_counts + language_counts
         for language in configured_languages:
             language_counts.setdefault(language, 0)
+            existing_language_counts.setdefault(language, 0)
+            cumulative_language_counts.setdefault(language, 0)
         total_languages.update(language_counts)
-        thai_count = int(language_counts["th"])
+        thai_count = int(cumulative_language_counts["th"])
         strategies_complete = all(
             accepted_by_strategy[str(plan["strategy"])][leaf_key]
             >= int(plan["target_per_leaf"])
@@ -916,6 +1185,12 @@ def _collection_progress(
                     1,
                 ),
                 "language_counts": dict(sorted(language_counts.items())),
+                "existing_training_language_counts": dict(
+                    sorted(existing_language_counts.items())
+                ),
+                "cumulative_training_language_counts": dict(
+                    sorted(cumulative_language_counts.items())
+                ),
                 "thai_minimum": min_thai,
                 "thai_remaining": max(0, min_thai - thai_count),
                 "unique_channels": len(channels_by_leaf[leaf_key]),
@@ -961,6 +1236,7 @@ def _all_targets_met(
     sampling_plan: Sequence[dict[str, Any]],
     accepted_by_strategy: dict[str, Counter[str]],
     language_counts_by_leaf: dict[str, Counter[str]],
+    existing_training_language_counts_by_leaf: dict[str, Counter[str]],
     min_thai_per_leaf: int,
 ) -> bool:
     strategies_complete = all(
@@ -970,7 +1246,9 @@ def _all_targets_met(
         for leaf_key in leaf_keys
     )
     thai_complete = all(
-        language_counts_by_leaf[leaf_key]["th"] >= min_thai_per_leaf
+        existing_training_language_counts_by_leaf[leaf_key]["th"]
+        + language_counts_by_leaf[leaf_key]["th"]
+        >= min_thai_per_leaf
         for leaf_key in leaf_keys
     )
     return strategies_complete and thai_complete
@@ -1008,11 +1286,21 @@ def _persist_collection_state(
     accepted_by_leaf: Counter[str] = Counter()
     for strategy_counts in accepted_by_strategy.values():
         accepted_by_leaf.update(strategy_counts)
+    view_metric_versions = Counter(
+        str(candidate.get("view_metric_version") or "unknown_v1")
+        for candidate in candidates
+    )
 
     progress = _collection_progress(
         candidates=candidates,
         run_config=run_config,
         accepted_by_strategy=accepted_by_strategy,
+        existing_training_language_counts_by_leaf=(
+            dedup_catalog_summary.get(
+                "existing_training_language_counts_by_leaf"
+            )
+            or {}
+        ),
     )
     manifest = {
         "schema_version": COLLECTION_SCHEMA_VERSION,
@@ -1026,7 +1314,8 @@ def _persist_collection_state(
         "updated_at": _iso_z(now),
         "completed_at": (
             None
-            if status in {"running", "quota_waiting", "transcript_waiting"}
+            if status
+            in {"running", "quota_waiting", "transcript_waiting", "pacing_paused"}
             else _iso_z(now)
         ),
         "resume_count": int(collection_run.resume_count or 0),
@@ -1042,6 +1331,7 @@ def _persist_collection_state(
             "auto_approved_rows": 0,
         },
         "accepted_by_leaf": dict(accepted_by_leaf),
+        "view_metric_versions": dict(view_metric_versions),
         "accepted_by_strategy": {
             strategy: dict(counts)
             for strategy, counts in accepted_by_strategy.items()
@@ -1067,11 +1357,40 @@ def _persist_collection_state(
             "message": "YouTube search quota is exhausted; resume this run after reset.",
         }
     if status == "transcript_waiting":
+        blocked_cooldown_hours = float(
+            (run_config.get("transcript_pacing_policy") or {}).get(
+                "blocked_resume_cooldown_hours",
+                DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS,
+            )
+        )
         manifest["transcript_provider"] = {
             "retryable": True,
+            "cooldown_hours": blocked_cooldown_hours,
+            "next_resume_at": _iso_z(
+                now + timedelta(hours=blocked_cooldown_hours)
+            ),
             "message": (
                 "The public transcript provider blocked this IP. Resume this run "
-                "after the block clears or from a permitted network."
+                "after the cooldown expires or from a permitted network."
+            ),
+        }
+    if status == "pacing_paused":
+        cooldown_minutes = float(
+            (run_config.get("transcript_pacing_policy") or {}).get(
+                "resume_cooldown_minutes",
+                DEFAULT_RESUME_COOLDOWN_MINUTES,
+            )
+        )
+        manifest["pacing"] = {
+            "retryable": True,
+            "cooldown_minutes": cooldown_minutes,
+            "next_resume_at": _iso_z(
+                now + timedelta(minutes=cooldown_minutes)
+            ),
+            "message": (
+                "The per-execution transcript attempt budget was reached. "
+                f"Wait at least {cooldown_minutes:g} minutes, then "
+                "resume this run to continue from the current search page."
             ),
         }
     _write_text_atomic(
@@ -1091,11 +1410,12 @@ def _persist_collection_state(
     collection_run.duplicates_skipped = sum(duplicate_reasons.values())
     collection_run.errors_count = sum(rejected_reasons.values()) + int(
         bool(failure_message)
-        and status not in {"quota_waiting", "transcript_waiting"}
+        and status not in {"quota_waiting", "transcript_waiting", "pacing_paused"}
     )
     collection_run.completed_at = (
         None
-        if status in {"running", "quota_waiting", "transcript_waiting"}
+        if status
+        in {"running", "quota_waiting", "transcript_waiting", "pacing_paused"}
         else now.replace(tzinfo=None)
     )
     db.commit()
@@ -1124,6 +1444,9 @@ def _execute_collection(
     transcript_fetcher: Callable[[str, Sequence[str]], dict[str, Any]],
     youtube_getter: Callable[..., dict[str, Any]],
     progress_callback: Callable[[dict[str, Any]], None] | None,
+    transcript_delay_seconds: float,
+    transcript_jitter_seconds: float,
+    max_transcript_attempts_per_execution: int | None,
 ) -> dict[str, Any]:
     leaf_keys = tuple(run_config["leaf_keys"])
     languages = tuple(run_config["languages"])
@@ -1137,7 +1460,6 @@ def _execute_collection(
         run_config.get("max_videos_per_channel_per_leaf")
         or run_config["target_per_leaf"]
     )
-    max_non_thai_per_leaf = int(run_config["target_per_leaf"]) - min_thai_per_leaf
     candidate_video_ids = {
         str(item.get("source_youtube_id") or "").strip()
         for item in candidates
@@ -1147,12 +1469,48 @@ def _execute_collection(
         for item in candidates
     }
     attempted_video_ids = set(candidate_video_ids)
+    for saved_query_state in search_state.values():
+        if isinstance(saved_query_state, dict):
+            attempted_video_ids.update(
+                str(video_id)
+                for video_id in (
+                    saved_query_state.get("transcript_attempted_video_ids") or []
+                )
+                if str(video_id).strip()
+            )
+    transcript_attempts_this_execution = 0
     (
         catalog_video_ids,
         catalog_transcript_hashes,
         catalog_channel_counts,
         catalog_summary,
-    ) = _dedup_catalog(db, exclude_run_id=collection_run.collection_run_id)
+    ) = _dedup_catalog(
+        db,
+        exclude_run_id=collection_run.collection_run_id,
+        channel_languages=languages,
+    )
+    existing_training_language_counts_by_leaf: dict[str, Counter[str]] = {
+        leaf_key: Counter(
+            (catalog_summary.get("existing_training_language_counts_by_leaf") or {}).get(
+                leaf_key
+            )
+            or {}
+        )
+        for leaf_key in leaf_keys
+    }
+    required_run_thai_by_leaf = {
+        leaf_key: max(
+            0,
+            min_thai_per_leaf
+            - existing_training_language_counts_by_leaf[leaf_key]["th"],
+        )
+        for leaf_key in leaf_keys
+    }
+    max_non_thai_by_leaf = {
+        leaf_key: int(run_config["target_per_leaf"])
+        - required_run_thai_by_leaf[leaf_key]
+        for leaf_key in leaf_keys
+    }
 
     def target_met(strategy: str, leaf_key: str, target: int) -> bool:
         return accepted_by_strategy[strategy][leaf_key] >= target
@@ -1185,13 +1543,21 @@ def _execute_collection(
                     continue
                 configured_queries = (
                     (run_config.get("queries_by_leaf") or {}).get(leaf_key)
-                    or collection_queries_for_leaf(leaf_key)
+                    or _queries_by_leaf((leaf_key,), languages).get(leaf_key)
+                    or ()
                 )
                 for query in configured_queries:
                     if target_met(strategy, leaf_key, strategy_target):
                         break
                     state_key = _sha256_text(f"{strategy}|{leaf_key}|{query}")
                     query_state = dict(search_state.get(state_key) or {})
+                    transcript_attempted_video_ids = {
+                        str(video_id)
+                        for video_id in (
+                            query_state.get("transcript_attempted_video_ids") or []
+                        )
+                        if str(video_id).strip()
+                    }
                     if query_state.get("exhausted"):
                         continue
                     page_token = str(query_state.get("next_page_token") or "").strip() or None
@@ -1256,6 +1622,31 @@ def _execute_collection(
                                 details.get("items") or [],
                                 start=1,
                             ):
+                                if (
+                                    max_transcript_attempts_per_execution is not None
+                                    and transcript_attempts_this_execution
+                                    >= max_transcript_attempts_per_execution
+                                ):
+                                    query_state = {
+                                        "strategy": strategy,
+                                        "leaf_key": leaf_key,
+                                        "query": query,
+                                        "search_order": search_order,
+                                        "pages_fetched": int(
+                                            query_state.get("pages_fetched") or 0
+                                        ),
+                                        "next_page_token": page_token,
+                                        "exhausted": False,
+                                        "in_progress_page": True,
+                                        "transcript_attempted_video_ids": sorted(
+                                            transcript_attempted_video_ids
+                                        ),
+                                        "updated_at": _iso_z(_utc_now()),
+                                    }
+                                    search_state[state_key] = query_state
+                                    raise _CollectionPacingPause(
+                                        transcript_attempts_this_execution
+                                    )
                                 candidates_seen += 1
                                 video_id = str(item.get("id") or "").strip()
                                 attempted_video_ids.add(video_id)
@@ -1293,13 +1684,32 @@ def _execute_collection(
                                     quality_skip_reasons["channel_cap_reached"] += 1
                                     continue
                                 try:
+                                    delay_seconds = transcript_delay_seconds
+                                    if transcript_jitter_seconds:
+                                        delay_seconds += random.uniform(
+                                            0.0,
+                                            transcript_jitter_seconds,
+                                        )
+                                    if delay_seconds:
+                                        time.sleep(delay_seconds)
+                                    transcript_attempts_this_execution += 1
                                     transcript = transcript_fetcher(video_id, languages)
                                 except YouTubeTranscriptProviderBlockedError:
                                     rejected_reasons["transcript_provider_blocked"] += 1
                                     raise
                                 except Exception:
+                                    transcript_attempted_video_ids.add(video_id)
+                                    query_state["transcript_attempted_video_ids"] = sorted(
+                                        transcript_attempted_video_ids
+                                    )
+                                    search_state[state_key] = query_state
                                     rejected_reasons["transcript_unavailable"] += 1
                                     continue
+                                transcript_attempted_video_ids.add(video_id)
+                                query_state["transcript_attempted_video_ids"] = sorted(
+                                    transcript_attempted_video_ids
+                                )
+                                search_state[state_key] = query_state
                                 transcript_language = str(
                                     transcript.get("language") or "und"
                                 ).lower().split("-", 1)[0]
@@ -1315,7 +1725,8 @@ def _execute_collection(
                                 )
                                 if (
                                     transcript_language != "th"
-                                    and current_non_thai >= max_non_thai_per_leaf
+                                    and current_non_thai
+                                    >= max_non_thai_by_leaf[leaf_key]
                                 ):
                                     quality_skip_reasons[
                                         "non_thai_capacity_reserved"
@@ -1369,6 +1780,10 @@ def _execute_collection(
                             "pages_fetched": int(query_state.get("pages_fetched") or 0) + 1,
                             "next_page_token": next_page_token,
                             "exhausted": next_page_token is None,
+                            "in_progress_page": False,
+                            "transcript_attempted_video_ids": sorted(
+                                transcript_attempted_video_ids
+                            ),
                             "updated_at": _iso_z(_utc_now()),
                         }
                         search_state[state_key] = query_state
@@ -1403,6 +1818,9 @@ def _execute_collection(
                 sampling_plan=sampling_plan,
                 accepted_by_strategy=accepted_by_strategy,
                 language_counts_by_leaf=accepted_by_language,
+                existing_training_language_counts_by_leaf=(
+                    existing_training_language_counts_by_leaf
+                ),
                 min_thai_per_leaf=min_thai_per_leaf,
             )
             else "partial"
@@ -1435,14 +1853,17 @@ def _execute_collection(
                     exc,
                     YouTubeTranscriptProviderBlockedError,
                 )
+                pacing_paused = isinstance(exc, _CollectionPacingPause)
                 waiting_status = (
                     "quota_waiting"
                     if quota_waiting
                     else "transcript_waiting"
                     if transcript_waiting
+                    else "pacing_paused"
+                    if pacing_paused
                     else "failed"
                 )
-                _persist_collection_state(
+                paused_manifest = _persist_collection_state(
                     db,
                     collection_run=failed_run,
                     candidate_file=candidate_file,
@@ -1458,9 +1879,13 @@ def _execute_collection(
                     search_state=search_state,
                     dedup_catalog_summary=catalog_summary,
                     status=waiting_status,
-                    failure_message=f"{type(exc).__name__}: {exc}",
+                    failure_message=(
+                        None if pacing_paused else f"{type(exc).__name__}: {exc}"
+                    ),
                     progress_callback=progress_callback,
                 )
+                if pacing_paused:
+                    return paused_manifest
             except Exception:
                 db.rollback()
         raise
@@ -1477,7 +1902,7 @@ def collect_youtube_cc_candidates(
     leaf_keys: Sequence[str] = ACTIVE_LEAF_KEYS,
     target_per_leaf: int = 50,
     performance_target_per_leaf: int | None = None,
-    languages: Sequence[str] = SUPPORTED_TRANSCRIPT_LANGUAGES,
+    languages: Sequence[str] = DEFAULT_COLLECTION_LANGUAGES,
     min_thai_per_leaf: int | None = None,
     max_videos_per_channel_per_leaf: int = (
         DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
@@ -1488,7 +1913,23 @@ def collect_youtube_cc_candidates(
     transcript_fetcher: Callable[[str, Sequence[str]], dict[str, Any]] = fetch_public_transcript,
     youtube_getter: Callable[..., dict[str, Any]] = _youtube_get,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    transcript_delay_seconds: float = 0.0,
+    transcript_jitter_seconds: float = 0.0,
+    max_transcript_attempts_per_execution: int | None = None,
+    resume_cooldown_minutes: float = DEFAULT_RESUME_COOLDOWN_MINUTES,
+    blocked_resume_cooldown_hours: float = DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS,
 ) -> dict[str, Any]:
+    if transcript_delay_seconds < 0 or transcript_jitter_seconds < 0:
+        raise YouTubeCCDatasetError("Transcript pacing delays cannot be negative")
+    if resume_cooldown_minutes < 0 or blocked_resume_cooldown_hours < 0:
+        raise YouTubeCCDatasetError("Transcript pacing cooldowns cannot be negative")
+    if (
+        max_transcript_attempts_per_execution is not None
+        and max_transcript_attempts_per_execution < 1
+    ):
+        raise YouTubeCCDatasetError(
+            "max_transcript_attempts_per_execution must be at least 1"
+        )
     normalized_leaves, normalized_languages = _normalize_collection_inputs(
         leaf_keys=leaf_keys,
         languages=languages,
@@ -1530,15 +1971,29 @@ def collect_youtube_cc_candidates(
         "sampling_plan": sampling_plan,
         "min_thai_per_leaf": normalized_min_thai,
         "max_videos_per_channel_per_leaf": normalized_channel_cap,
-        "language_balance_policy": "reserve_minimum_thai_v1",
+        "language_balance_policy": (
+            "thai_only_v1"
+            if set(normalized_languages) == {"th"}
+            else "reserve_minimum_thai_v1"
+        ),
         "channel_diversity_policy": "max_per_channel_per_leaf_v1",
-        "queries_by_leaf": _queries_by_leaf(normalized_leaves),
+        "queries_by_leaf": _queries_by_leaf(
+            normalized_leaves,
+            normalized_languages,
+        ),
         "source_video_duration_policy": "unrestricted_positive_duration",
         "transcript_window_seconds": TRANSCRIPT_WINDOW_SECONDS,
         "duration_recommendation_max_seconds": RECOMMENDATION_DURATION_MAX_SECONDS,
         "languages": normalized_languages,
         "region_code": region_code.upper(),
         "max_pages_per_query": max_pages_per_query,
+        "transcript_pacing_policy": {
+            "max_attempts_per_execution": max_transcript_attempts_per_execution,
+            "delay_seconds": transcript_delay_seconds,
+            "jitter_seconds": transcript_jitter_seconds,
+            "resume_cooldown_minutes": resume_cooldown_minutes,
+            "blocked_resume_cooldown_hours": blocked_resume_cooldown_hours,
+        },
         "started_at": _iso_z(started_at),
     }
     run_key = _sha256_text(_canonical_json(run_config))
@@ -1577,6 +2032,11 @@ def collect_youtube_cc_candidates(
         transcript_fetcher=transcript_fetcher,
         youtube_getter=youtube_getter,
         progress_callback=progress_callback,
+        transcript_delay_seconds=transcript_delay_seconds,
+        transcript_jitter_seconds=transcript_jitter_seconds,
+        max_transcript_attempts_per_execution=(
+            max_transcript_attempts_per_execution
+        ),
     )
 
 
@@ -1590,7 +2050,23 @@ def resume_youtube_cc_collection(
     transcript_fetcher: Callable[[str, Sequence[str]], dict[str, Any]] = fetch_public_transcript,
     youtube_getter: Callable[..., dict[str, Any]] = _youtube_get,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    transcript_delay_seconds: float = 0.0,
+    transcript_jitter_seconds: float = 0.0,
+    max_transcript_attempts_per_execution: int | None = None,
+    resume_cooldown_minutes: float = DEFAULT_RESUME_COOLDOWN_MINUTES,
+    blocked_resume_cooldown_hours: float = DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS,
 ) -> dict[str, Any]:
+    if transcript_delay_seconds < 0 or transcript_jitter_seconds < 0:
+        raise YouTubeCCDatasetError("Transcript pacing delays cannot be negative")
+    if resume_cooldown_minutes < 0 or blocked_resume_cooldown_hours < 0:
+        raise YouTubeCCDatasetError("Transcript pacing cooldowns cannot be negative")
+    if (
+        max_transcript_attempts_per_execution is not None
+        and max_transcript_attempts_per_execution < 1
+    ):
+        raise YouTubeCCDatasetError(
+            "max_transcript_attempts_per_execution must be at least 1"
+        )
     collection_run = db.get(DatasetCollectionRun, collection_run_id)
     if collection_run is None:
         raise YouTubeCCDatasetError(f"Collection run {collection_run_id} not found")
@@ -1656,6 +2132,22 @@ def resume_youtube_cc_collection(
         raise YouTubeCCDatasetError("max_pages_per_query must be at least 1")
 
     manifest = _load_collection_manifest(collection_run, required=False)
+    cooldown_seconds = 0.0
+    if collection_run.status == "pacing_paused":
+        cooldown_seconds = resume_cooldown_minutes * 60.0
+    elif collection_run.status == "transcript_waiting":
+        cooldown_seconds = blocked_resume_cooldown_hours * 60.0 * 60.0
+    if cooldown_seconds:
+        checkpoint_at = _manifest_checkpoint_time(manifest, collection_run)
+        retry_at = checkpoint_at + timedelta(seconds=cooldown_seconds)
+        now = _utc_now()
+        if now < retry_at:
+            raise YouTubeCollectionResumeCooldownError(
+                collection_run_id=collection_run.collection_run_id,
+                status=collection_run.status,
+                retry_at=retry_at,
+                remaining_seconds=(retry_at - now).total_seconds(),
+            )
     raw_candidate_path = str(collection_run.candidate_artifact_path or "").strip()
     if not raw_candidate_path:
         raise YouTubeCCDatasetError("Collection run has no candidate artifact path")
@@ -1702,11 +2194,19 @@ def resume_youtube_cc_collection(
 
     accepted_by_strategy = _accepted_counts(candidates)
     accepted_by_language = _language_counts_by_leaf(candidates)
+    existing_training_language_counts = _existing_training_language_counts_by_leaf(
+        db,
+        leaf_keys=run_config["leaf_keys"],
+        exclude_collection_run_id=collection_run.collection_run_id,
+    )
     if _all_targets_met(
         leaf_keys=run_config["leaf_keys"],
         sampling_plan=run_config["sampling_plan"],
         accepted_by_strategy=accepted_by_strategy,
         language_counts_by_leaf=accepted_by_language,
+        existing_training_language_counts_by_leaf=(
+            existing_training_language_counts
+        ),
         min_thai_per_leaf=int(run_config["min_thai_per_leaf"]),
     ):
         raise YouTubeCCDatasetError("Collection run already meets every sampling target")
@@ -1716,6 +2216,13 @@ def resume_youtube_cc_collection(
     collection_run.last_resumed_at = _utc_now().replace(tzinfo=None)
     collection_run.completed_at = None
     collection_run.review_artifact_path = str(review_file)
+    run_config["transcript_pacing_policy"] = {
+        "max_attempts_per_execution": max_transcript_attempts_per_execution,
+        "delay_seconds": transcript_delay_seconds,
+        "jitter_seconds": transcript_jitter_seconds,
+        "resume_cooldown_minutes": resume_cooldown_minutes,
+        "blocked_resume_cooldown_hours": blocked_resume_cooldown_hours,
+    }
     collection_run.query_config_json = json.dumps(
         run_config,
         ensure_ascii=False,
@@ -1745,7 +2252,225 @@ def resume_youtube_cc_collection(
         transcript_fetcher=transcript_fetcher,
         youtube_getter=youtube_getter,
         progress_callback=progress_callback,
+        transcript_delay_seconds=transcript_delay_seconds,
+        transcript_jitter_seconds=transcript_jitter_seconds,
+        max_transcript_attempts_per_execution=(
+            max_transcript_attempts_per_execution
+        ),
     )
+
+
+def retarget_youtube_cc_collection_languages(
+    db: Session,
+    *,
+    collection_run_id: int,
+    languages: Sequence[str],
+) -> dict[str, Any]:
+    collection_run = db.get(DatasetCollectionRun, collection_run_id)
+    if collection_run is None:
+        raise YouTubeCCDatasetError(
+            f"Collection run {collection_run_id} not found"
+        )
+    if collection_run.status not in {
+        "running",
+        "quota_waiting",
+        "transcript_waiting",
+        "pacing_paused",
+    }:
+        raise YouTubeCCDatasetError(
+            f"Collection run {collection_run_id} cannot be retargeted from "
+            f"status '{collection_run.status}'"
+        )
+    review_event_count = (
+        db.query(DatasetReviewEvent)
+        .filter(DatasetReviewEvent.collection_run_id == collection_run_id)
+        .count()
+    )
+    if review_event_count:
+        raise YouTubeCCDatasetError(
+            "A collection run with review events is immutable"
+        )
+
+    try:
+        run_config = json.loads(collection_run.query_config_json)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise YouTubeCCDatasetError("Collection run has invalid query config") from exc
+    _normalized_leaves, normalized_languages = _normalize_collection_inputs(
+        leaf_keys=run_config.get("leaf_keys") or (),
+        languages=languages,
+        max_pages_per_query=int(run_config.get("max_pages_per_query") or 1),
+    )
+    current_languages = tuple(run_config.get("languages") or ())
+    if not set(normalized_languages).issubset(current_languages):
+        raise YouTubeCCDatasetError(
+            "Retargeting may only narrow the languages of an unfinished run"
+        )
+
+    manifest = _load_collection_manifest(collection_run, required=True)
+    candidate_file = _candidate_artifact_for_run(collection_run)
+    candidates = list(
+        _load_candidates(candidate_file, allow_empty=True).values()
+    )
+    raw_review_path = str(collection_run.review_artifact_path or "").strip()
+    raw_manifest_path = str(collection_run.manifest_path or "").strip()
+    if not raw_review_path or not raw_manifest_path:
+        raise YouTubeCCDatasetError(
+            "Collection run is missing review or manifest artifacts"
+        )
+    review_file = _resolve_project_path(raw_review_path)
+    manifest_file = _resolve_project_path(raw_manifest_path)
+    if review_file.is_file():
+        actual_review_hash = _sha256_file(review_file)
+        if (
+            collection_run.review_artifact_sha256
+            and collection_run.review_artifact_sha256 != actual_review_hash
+        ):
+            raise YouTubeCCDatasetError(
+                "Review artifact hash differs from collection run"
+            )
+        if any(
+            str(row.get("decision") or "").strip()
+            for row in _review_rows(review_file)
+        ):
+            raise YouTubeCCDatasetError(
+                "The review artifact already contains decisions and is immutable"
+            )
+
+    allowed_languages = set(normalized_languages)
+    kept_candidates = [
+        dict(candidate)
+        for candidate in candidates
+        if str(candidate.get("transcript_language") or "").lower()
+        in allowed_languages
+    ]
+    excluded_candidates = [
+        dict(candidate)
+        for candidate in candidates
+        if str(candidate.get("transcript_language") or "").lower()
+        not in allowed_languages
+    ]
+    if current_languages == normalized_languages and not excluded_candidates:
+        return manifest
+
+    retargeted_at = _utc_now()
+    language_slug = "-".join(normalized_languages)
+    excluded_path = candidate_file.with_name(
+        f"{candidate_file.stem}.excluded-for-{language_slug}.jsonl"
+    )
+    archived_rows: list[dict[str, Any]] = []
+    for candidate in excluded_candidates:
+        archived = dict(candidate)
+        archived["exclusion"] = {
+            "reason": "transcript_language_outside_retargeted_run",
+            "allowed_languages": list(normalized_languages),
+            "excluded_at": _iso_z(retargeted_at),
+        }
+        archived["candidate_sha256"] = _candidate_hash(archived)
+        archived_rows.append(archived)
+    if archived_rows:
+        _write_text_atomic(
+            excluded_path,
+            "".join(_canonical_json(item) + "\n" for item in archived_rows),
+        )
+
+    updated_config = dict(run_config)
+    updated_config["languages"] = list(normalized_languages)
+    updated_config["queries_by_leaf"] = _queries_by_leaf(
+        updated_config["leaf_keys"],
+        normalized_languages,
+    )
+    leaves_without_queries = [
+        leaf_key
+        for leaf_key, queries in updated_config["queries_by_leaf"].items()
+        if not queries
+    ]
+    if leaves_without_queries:
+        raise YouTubeCCDatasetError(
+            "No collection queries are available for the selected language in: "
+            + ", ".join(leaves_without_queries)
+        )
+    if normalized_languages == ("th",):
+        updated_config["min_thai_per_leaf"] = int(
+            updated_config["target_per_leaf"]
+        )
+        updated_config["language_balance_policy"] = "thai_only_v1"
+    history = list(updated_config.get("language_retarget_history") or [])
+    history.append(
+        {
+            "retargeted_at": _iso_z(retargeted_at),
+            "from_languages": list(current_languages),
+            "to_languages": list(normalized_languages),
+            "kept_candidates": len(kept_candidates),
+            "excluded_candidates": len(excluded_candidates),
+            "excluded_artifact_path": (
+                str(excluded_path) if archived_rows else None
+            ),
+            "excluded_artifact_sha256": (
+                _sha256_file(excluded_path) if archived_rows else None
+            ),
+            "last_provider_attempt_at": manifest.get("updated_at"),
+        }
+    )
+    updated_config["language_retarget_history"] = history
+    updated_run_key = _sha256_text(_canonical_json(updated_config))
+    for candidate in kept_candidates:
+        candidate["run_key"] = updated_run_key
+        candidate["candidate_sha256"] = _candidate_hash(candidate)
+
+    allowed_queries = {
+        query
+        for queries in updated_config["queries_by_leaf"].values()
+        for query in queries
+    }
+    search_state = {
+        key: value
+        for key, value in (manifest.get("search_state") or {}).items()
+        if str((value or {}).get("query") or "") in allowed_queries
+    }
+    collection_run.run_key = updated_run_key
+    collection_run.languages_json = json.dumps(
+        list(normalized_languages),
+        ensure_ascii=False,
+    )
+    collection_run.query_config_json = json.dumps(
+        updated_config,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    accepted_by_strategy = _accepted_counts(kept_candidates)
+    (
+        _catalog_video_ids,
+        _catalog_transcript_hashes,
+        _catalog_channel_counts,
+        catalog_summary,
+    ) = _dedup_catalog(
+        db,
+        exclude_run_id=collection_run_id,
+        channel_languages=normalized_languages,
+    )
+    result = _persist_collection_state(
+        db,
+        collection_run=collection_run,
+        candidate_file=candidate_file,
+        review_file=review_file,
+        manifest_file=manifest_file,
+        run_config=updated_config,
+        candidates=kept_candidates,
+        accepted_by_strategy=accepted_by_strategy,
+        rejected_reasons=Counter(manifest.get("rejected_reasons") or {}),
+        duplicate_reasons=Counter(
+            (manifest.get("deduplication") or {}).get("skipped_by_reason") or {}
+        ),
+        quality_skip_reasons=Counter(
+            (manifest.get("quality_filters") or {}).get("skipped_by_reason") or {}
+        ),
+        candidates_seen=int(collection_run.candidates_seen or 0),
+        search_state=search_state,
+        dedup_catalog_summary=catalog_summary,
+        status=collection_run.status,
+    )
+    result["retarget"] = history[-1]
+    return result
 
 
 def _load_candidates(
@@ -1794,12 +2519,21 @@ def _performance_signal(candidate: dict[str, Any]) -> float:
 def _review_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
-        missing = [field for field in REVIEW_FIELDS if field not in (reader.fieldnames or [])]
+        missing = [
+            field
+            for field in REVIEW_FIELDS
+            if field not in (reader.fieldnames or [])
+            and field not in OPTIONAL_REVIEW_FIELDS
+        ]
         if missing:
             raise YouTubeCCDatasetError(
                 "Review CSV is missing columns: " + ", ".join(missing)
             )
-        return [dict(row) for row in reader]
+        rows = [dict(row) for row in reader]
+        for row in rows:
+            for field in OPTIONAL_REVIEW_FIELDS:
+                row.setdefault(field, "")
+        return rows
 
 
 def import_reviewed_youtube_cc_dataset(
@@ -2002,6 +2736,19 @@ def import_reviewed_youtube_cc_dataset(
             ),
         }
         performance_metrics = _performance_metrics(candidate)
+        statistics_captured_at = _parse_datetime(
+            candidate.get("statistics_captured_at"),
+            field="statistics_captured_at",
+        )
+        view_metric_version = resolve_view_metric_version(
+            "youtube",
+            statistics_captured_at,
+            candidate.get("view_metric_version"),
+        )
+        raw_metadata["view_metric"] = {
+            "version": view_metric_version,
+            "statistics_captured_at": candidate.get("statistics_captured_at"),
+        }
         values = {
             "title": str(candidate.get("title") or video_id)[:255],
             "video_url": str(candidate.get("video_url") or ""),
@@ -2040,17 +2787,29 @@ def import_reviewed_youtube_cc_dataset(
             "transcript_segment_count": int(candidate.get("transcript_segment_count") or 0),
             "transcript_start_seconds": float(candidate.get("transcript_start_seconds") or 0),
             "transcript_end_seconds": float(candidate.get("transcript_end_seconds") or 0),
-            "transcript_window_seconds": TRANSCRIPT_WINDOW_SECONDS,
+            "transcript_window_seconds": int(
+                candidate.get("transcript_window_seconds")
+                or candidate.get("duration_seconds")
+                or TRANSCRIPT_WINDOW_SECONDS
+            ),
             "transcript_source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+            "transcript_acquisition_method": str(
+                candidate.get("transcript_acquisition_method")
+                or YOUTUBE_TRANSCRIPT_API_ACQUISITION
+            ),
+            "transcript_scope": str(
+                candidate.get("transcript_scope") or TRANSCRIPT_SCOPE_FIRST_WINDOW
+            ),
+            "transcript_timestamps_available": bool(
+                candidate.get("transcript_timestamps_available", True)
+            ),
             "caption_type": str(candidate.get("caption_type") or ""),
             "transcript_quality": quality,
             "reviewed_by": reviewer,
             "reviewed_at": reviewed_at,
             "review_notes": notes,
-            "statistics_captured_at": _parse_datetime(
-                candidate.get("statistics_captured_at"),
-                field="statistics_captured_at",
-            ),
+            "statistics_captured_at": statistics_captured_at,
+            "view_metric_version": view_metric_version,
             "license_verified_at": _parse_datetime(
                 candidate.get("license_verified_at"),
                 field="license_verified_at",
@@ -2155,6 +2914,356 @@ def import_reviewed_youtube_cc_dataset(
     }
 
 
+NOTEBOOKLM_COLLECTION_METHOD = "notebooklm_manual_source"
+
+
+def extract_youtube_video_id(value: str) -> str:
+    raw = str(value or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", raw):
+        return raw
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError as exc:
+        raise YouTubeCCDatasetError("Invalid YouTube URL") from exc
+    host = (parsed.hostname or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    video_id = ""
+    if host == "youtu.be":
+        video_id = parsed.path.strip("/").split("/", 1)[0]
+    elif host in {"youtube.com", "m.youtube.com", "music.youtube.com"}:
+        if parsed.path == "/watch":
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+        else:
+            parts = [part for part in parsed.path.split("/") if part]
+            if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live"}:
+                video_id = parts[1]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise YouTubeCCDatasetError("A valid YouTube video URL or ID is required")
+    return video_id
+
+
+def _normalize_notebooklm_transcript(value: str) -> str:
+    transcript = html.unescape(str(value or ""))
+    transcript = re.sub(r"\s+", " ", transcript).strip()
+    if len(transcript) < 80:
+        raise YouTubeCCDatasetError(
+            "Transcript is too short; paste the complete source transcript from NotebookLM"
+        )
+    return transcript
+
+
+def _notebooklm_artifact_paths(
+    *,
+    collection_run_id: int,
+    dataset_version: str,
+    artifact_root: str | Path | None,
+) -> tuple[Path, Path, Path]:
+    root = (
+        Path(artifact_root)
+        if artifact_root is not None
+        else Path(__file__).resolve().parents[2]
+        / "data"
+        / "raw"
+        / "youtube_cc_notebooklm"
+    )
+    run_dir = root / dataset_version / f"run-{collection_run_id}"
+    return (
+        run_dir / "candidates.jsonl",
+        run_dir / "review.csv",
+        run_dir / "manifest.json",
+    )
+
+
+def create_notebooklm_transcript_candidate(
+    db: Session,
+    *,
+    api_key: str,
+    video_url: str,
+    transcript: str,
+    proposed_leaf_key: str,
+    transcript_language: str = "th",
+    caption_type: str = "unspecified",
+    collection_strategy: str = CLASSIFICATION_DIVERSE_STRATEGY,
+    collection_run_id: int | None = None,
+    dataset_version: str = DEFAULT_YOUTUBE_CC_DATASET_VERSION,
+    region_code: str = "TH",
+    timeout_seconds: float = 10.0,
+    youtube_getter: Callable[..., dict[str, Any]] = _youtube_get,
+    artifact_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Create an auditable review candidate from a NotebookLM source transcript."""
+    video_id = extract_youtube_video_id(video_url)
+    clean_transcript = _normalize_notebooklm_transcript(transcript)
+    leaf_key = normalize_taxonomy_leaf(proposed_leaf_key)
+    if leaf_key not in ACTIVE_LEAF_KEYS:
+        raise YouTubeCCDatasetError("A valid taxonomy category is required")
+    language = str(transcript_language or "").lower().split("-", 1)[0]
+    if language not in SUPPORTED_TRANSCRIPT_LANGUAGES:
+        raise YouTubeCCDatasetError("Transcript language must be th or en")
+    normalized_caption_type = str(caption_type or "unspecified").strip().lower()
+    if normalized_caption_type not in SUPPORTED_CAPTION_TYPES:
+        raise YouTubeCCDatasetError("Unsupported caption type")
+    if collection_strategy not in COLLECTION_STRATEGIES:
+        raise YouTubeCCDatasetError("Unsupported collection strategy")
+    if not str(dataset_version or "").strip() or dataset_version == "legacy-v1":
+        raise YouTubeCCDatasetError("A production dataset version is required")
+
+    details = youtube_getter(
+        "videos",
+        api_key=api_key,
+        timeout_seconds=timeout_seconds,
+        part="snippet,contentDetails,statistics,status",
+        id=video_id,
+        maxResults=1,
+    )
+    items = list(details.get("items") or [])
+    if not items:
+        raise YouTubeCCDatasetError("YouTube video was not found or is not public")
+    item = items[0]
+    snippet = item.get("snippet") or {}
+    content_details = item.get("contentDetails") or {}
+    status = item.get("status") or {}
+    if str(status.get("license") or "") != "creativeCommon":
+        raise YouTubeCCDatasetError(
+            "The video is not licensed as YouTube Creative Commons"
+        )
+    privacy_status = str(status.get("privacyStatus") or "public")
+    if privacy_status != "public":
+        raise YouTubeCCDatasetError("The YouTube video must be public")
+    if str(content_details.get("caption") or "").lower() != "true":
+        raise YouTubeCCDatasetError("The YouTube video has no public captions")
+    if str(snippet.get("liveBroadcastContent") or "none") != "none":
+        raise YouTubeCCDatasetError("Live broadcasts cannot enter the training dataset")
+    duration_seconds = parse_iso8601_duration(
+        str(content_details.get("duration") or "")
+    )
+    if duration_seconds <= 0:
+        raise YouTubeCCDatasetError("YouTube video duration is invalid")
+    channel_id = str(snippet.get("channelId") or "").strip()
+    if not channel_id:
+        raise YouTubeCCDatasetError("YouTube channel ID is missing")
+    if not str(snippet.get("publishedAt") or "").strip():
+        raise YouTubeCCDatasetError("YouTube publish time is missing")
+
+    collection_run: DatasetCollectionRun | None = None
+    candidates: list[dict[str, Any]] = []
+    run_config: dict[str, Any] = {}
+    if collection_run_id is not None:
+        collection_run = db.get(DatasetCollectionRun, collection_run_id)
+        if collection_run is None:
+            raise YouTubeCCDatasetError(
+                f"Collection run {collection_run_id} was not found"
+            )
+        try:
+            run_config = json.loads(collection_run.query_config_json or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise YouTubeCCDatasetError("Collection run config is invalid") from exc
+        if run_config.get("collection_method") != NOTEBOOKLM_COLLECTION_METHOD:
+            raise YouTubeCCDatasetError(
+                "The selected collection run is not a NotebookLM import batch"
+            )
+        has_reviews = (
+            db.query(DatasetReviewEvent.review_event_id)
+            .filter(
+                DatasetReviewEvent.collection_run_id
+                == collection_run.collection_run_id
+            )
+            .first()
+            is not None
+        )
+        if has_reviews:
+            raise YouTubeCCDatasetError(
+                "This batch already has review decisions; start a new batch"
+            )
+        candidates = list(
+            _load_candidates(
+                _candidate_artifact_for_run(collection_run),
+                allow_empty=True,
+            ).values()
+        )
+
+    exclude_run_id = collection_run.collection_run_id if collection_run else -1
+    (
+        catalog_video_ids,
+        catalog_transcript_hashes,
+        catalog_channel_counts,
+        catalog_summary,
+    ) = _dedup_catalog(
+        db,
+        exclude_run_id=exclude_run_id,
+        channel_languages=(language,),
+    )
+    transcript_hash = _sha256_text(clean_transcript)
+    current_video_ids = {
+        str(candidate.get("source_youtube_id") or "") for candidate in candidates
+    }
+    current_transcript_hashes = {
+        str(candidate.get("transcript_sha256") or "") for candidate in candidates
+    }
+    if video_id in catalog_video_ids or video_id in current_video_ids:
+        raise YouTubeCCDatasetError("This YouTube video already exists as a candidate")
+    if (
+        transcript_hash in catalog_transcript_hashes
+        or transcript_hash in current_transcript_hashes
+    ):
+        raise YouTubeCCDatasetError("This transcript duplicates an existing candidate")
+    current_channel_count = sum(
+        1
+        for candidate in candidates
+        if normalize_taxonomy_leaf(candidate.get("proposed_leaf_key")) == leaf_key
+        and str(candidate.get("channel_id") or "") == channel_id
+    )
+    if (
+        catalog_channel_counts[(leaf_key, channel_id)] + current_channel_count
+        >= DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
+    ):
+        raise YouTubeCCDatasetError(
+            "This channel already reached the three-video limit for this category"
+        )
+
+    collected_at = _utc_now()
+    if collection_run is None:
+        run_key = _sha256_text(
+            f"{NOTEBOOKLM_COLLECTION_METHOD}|{dataset_version}|{uuid.uuid4().hex}"
+        )
+        run_config = {
+            "schema_version": COLLECTION_SCHEMA_VERSION,
+            "collection_method": NOTEBOOKLM_COLLECTION_METHOD,
+            "transcript_scope": TRANSCRIPT_SCOPE_FULL_VIDEO,
+            "transcript_timestamps_available": False,
+            "leaf_keys": [leaf_key],
+            "languages": [language],
+            "target_per_leaf": 50,
+            "min_thai_per_leaf": 30,
+            "max_videos_per_channel_per_leaf": (
+                DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
+            ),
+            "sampling_plan": [],
+            "queries_by_leaf": {leaf_key: [NOTEBOOKLM_COLLECTION_METHOD]},
+        }
+        collection_run = DatasetCollectionRun(
+            run_key=run_key,
+            dataset_source=YOUTUBE_CC_DATASET_SOURCE,
+            dataset_version=dataset_version,
+            status="running",
+            region_code=region_code,
+            languages_json=json.dumps([language], ensure_ascii=False),
+            query_config_json=json.dumps(
+                run_config,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            candidates_seen=0,
+            transcripts_collected=0,
+            started_at=collected_at.replace(tzinfo=None),
+        )
+        db.add(collection_run)
+        db.flush()
+
+    assert collection_run is not None
+    candidate = _make_candidate(
+        item=item,
+        transcript={
+            "language": language,
+            "caption_type": normalized_caption_type,
+            "transcript_source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+            "transcript_acquisition_method": NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
+            "transcript_scope": TRANSCRIPT_SCOPE_FULL_VIDEO,
+            "transcript_timestamps_available": False,
+            "transcript_window_seconds": duration_seconds,
+            "segments": [
+                {
+                    "text": clean_transcript,
+                    "start": 0.0,
+                    "duration": float(duration_seconds),
+                }
+            ],
+            "segment_count": 1,
+            "start_seconds": 0.0,
+            "end_seconds": float(duration_seconds),
+            "transcript": clean_transcript,
+            "transcript_sha256": transcript_hash,
+        },
+        run_key=collection_run.run_key,
+        dataset_version=collection_run.dataset_version,
+        leaf_key=leaf_key,
+        query=NOTEBOOKLM_COLLECTION_METHOD,
+        region_code=region_code,
+        collected_at=collected_at,
+        collection_strategy=collection_strategy,
+        search_order="manual_selection",
+        search_rank=len(candidates) + 1,
+    )
+    raw_metadata = dict(candidate.get("raw_metadata") or {})
+    raw_metadata["transcript_provenance"] = {
+        "source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+        "acquisition_method": NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
+        "scope": TRANSCRIPT_SCOPE_FULL_VIDEO,
+        "timestamps_available": False,
+        "submitted_at": _iso_z(collected_at),
+    }
+    candidate["raw_metadata"] = raw_metadata
+    candidate["candidate_sha256"] = _candidate_hash(candidate)
+    candidates.append(candidate)
+
+    leaf_keys = list(run_config.get("leaf_keys") or [])
+    if leaf_key not in leaf_keys:
+        leaf_keys.append(leaf_key)
+    languages = list(run_config.get("languages") or [])
+    if language not in languages:
+        languages.append(language)
+    queries_by_leaf = dict(run_config.get("queries_by_leaf") or {})
+    queries_by_leaf.setdefault(leaf_key, [NOTEBOOKLM_COLLECTION_METHOD])
+    run_config.update(
+        {
+            "leaf_keys": leaf_keys,
+            "languages": languages,
+            "queries_by_leaf": queries_by_leaf,
+        }
+    )
+    collection_run.languages_json = json.dumps(sorted(languages), ensure_ascii=False)
+    collection_run.query_config_json = json.dumps(
+        run_config,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    candidate_file, review_file, manifest_file = _notebooklm_artifact_paths(
+        collection_run_id=collection_run.collection_run_id,
+        dataset_version=collection_run.dataset_version,
+        artifact_root=artifact_root,
+    )
+    manifest = _persist_collection_state(
+        db,
+        collection_run=collection_run,
+        candidate_file=candidate_file,
+        review_file=review_file,
+        manifest_file=manifest_file,
+        run_config=run_config,
+        candidates=candidates,
+        accepted_by_strategy=_accepted_counts(candidates),
+        rejected_reasons=Counter(),
+        duplicate_reasons=Counter(),
+        quality_skip_reasons=Counter(),
+        candidates_seen=len(candidates),
+        search_state={},
+        dedup_catalog_summary=catalog_summary,
+        status="review_pending",
+    )
+    serialized = _serialize_review_candidate(
+        collection_run=collection_run,
+        candidate=candidate,
+        event=None,
+        dataset=None,
+    )
+    return {
+        "status": "candidate_created",
+        "collection_run_id": collection_run.collection_run_id,
+        "candidate_count": len(candidates),
+        "candidate_artifact_sha256": manifest["candidate_artifact"]["sha256"],
+        "candidate": serialized,
+    }
+
+
 def _candidate_artifact_for_run(collection_run: DatasetCollectionRun) -> Path:
     raw_path = str(collection_run.candidate_artifact_path or "").strip()
     if not raw_path:
@@ -2224,6 +3333,21 @@ def _serialize_review_candidate(
         ),
         "transcript_language": str(candidate.get("transcript_language") or "und"),
         "caption_type": str(candidate.get("caption_type") or "unknown"),
+        "transcript_acquisition_method": str(
+            candidate.get("transcript_acquisition_method")
+            or YOUTUBE_TRANSCRIPT_API_ACQUISITION
+        ),
+        "transcript_scope": str(
+            candidate.get("transcript_scope") or TRANSCRIPT_SCOPE_FIRST_WINDOW
+        ),
+        "transcript_timestamps_available": bool(
+            candidate.get("transcript_timestamps_available", True)
+        ),
+        "view_metric_version": resolve_view_metric_version(
+            "youtube",
+            candidate.get("statistics_captured_at"),
+            candidate.get("view_metric_version"),
+        ),
         "duration_seconds": duration_seconds,
         "transcript": transcript,
         "transcript_preview": transcript[:700],
@@ -2231,10 +3355,9 @@ def _serialize_review_candidate(
         "automated_checks": {
             "creative_commons": candidate.get("youtube_license_code") == "creativeCommon",
             "source_duration_present": duration_seconds > 0,
-            "transcript_within_training_window": (
-                0
-                <= float(candidate.get("transcript_end_seconds") or 0.0)
-                <= TRANSCRIPT_WINDOW_SECONDS
+            "transcript_covers_valid_duration": (
+                0 < float(candidate.get("transcript_end_seconds") or 0.0)
+                <= duration_seconds
             ),
             "public_transcript": candidate.get("transcript_source")
             == YOUTUBE_CC_TRANSCRIPT_SOURCE,
@@ -2342,6 +3465,16 @@ def list_youtube_cc_review_queue(
         collection_progress = _collection_progress(
             candidates=list(candidates.values()),
             run_config=run_config,
+            existing_training_language_counts_by_leaf={
+                leaf: dict(language_counts)
+                for leaf, language_counts in (
+                    _existing_training_language_counts_by_leaf(
+                        db,
+                        leaf_keys=run_config.get("leaf_keys") or (),
+                        exclude_collection_run_id=run.collection_run_id,
+                    )
+                ).items()
+            },
         )
         run_summary: Counter[str] = Counter()
         for video_id, candidate in candidates.items():
@@ -2422,6 +3555,11 @@ def _single_review_csv(candidate: dict[str, Any], review: dict[str, Any]) -> str
         "proposed_leaf_key": candidate.get("proposed_leaf_key") or "",
         "transcript_language": candidate.get("transcript_language") or "",
         "caption_type": candidate.get("caption_type") or "",
+        "view_metric_version": resolve_view_metric_version(
+            "youtube",
+            candidate.get("statistics_captured_at"),
+            candidate.get("view_metric_version"),
+        ),
         "duration_seconds": candidate.get("duration_seconds") or 0,
         "transcript_preview": str(candidate.get("transcript") or "")[:700],
         "decision": review["decision"],

@@ -58,7 +58,7 @@ class ClassificationTrainingTests(unittest.TestCase):
             dataset_version="youtube-cc-training-test-v1",
             status="reviewed",
             region_code="TH",
-            languages_json='["th", "en"]',
+            languages_json='["th"]',
             query_config_json="{}",
         )
         self.db.add(self.run)
@@ -78,7 +78,7 @@ class ClassificationTrainingTests(unittest.TestCase):
                 return channel_id
             index += 1
 
-    def _add_example(self, leaf_key, split, index, *, language="en"):
+    def _add_example(self, leaf_key, split, index, *, language="th"):
         path = taxonomy_path(leaf_key)
         channel_id = self._channel_for_split(split, seed=f"{leaf_key}-{split}-{index}")
         actual_split, creator_group_key = channel_dataset_split(channel_id)
@@ -150,9 +150,9 @@ class ClassificationTrainingTests(unittest.TestCase):
     def _seed_ready_two_leaf_dataset(self):
         for leaf_key in ("phone", "camera"):
             self._add_example(leaf_key, "train", 0, language="th")
-            self._add_example(leaf_key, "train", 1, language="en")
+            self._add_example(leaf_key, "train", 1, language="th")
             self._add_example(leaf_key, "validation", 2, language="th")
-            self._add_example(leaf_key, "test", 3, language="en")
+            self._add_example(leaf_key, "test", 3, language="th")
         self.db.commit()
 
     def test_prepare_split_artifacts_group_channels_without_leakage(self):
@@ -285,7 +285,8 @@ class ClassificationTrainingTests(unittest.TestCase):
         self.assertEqual(set(artifact["labels"]), {"phone", "camera"})
         self.assertGreater(len(metrics), 0)
         metric_names = {metric.metric_name for metric in metrics}
-        self.assertTrue({"all", "th", "en"}.issubset({item.language for item in metrics}))
+        self.assertTrue({"all", "th"}.issubset({item.language for item in metrics}))
+        self.assertNotIn("en", {item.language for item in metrics})
         self.assertTrue(
             {
                 "accuracy",

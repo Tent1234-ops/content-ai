@@ -34,6 +34,7 @@ from app.services.taxonomy import (
     normalize_taxonomy_leaf,
     ready_leaf_keys,
 )
+from app.services.view_metrics import resolve_view_metric_version
 
 DEFAULT_DURATION_BY_DOMAIN = {
     "audio": 75,
@@ -330,6 +331,13 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
         ),
         "dataset_sample_size": sample_size,
         "eligible_pool_size": eligible_pool_size,
+        "view_metric_version": profile.get("view_metric_version") or "",
+        "view_metric_cohort_size": int(
+            profile.get("view_metric_cohort_size") or 0
+        ),
+        "excluded_incompatible_view_metric_rows": int(
+            profile.get("excluded_incompatible_view_metric_rows") or 0
+        ),
         "source_platform_counts": profile.get("source_platform_counts") or {},
         "transcript_source_counts": profile.get("transcript_source_counts") or {},
         "language_counts": profile.get("language_counts") or {},
@@ -347,7 +355,8 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
             "Keyword gap uses only human-reviewed YouTube Creative Commons transcripts "
             "in the same taxonomy leaf. High-performing examples are selected from real "
             "YouTube statistics using average views per day and engagement rate captured "
-            "during collection."
+            "during collection. Rows are ranked only inside one compatible "
+            "public view-count metric version."
             if sample_size > 0
             else "No eligible same-type transcript samples were available; no dataset keyword evidence was generated."
         ),
@@ -415,6 +424,32 @@ def _high_performing_rows(
     return selected, weights
 
 
+def _single_view_metric_cohort(
+    rows: List[DatasetContent],
+) -> tuple[List[DatasetContent], str, int]:
+    if not rows:
+        return [], "", 0
+
+    grouped: Dict[str, List[DatasetContent]] = defaultdict(list)
+    for row in rows:
+        version = resolve_view_metric_version(
+            row.source_platform,
+            row.statistics_captured_at or row.created_at,
+            row.view_metric_version,
+        )
+        grouped[version].append(row)
+
+    selected_version, selected_rows = max(
+        grouped.items(),
+        key=lambda item: (
+            len(item[1]),
+            max(int(row.dataset_id or 0) for row in item[1]),
+        ),
+    )
+    excluded = len(rows) - len(selected_rows)
+    return selected_rows, selected_version, excluded
+
+
 def build_dataset_profile_for_domain(
     db: Session,
     *,
@@ -433,11 +468,13 @@ def build_dataset_profile_for_domain(
             .filter(DatasetContent.is_keyword_recommendation_eligible.is_(True))
             .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
             .filter(DatasetContent.taxonomy_leaf_key == canonical_domain)
-            .order_by(DatasetContent.trend_score.desc(), DatasetContent.dataset_id.asc())
-            .limit(max(limit * 3, 150))
+            .order_by(DatasetContent.dataset_id.asc())
             .all()
         )
-    rows, row_weights = _high_performing_rows(eligible_rows, limit=limit)
+    metric_cohort, view_metric_version, excluded_metric_rows = (
+        _single_view_metric_cohort(eligible_rows)
+    )
+    rows, row_weights = _high_performing_rows(metric_cohort, limit=limit)
 
     keyword_scores: Dict[str, float] = {}
     dimension_scores: Dict[str, float] = {}
@@ -522,6 +559,9 @@ def build_dataset_profile_for_domain(
         "domain": canonical_domain,
         "sample_size": sample_size,
         "eligible_pool_size": len(eligible_rows),
+        "view_metric_version": view_metric_version,
+        "view_metric_cohort_size": len(metric_cohort),
+        "excluded_incompatible_view_metric_rows": excluded_metric_rows,
         "top_keywords": top_keywords,
         "top_dimensions": top_dimensions,
         "hook_keywords": hook_keywords,
@@ -538,7 +578,7 @@ def build_dataset_profile_for_domain(
         "language_counts": dict(language_counts),
         "collection_strategy_counts": dict(collection_strategy_counts),
         "selection_rule": (
-            "top_40_percent_by_average_views_per_day_and_engagement_rate"
+            "single_view_metric_cohort_then_top_40_percent"
             if rows
             else "none"
         ),
@@ -556,6 +596,9 @@ def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[st
         "domain": domain,
         "sample_size": 0,
         "eligible_pool_size": 0,
+        "view_metric_version": "",
+        "view_metric_cohort_size": 0,
+        "excluded_incompatible_view_metric_rows": 0,
         "top_keywords": [
             {"keyword": keyword, "score": 0.0}
             for keyword in DOMAIN_BASE.get(_keyword_domain(domain), [])[:8]

@@ -1,0 +1,84 @@
+import 'package:content_ai_mobile/utils/notebooklm_markdown_parser.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  const longTranscript =
+      'วันนี้เราจะมารีวิวโทรศัพท์จอพับรุ่นใหม่ โดยทดสอบหน้าจอ กล้อง '
+      'แบตเตอรี่ ประสิทธิภาพ และการใช้งานจริงตลอดทั้งวันอย่างละเอียด';
+
+  test('extracts the NotebookLM cleaned transcript without metadata', () {
+    final document = NotebookLmMarkdownParser.parse('''
+# Phone Review Transcript (Cleaned for AI Training)
+
+## Metadata
+- **Source Video:** Galaxy Phone Review
+- **Creator Channel:** Example Channel
+- **Source URL:** https://www.youtube.com/watch?v=abcdefghijk
+
+---
+
+## Cleaned Transcription Text
+
+$longTranscript
+''');
+
+    expect(document.transcript, longTranscript);
+    expect(document.sourceTitle, 'Galaxy Phone Review');
+    expect(document.creatorChannel, 'Example Channel');
+    expect(
+      document.sourceUrl,
+      'https://www.youtube.com/watch?v=abcdefghijk',
+    );
+    expect(document.transcript, isNot(contains('## Metadata')));
+  });
+
+  test('supports Thai transcript headings and stops at the next section', () {
+    final document = NotebookLmMarkdownParser.parse('''
+# เอกสารถอดเสียง
+
+## ข้อความถอดเสียง
+$longTranscript
+
+### กล้องและการถ่ายวิดีโอ
+$longTranscript
+
+## Notes
+This must not enter the training transcript.
+''');
+
+    expect(document.transcript, contains('### กล้องและการถ่ายวิดีโอ'));
+    expect(document.transcript, contains(longTranscript));
+    expect(document.transcript, isNot(contains('Notes')));
+  });
+
+  test('removes a code fence around the transcript', () {
+    final document = NotebookLmMarkdownParser.parse('''
+## Full source transcript
+```text
+$longTranscript
+```
+''');
+
+    expect(document.transcript, longTranscript);
+  });
+
+  test('rejects Markdown without a recognized transcript section', () {
+    expect(
+      () => NotebookLmMarkdownParser.parse('''
+# Summary
+$longTranscript
+'''),
+      throwsFormatException,
+    );
+  });
+
+  test('rejects a transcript that is too short', () {
+    expect(
+      () => NotebookLmMarkdownParser.parse('''
+## Transcript
+Short text.
+'''),
+      throwsFormatException,
+    );
+  });
+}

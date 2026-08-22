@@ -148,6 +148,28 @@ GET /admin/dataset-review/queue?status=pending&limit=12&offset=0
 Authorization: Bearer <admin-token>
 ```
 
+### Import NotebookLM Source Transcript
+
+```http
+POST /admin/dataset-review/notebooklm/candidates
+Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{
+  "video_url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "transcript": "Complete source transcript from NotebookLM...",
+  "proposed_leaf_key": "phone",
+  "transcript_language": "th",
+  "caption_type": "unspecified",
+  "collection_strategy": "classification_diverse",
+  "collection_run_id": null,
+  "dataset_version": "youtube-cc-th-v1"
+}
+```
+
+Use the returned `collection_run_id` for the next item to append candidates to the
+same batch. A batch becomes immutable after its first review decision.
+
 ตัวกรองที่รองรับ: `status`, `leaf_key`, `collection_run_id` และ `search` ผลลัพธ์มี
 candidate transcript, automated checks, taxonomy coverage และสถานะ review ของแต่ละรายการ
 

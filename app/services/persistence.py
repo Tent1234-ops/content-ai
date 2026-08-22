@@ -1,6 +1,7 @@
 import json
 import os
 from collections import Counter
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ from app.database.models import (
     UserContent,
 )
 from app.services.nlp import filter_tokens, tokenize_text
+from app.services.view_metrics import resolve_view_metric_version
 
 
 def log_system_event(db: Session, user_id: Optional[int], action: str, status: str, detail: Optional[str] = None) -> None:
@@ -40,13 +42,29 @@ def _save_dataset_trends(
     notifications_created = 0
 
     for item in items:
-        existing = db.query(DatasetContent).filter(DatasetContent.video_url == item.video_url).first()
+        captured_at = datetime.utcnow()
+        source_platform = f"{source_name}_{source_mode}"
+        view_metric_version = resolve_view_metric_version(
+            source_platform,
+            captured_at,
+            getattr(item, "view_metric_version", None),
+        )
+        existing = (
+            db.query(DatasetContent)
+            .filter(
+                DatasetContent.video_url == item.video_url,
+                DatasetContent.view_metric_version == view_metric_version,
+            )
+            .first()
+        )
         payload = {
             "title": item.title,
             "video_url": item.video_url,
             "transcript": None,
             "category": getattr(item, "category", None),
-            "source_platform": f"{source_name}_{source_mode}",
+            "source_platform": source_platform,
+            "statistics_captured_at": captured_at,
+            "view_metric_version": view_metric_version,
             "views": item.views,
             "likes": item.likes,
             "comments": item.comments,

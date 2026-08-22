@@ -146,12 +146,16 @@ CREATE TABLE IF NOT EXISTS dataset_contents (
   transcript_end_seconds FLOAT NULL,
   transcript_window_seconds INT NULL,
   transcript_source VARCHAR(50) NULL,
+  transcript_acquisition_method VARCHAR(64) NOT NULL DEFAULT 'youtube_transcript_api',
+  transcript_scope VARCHAR(32) NOT NULL DEFAULT 'first_window',
+  transcript_timestamps_available BOOLEAN NOT NULL DEFAULT TRUE,
   caption_type VARCHAR(50) NULL,
   transcript_quality VARCHAR(30) NULL,
   reviewed_by VARCHAR(255) NULL,
   reviewed_at DATETIME NULL,
   review_notes TEXT NULL,
   statistics_captured_at DATETIME NULL,
+  view_metric_version VARCHAR(64) NOT NULL DEFAULT 'unknown_v1',
   license_verified_at DATETIME NULL,
   raw_metadata_json TEXT NULL,
   collection_strategy VARCHAR(50) NULL,
@@ -177,6 +181,7 @@ CREATE TABLE IF NOT EXISTS dataset_contents (
   INDEX ix_dataset_contents_collection_run_id (collection_run_id),
   INDEX ix_dataset_taxonomy_leaf (taxonomy_version, taxonomy_leaf_key),
   INDEX ix_dataset_training_eligibility (is_training_eligible, data_split, taxonomy_leaf_key),
+  INDEX ix_dataset_view_metric_leaf (view_metric_version, taxonomy_leaf_key),
   CONSTRAINT fk_dataset_contents_collection_run
     FOREIGN KEY (collection_run_id) REFERENCES dataset_collection_runs(collection_run_id)
     ON DELETE SET NULL
@@ -445,11 +450,13 @@ CREATE TABLE IF NOT EXISTS trend_snapshot_items (
   comments INT NOT NULL DEFAULT 0,
   trend_score FLOAT NOT NULL DEFAULT 0,
   engagement_signal FLOAT NOT NULL DEFAULT 0,
+  view_metric_version VARCHAR(64) NOT NULL DEFAULT 'unknown_v1',
   published_at VARCHAR(64) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_trend_snapshot_item_run_platform_key (run_id, platform, trend_key),
   INDEX ix_trend_snapshot_items_run_id (run_id),
   INDEX ix_trend_snapshot_items_platform (platform),
+  INDEX ix_trend_snapshot_platform_metric (platform, view_metric_version),
   CONSTRAINT fk_trend_snapshot_items_run
     FOREIGN KEY (run_id) REFERENCES trend_snapshot_runs(run_id)
     ON DELETE CASCADE

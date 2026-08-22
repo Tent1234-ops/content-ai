@@ -15,6 +15,7 @@ from app.core.datetime_utils import utc_isoformat
 from app.database.db import SessionLocal
 from app.database.models import TrendSnapshotItem, TrendSnapshotRun
 from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_trending
+from app.services.view_metrics import resolve_view_metric_version
 
 
 PLATFORMS = ("youtube", "google", "tiktok")
@@ -39,7 +40,12 @@ def _stable_key(platform: str, data: Dict[str, object]) -> str:
     return hashlib.sha1(f"{platform}|{url or title}".encode("utf-8")).hexdigest()
 
 
-def normalize_live_item(platform: str, item: object) -> Dict[str, object]:
+def normalize_live_item(
+    platform: str,
+    item: object,
+    *,
+    captured_at: datetime | None = None,
+) -> Dict[str, object]:
     data = _item_to_dict(item)
     title = str(data.get("title") or data.get("query") or "").strip()
     category = str(data.get("category") or data.get("domain") or "general").strip() or "general"
@@ -75,6 +81,11 @@ def normalize_live_item(platform: str, item: object) -> Dict[str, object]:
         "comments": comments,
         "trend_score": trend_score,
         "engagement_signal": engagement_signal,
+        "view_metric_version": resolve_view_metric_version(
+            platform,
+            captured_at,
+            data.get("view_metric_version"),
+        ),
         "published_at": published_at,
     }
 
@@ -108,8 +119,9 @@ def _fetch_provider(
 ) -> Dict[str, object]:
     started = time.perf_counter()
     mode, raw_items = fetcher(region, limit)
+    captured_at = datetime.utcnow()
     items = [
-        normalize_live_item(platform, item)
+        normalize_live_item(platform, item, captured_at=captured_at)
         for item in raw_items
         if str(_item_to_dict(item).get("title") or _item_to_dict(item).get("query") or "").strip()
     ]
@@ -240,6 +252,7 @@ def refresh_global_live_trends(
                         comments=int(item["comments"]),
                         trend_score=float(item["trend_score"]),
                         engagement_signal=float(item["engagement_signal"]),
+                        view_metric_version=str(item["view_metric_version"])[:64],
                         published_at=str(item["published_at"])[:64] if item["published_at"] else None,
                     )
                 )
@@ -353,6 +366,8 @@ def load_latest_live_snapshot(
                 "comments": row.comments,
                 "trend_score": row.trend_score,
                 "engagement_signal": row.engagement_signal,
+                "view_metric_version": row.view_metric_version,
+                "metric_version_changed": False,
                 "engagement_change_percent": 0.0,
                 "engagement_delta": 0.0,
                 "engagement_rate_per_minute": 0.0,

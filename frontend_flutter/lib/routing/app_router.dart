@@ -6,6 +6,7 @@ import '../screens/admin_console_screen.dart';
 import '../screens/admin_dataset_review_screen.dart';
 import '../screens/admin_datasets_screen.dart';
 import '../screens/admin_logs_screen.dart';
+import '../screens/admin_transcript_import_screen.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/history_screen.dart';
 import '../screens/login_screen.dart';
@@ -26,6 +27,7 @@ class AppRouter {
     '/admin-datasets',
     '/admin-clusters',
     '/admin-logs',
+    '/admin-transcript-import',
   };
 
   Route<dynamic> onGenerateRoute(RouteSettings settings) {
@@ -66,6 +68,8 @@ class AppRouter {
         return _page(const AdminClusterRunsScreen(), settings);
       case '/admin-logs':
         return _page(const AdminLogsScreen(), settings);
+      case '/admin-transcript-import':
+        return _page(const AdminTranscriptImportScreen(), settings);
       default:
         return _page(
             const DashboardScreen(), settings.copyWith(name: '/dashboard'));

@@ -107,7 +107,7 @@ def _enqueue_rq(func: Callable, *args, redis_url: str = None, **kwargs) -> str:
         raise RuntimeError(f"Failed to connect to Redis at {redis_url}: {e}")
 
     # RQ returns job id
-    job = q.enqueue(func, *args, **kwargs)
+    job = q.enqueue(func, *args, job_timeout=-1, **kwargs)
     return job.get_id()
 
 

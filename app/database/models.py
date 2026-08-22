@@ -157,6 +157,11 @@ class DatasetContent(Base):
             "data_split",
             "taxonomy_leaf_key",
         ),
+        Index(
+            "ix_dataset_view_metric_leaf",
+            "view_metric_version",
+            "taxonomy_leaf_key",
+        ),
     )
 
     dataset_id = Column(Integer, primary_key=True)
@@ -203,12 +208,22 @@ class DatasetContent(Base):
     transcript_end_seconds = Column(Float)
     transcript_window_seconds = Column(Integer)
     transcript_source = Column(String(50))
+    transcript_acquisition_method = Column(
+        String(64), nullable=False, default="youtube_transcript_api"
+    )
+    transcript_scope = Column(String(32), nullable=False, default="first_window")
+    transcript_timestamps_available = Column(Boolean, nullable=False, default=True)
     caption_type = Column(String(50))
     transcript_quality = Column(String(30))
     reviewed_by = Column(String(255))
     reviewed_at = Column(DateTime)
     review_notes = Column(Text)
     statistics_captured_at = Column(DateTime)
+    view_metric_version = Column(
+        String(64),
+        nullable=False,
+        default="unknown_v1",
+    )
     license_verified_at = Column(DateTime)
     raw_metadata_json = Column(Text)
     collection_strategy = Column(String(50))
@@ -557,6 +572,11 @@ class TrendSnapshotItem(Base):
             "trend_key",
             name="uq_trend_snapshot_item_run_platform_key",
         ),
+        Index(
+            "ix_trend_snapshot_platform_metric",
+            "platform",
+            "view_metric_version",
+        ),
     )
 
     item_id = Column(Integer, primary_key=True)
@@ -572,6 +592,11 @@ class TrendSnapshotItem(Base):
     comments = Column(Integer, nullable=False, default=0)
     trend_score = Column(Float, nullable=False, default=0.0)
     engagement_signal = Column(Float, nullable=False, default=0.0)
+    view_metric_version = Column(
+        String(64),
+        nullable=False,
+        default="unknown_v1",
+    )
     published_at = Column(String(64))
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 

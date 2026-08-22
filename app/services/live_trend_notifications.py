@@ -18,6 +18,7 @@ from app.database.models import (
 )
 from app.services.live_trend_snapshots import PLATFORMS, load_latest_live_snapshot
 from app.services.notifications import create_live_trend_notification
+from app.services.view_metrics import view_metrics_are_comparable
 
 
 SUCCESS_PROVIDER_STATES = {"ok", "empty"}
@@ -186,9 +187,28 @@ def _apply_session_and_engagement_status(
             key = str(item.get("key") or "")
             current = float(item.get("engagement_signal") or 0.0)
             previous_row = previous_by_key.get(key)
+            current_metric_version = str(
+                item.get("view_metric_version") or ""
+            )
+            previous_metric_version = (
+                str(previous_row.view_metric_version or "")
+                if previous_row is not None
+                else ""
+            )
+            metric_versions_comparable = (
+                previous_row is not None
+                and view_metrics_are_comparable(
+                    platform,
+                    current_metric_version,
+                    previous_metric_version,
+                )
+            )
+            metric_version_changed = (
+                previous_row is not None and not metric_versions_comparable
+            )
             previous = (
                 float(previous_row.engagement_signal or 0.0)
-                if previous_row is not None
+                if metric_versions_comparable
                 else None
             )
             delta = current - previous if previous is not None else 0.0
@@ -201,13 +221,20 @@ def _apply_session_and_engagement_status(
                 raw_change = 0.0
             rate = delta / comparison_minutes if comparison_minutes > 0 else 0.0
             current_rank = int(item.get("rank") or (len(calculated) + 1))
-            previous_rank = previous_ranks.get(key)
+            previous_rank = (
+                previous_ranks.get(key)
+                if not metric_version_changed
+                else None
+            )
             rank_change = previous_rank - current_rank if previous_rank is not None else 0
             is_new = key in notified_keys
 
             if previous_snapshot is None:
                 change_kind = "baseline"
                 change_label = "Baseline"
+            elif metric_version_changed:
+                change_kind = "metric_baseline"
+                change_label = "Metric baseline"
             elif previous_row is None:
                 change_kind = "new"
                 change_label = "New"
@@ -252,7 +279,8 @@ def _apply_session_and_engagement_status(
                     "raw_change": raw_change,
                     "delta": delta,
                     "is_new": is_new,
-                    "has_previous": previous_row is not None,
+                    "has_previous": metric_versions_comparable,
+                    "metric_version_changed": metric_version_changed,
                 }
             )
 
@@ -309,6 +337,9 @@ def _apply_session_and_engagement_status(
             item["change_kind"] = row["change_kind"]
             item["change_label"] = change_label
             item["has_previous_snapshot"] = bool(row["has_previous"])
+            item["metric_version_changed"] = bool(
+                row["metric_version_changed"]
+            )
             item["comparison_window_seconds"] = int(round(comparison_seconds))
             item["is_meaningful_rising"] = meaningful_rising
             item["status"] = status

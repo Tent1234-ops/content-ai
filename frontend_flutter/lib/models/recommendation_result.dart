@@ -285,6 +285,9 @@ class RecommendationEvidence {
     required this.dataSourceLabel,
     required this.datasetSampleSize,
     required this.eligiblePoolSize,
+    required this.viewMetricVersion,
+    required this.viewMetricCohortSize,
+    required this.excludedIncompatibleViewMetricRows,
     required this.sourcePlatformCounts,
     required this.transcriptSourceCounts,
     required this.languageCounts,
@@ -298,6 +301,7 @@ class RecommendationEvidence {
     required this.keywordScoreExplanation,
     required this.durationExplanation,
     required this.transcriptSource,
+    required this.transcriptScope,
     this.warning,
     this.hookSecondsAnalyzed,
     this.sttFallbackReason,
@@ -310,6 +314,9 @@ class RecommendationEvidence {
   final String dataSourceLabel;
   final int datasetSampleSize;
   final int eligiblePoolSize;
+  final String viewMetricVersion;
+  final int viewMetricCohortSize;
+  final int excludedIncompatibleViewMetricRows;
   final Map<String, int> sourcePlatformCounts;
   final Map<String, int> transcriptSourceCounts;
   final Map<String, int> languageCounts;
@@ -323,6 +330,7 @@ class RecommendationEvidence {
   final String keywordScoreExplanation;
   final String durationExplanation;
   final String transcriptSource;
+  final String transcriptScope;
   final String? warning;
   final int? hookSecondsAnalyzed;
   final String? sttFallbackReason;
@@ -347,6 +355,12 @@ class RecommendationEvidence {
       eligiblePoolSize: (json['eligible_pool_size'] as num?)?.toInt() ??
           (json['dataset_sample_size'] as num?)?.toInt() ??
           0,
+      viewMetricVersion: json['view_metric_version']?.toString() ?? '',
+      viewMetricCohortSize:
+          (json['view_metric_cohort_size'] as num?)?.toInt() ?? 0,
+      excludedIncompatibleViewMetricRows:
+          (json['excluded_incompatible_view_metric_rows'] as num?)?.toInt() ??
+              0,
       sourcePlatformCounts: rawCounts is Map
           ? rawCounts.map(
               (key, value) =>
@@ -381,6 +395,7 @@ class RecommendationEvidence {
           json['keyword_score_explanation']?.toString() ?? '',
       durationExplanation: json['duration_explanation']?.toString() ?? '',
       transcriptSource: json['transcript_source']?.toString() ?? 'unknown',
+      transcriptScope: json['transcript_scope']?.toString() ?? 'unknown',
       warning: json['warning']?.toString(),
       hookSecondsAnalyzed: (json['hook_seconds_analyzed'] as num?)?.toInt(),
       sttFallbackReason: json['stt_fallback_reason']?.toString(),

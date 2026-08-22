@@ -205,6 +205,9 @@ class DatasetReviewCandidate {
     required this.proposedLeafKey,
     required this.transcriptLanguage,
     required this.captionType,
+    required this.transcriptAcquisitionMethod,
+    required this.transcriptScope,
+    required this.transcriptTimestampsAvailable,
     required this.durationSeconds,
     required this.transcript,
     required this.transcriptPreview,
@@ -232,6 +235,9 @@ class DatasetReviewCandidate {
   final String proposedLeafKey;
   final String transcriptLanguage;
   final String captionType;
+  final String transcriptAcquisitionMethod;
+  final String transcriptScope;
+  final bool transcriptTimestampsAvailable;
   final int durationSeconds;
   final String transcript;
   final String transcriptPreview;
@@ -264,6 +270,11 @@ class DatasetReviewCandidate {
       proposedLeafKey: json['proposed_leaf_key']?.toString() ?? '',
       transcriptLanguage: json['transcript_language']?.toString() ?? 'und',
       captionType: json['caption_type']?.toString() ?? 'unknown',
+      transcriptAcquisitionMethod:
+          json['transcript_acquisition_method']?.toString() ?? '',
+      transcriptScope: json['transcript_scope']?.toString() ?? '',
+      transcriptTimestampsAvailable:
+          json['transcript_timestamps_available'] as bool? ?? false,
       durationSeconds: (json['duration_seconds'] as num?)?.toInt() ?? 0,
       transcript: json['transcript']?.toString() ?? '',
       transcriptPreview: json['transcript_preview']?.toString() ?? '',
@@ -292,6 +303,32 @@ class DatasetReviewCandidate {
       reviewedAt: DateTime.tryParse(json['reviewed_at']?.toString() ?? ''),
       reviewNotes: json['review_notes']?.toString(),
       datasetId: (json['dataset_id'] as num?)?.toInt(),
+    );
+  }
+}
+
+class NotebookLMImportResult {
+  const NotebookLMImportResult({
+    required this.collectionRunId,
+    required this.candidateCount,
+    required this.candidateArtifactSha256,
+    required this.candidate,
+  });
+
+  final int collectionRunId;
+  final int candidateCount;
+  final String candidateArtifactSha256;
+  final DatasetReviewCandidate candidate;
+
+  factory NotebookLMImportResult.fromJson(Map<String, dynamic> json) {
+    return NotebookLMImportResult(
+      collectionRunId: (json['collection_run_id'] as num?)?.toInt() ?? 0,
+      candidateCount: (json['candidate_count'] as num?)?.toInt() ?? 0,
+      candidateArtifactSha256:
+          json['candidate_artifact_sha256']?.toString() ?? '',
+      candidate: DatasetReviewCandidate.fromJson(
+        Map<String, dynamic>.from((json['candidate'] as Map?) ?? const {}),
+      ),
     );
   }
 }

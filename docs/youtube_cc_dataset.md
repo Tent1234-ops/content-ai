@@ -26,7 +26,7 @@ YouTube videos.list
         +-- reject: no supported public transcript
         |
         v
-first 300 transcript seconds + candidates.jsonl + SHA-256 manifest
+caption transcript + candidates.jsonl + SHA-256 manifest
         |
         v
 Human review: video + transcript + Level 3 label
@@ -64,6 +64,28 @@ Approve เมื่อครบทุกข้อ:
 เล็กน้อยแต่ยังรักษาความหมายสำคัญ Reject เมื่อ transcript ผิดคลิป, ว่าง, อ่านไม่ได้ หรือหมวดไม่ชัด
 
 ## Production Eligibility
+
+### NotebookLM acquisition path
+
+NotebookLM is an acquisition method, not the dataset source and not the labeler.
+The underlying source remains a public YouTube video whose current API metadata
+reports `status.license=creativeCommon`. Admins paste the exact source transcript,
+not a NotebookLM summary, into `/#/admin-transcript-import`.
+
+The backend verifies metadata and license, creates an immutable hashed candidate,
+deduplicates by YouTube ID and transcript SHA-256, and sends it through the same
+human review workflow. Approved rows record:
+
+```text
+transcript_source             = youtube_public_caption
+transcript_acquisition_method = notebooklm_manual_source
+transcript_scope              = full_video
+transcript_timestamps_available = false
+```
+
+Training transcripts have no five-minute duration limit. Full transcripts from long
+videos can be used for Classification and Keyword Recommendation. Only user uploads
+and `is_duration_recommendation_eligible` remain limited to 300 seconds.
 
 `app/services/dataset_eligibility.py` เป็น contract กลาง Classification, Recommendation และ
 readiness coverage ใช้ query เดียวกัน จึงไม่มี endpoint ใดดึง candidate ที่ยังไม่ตรวจไปใช้ได้
@@ -115,9 +137,10 @@ rows and all registered candidate artifacts by YouTube ID and transcript hash.
 
 Collection schema version 4 adds two dataset quality gates:
 
-1. Reserve at least 40% Thai transcripts per leaf by default (`20/50`). English
-   candidates are skipped after the non-Thai capacity is full; transcripts are
-   never machine-translated to satisfy this target.
+1. Production collection is Thai-only by default. The collector uses Thai search
+   queries, requests Thai public captions, and never machine-translates English
+   transcripts to satisfy the target. Legacy English rows remain auditable but do
+   not count toward taxonomy readiness, model training, or recommendation evidence.
 2. Accept at most 3 videos from one Channel ID in one leaf, counting prior
    production rows and registered candidate artifacts, to reduce creator leakage.
 
@@ -126,6 +149,17 @@ negative terms for common false positives. Search queries remain discovery hints
 only human review assigns the final label. The manifest, CLI checkpoint output,
 and Admin Dataset Review page report progress by leaf, transcript language, and
 unique channel count.
+
+An unfinished and unreviewed bilingual run can be narrowed without losing its
+audit history:
+
+```powershell
+python -B scripts/retarget_youtube_cc_run.py --run-id YOUR_RUN_ID --languages th
+```
+
+The command keeps Thai candidates in the active artifact and archives excluded
+rows in a separate hashed JSONL artifact. It refuses to mutate a run after any
+review decision or review event exists.
 
 Classification ใช้ train rows ทุกแถวในหมวดที่พร้อมด้วยน้ำหนักเท่ากัน ส่วน Recommendation:
 
@@ -138,13 +172,57 @@ Classification ใช้ train rows ทุกแถวในหมวดที�
 
 ค่า statistics เป็น snapshot ณ เวลา collect ไม่ใช่ยอดปัจจุบันแบบ live
 
+## Public View-Count Metric Versions
+
+YouTube changes the public `viewCount` definition for long-form videos and live
+streams on 24 August 2026. The old public value and the new play-start value are
+not directly comparable. Every statistics sample is therefore stamped with a
+`view_metric_version`:
+
+- `youtube_qualified_view_v1`: collected before 24 August 2026
+- `youtube_play_start_view_v2`: collected on or after 24 August 2026
+
+Dashboard momentum starts a new baseline when the version changes.
+Recommendation ranking first selects one compatible metric cohort, then ranks
+high-performing examples only inside that cohort. The application does not try
+to recover historical `engagedViews` for arbitrary public Creative Commons
+videos because that owner-level value requires YouTube Analytics/Reporting
+authorization for the source channel.
+
+Each candidate JSON row and imported `dataset_contents` row stores the version.
+The collection manifest also records counts by version because one resumable
+run can span the change date.
+
+Apply the schema and backfill migration before collecting or serving new data:
+
+```powershell
+python -B scripts/migrate_view_metrics.py
+```
+
 ## Collector Resume And Quota
+
+`pacing_paused` is a resumable checkpoint, not a failed run. Public transcript
+retrieval is performed one video at a time and can be temporarily rate-limited
+independently of YouTube Data API quota. The collector intentionally pauses
+after a small number of attempts, saves its progress, and resumes with the same
+run ID so completed searches and deduplication work are not repeated.
+
+The command-line collector defaults to a guarded 30-minute profile: three
+transcript attempts per execution, 60 seconds of base delay plus up to 30 seconds
+of jitter, and a minimum 30-minute cooldown between `pacing_paused` resumes. If
+the provider explicitly reports an IP/request block, the guard becomes 24 hours.
+Running before the guard expires sends no provider request. This is a risk
+control for an unofficial endpoint, not a guarantee that the provider will
+never rate-limit an address.
+
+Do not approve or reject a paused run before collection reaches
+`review_pending`; a run with review events is immutable.
 
 Collector บันทึก checkpoint หลังแต่ละ search page หาก YouTube ตอบ HTTP 429 ระบบบันทึกสถานะ
 `quota_waiting` แทน `failed` และไม่นับเป็น data error จากนั้น resume run เดิมได้เมื่อ quota
 พร้อมอีกครั้ง อย่างไรก็ตาม run ที่สร้างก่อน schema version 3 เคยตัด source video ที่ยาว
 เกิน 300 วินาทีทิ้ง จึงห้าม resume ภายใต้นโยบายใหม่ ให้เริ่ม collection run ใหม่แทน ระบบจะ
-deduplicate YouTube ID และ transcript hash กับ 35 candidates เดิมโดยอัตโนมัติ
+deduplicate YouTube ID และ transcript hash กับ candidates เดิมโดยอัตโนมัติ
 
 ## Reproducibility
 

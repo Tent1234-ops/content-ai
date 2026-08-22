@@ -10,11 +10,13 @@ from sqlalchemy.orm import Query, Session
 from app.database.models import DatasetContent
 from app.services.dataset_contract import (
     ACCEPTED_TRANSCRIPT_QUALITIES,
+    PRIMARY_CONTENT_LANGUAGE,
     PRODUCTION_SPLITS,
     RECOMMENDATION_DURATION_MAX_SECONDS,
     SUPPORTED_CAPTION_TYPES,
+    SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS,
     SUPPORTED_TRANSCRIPT_LANGUAGES,
-    TRANSCRIPT_WINDOW_SECONDS,
+    SUPPORTED_TRANSCRIPT_SCOPES,
     YOUTUBE_CC_DATASET_SOURCE,
     YOUTUBE_CC_LABEL_SOURCE,
     YOUTUBE_CC_TRANSCRIPT_SOURCE,
@@ -33,9 +35,13 @@ def production_transcript_conditions(*, train_only: bool = False):
         DatasetContent.taxonomy_leaf_key.in_(ACTIVE_LEAF_KEYS),
         DatasetContent.verification_status == YOUTUBE_CC_VERIFICATION_STATUS,
         DatasetContent.label_source == YOUTUBE_CC_LABEL_SOURCE,
-        DatasetContent.language.in_(SUPPORTED_TRANSCRIPT_LANGUAGES),
+        DatasetContent.language == PRIMARY_CONTENT_LANGUAGE,
         DatasetContent.source_platform == "youtube",
         DatasetContent.transcript_source == YOUTUBE_CC_TRANSCRIPT_SOURCE,
+        DatasetContent.transcript_acquisition_method.in_(
+            SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS
+        ),
+        DatasetContent.transcript_scope.in_(SUPPORTED_TRANSCRIPT_SCOPES),
         DatasetContent.caption_type.in_(SUPPORTED_CAPTION_TYPES),
         DatasetContent.transcript_quality.in_(ACCEPTED_TRANSCRIPT_QUALITIES),
         DatasetContent.collection_run_id.is_not(None),
@@ -79,8 +85,9 @@ def production_transcript_conditions(*, train_only: bool = False):
         func.length(func.trim(DatasetContent.reviewed_by)) > 0,
         func.length(func.trim(DatasetContent.raw_metadata_json)) > 2,
         func.lower(func.trim(DatasetContent.license_name)).like("%creative commons%"),
-        DatasetContent.transcript_window_seconds == TRANSCRIPT_WINDOW_SECONDS,
-        DatasetContent.transcript_end_seconds <= TRANSCRIPT_WINDOW_SECONDS,
+        DatasetContent.transcript_window_seconds > 0,
+        DatasetContent.transcript_end_seconds > 0,
+        DatasetContent.transcript_end_seconds <= DatasetContent.duration_seconds,
         DatasetContent.duration_seconds > 0,
     ]
     if train_only:
@@ -113,6 +120,8 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
         "split_strategy",
         "creator_group_key",
         "transcript_source",
+        "transcript_acquisition_method",
+        "transcript_scope",
         "caption_type",
         "transcript_quality",
         "reviewed_by",
@@ -151,6 +160,13 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
         errors.append("source_platform=youtube")
     if str(value("transcript_source") or "") != YOUTUBE_CC_TRANSCRIPT_SOURCE:
         errors.append(f"transcript_source={YOUTUBE_CC_TRANSCRIPT_SOURCE}")
+    if (
+        str(value("transcript_acquisition_method") or "")
+        not in SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS
+    ):
+        errors.append("transcript_acquisition_method")
+    if str(value("transcript_scope") or "") not in SUPPORTED_TRANSCRIPT_SCOPES:
+        errors.append("transcript_scope")
     if str(value("caption_type") or "") not in SUPPORTED_CAPTION_TYPES:
         errors.append("caption_type")
     if str(value("transcript_quality") or "") not in ACCEPTED_TRANSCRIPT_QUALITIES:
@@ -167,14 +183,17 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
         errors.append("statistics_captured_at")
     if value("license_verified_at") is None:
         errors.append("license_verified_at")
-    if value("transcript_window_seconds") != TRANSCRIPT_WINDOW_SECONDS:
-        errors.append(f"transcript_window_seconds={TRANSCRIPT_WINDOW_SECONDS}")
+    transcript_window = value("transcript_window_seconds")
+    if transcript_window is None or int(transcript_window) <= 0:
+        errors.append("transcript_window_seconds")
     transcript_end = value("transcript_end_seconds")
-    if transcript_end is None or not 0 <= float(transcript_end) <= TRANSCRIPT_WINDOW_SECONDS:
+    if transcript_end is None or float(transcript_end) <= 0:
         errors.append("transcript_end_seconds")
     duration = value("duration_seconds")
     if duration is None or int(duration) <= 0:
         errors.append("duration_seconds")
+    elif transcript_end is not None and float(transcript_end) > int(duration):
+        errors.append("transcript_end_seconds")
     if not bool(value("is_keyword_recommendation_eligible")):
         errors.append("is_keyword_recommendation_eligible")
     expected_duration_eligibility = bool(

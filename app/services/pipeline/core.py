@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 import tempfile
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
@@ -34,7 +34,11 @@ def convert_numpy(obj):
     return obj
 
 
-def extract_audio(video_path: str, audio_path: str, max_seconds: int = 90) -> bool:
+def extract_audio(
+    video_path: str,
+    audio_path: str,
+    max_seconds: int | None = None,
+) -> bool:
     command = [
         "ffmpeg",
         "-y",
@@ -48,20 +52,58 @@ def extract_audio(video_path: str, audio_path: str, max_seconds: int = 90) -> bo
         "-ac",
         "1",
     ]
-    if max_seconds > 0:
+    if max_seconds is not None and max_seconds > 0:
         command.extend(["-t", str(max_seconds)])
     command.append(audio_path)
     try:
-        result = subprocess.run(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=max(30, max_seconds + 45),
-        )
+        run_options = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "check": False,
+        }
+        if max_seconds is not None and max_seconds > 0:
+            run_options["timeout"] = max(30, max_seconds + 45)
+        result = subprocess.run(command, **run_options)
         return result.returncode == 0 and os.path.exists(audio_path) and os.path.getsize(audio_path) > 0
     except Exception:
         return False
+
+
+def transcript_for_time_window(
+    segments: Iterable[Dict[str, object]],
+    duration_seconds: int,
+) -> str:
+    """Return text from timestamped ASR segments that begin inside a time window."""
+    window_end = max(0.0, float(duration_seconds))
+    parts: List[str] = []
+    for segment in segments:
+        text = normalize_space(str(segment.get("text") or ""))
+        if not text:
+            continue
+        try:
+            start = float(segment.get("start"))
+        except (TypeError, ValueError):
+            continue
+        if start < 0 or start >= window_end:
+            continue
+        parts.append(text)
+    return normalize_space(" ".join(parts))
+
+
+def segment_count_for_time_window(
+    segments: Iterable[Dict[str, object]],
+    duration_seconds: int,
+) -> int:
+    window_end = max(0.0, float(duration_seconds))
+    count = 0
+    for segment in segments:
+        try:
+            start = float(segment.get("start"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= start < window_end:
+            count += 1
+    return count
 
 
 def simple_summarize(text: str):
@@ -2180,7 +2222,11 @@ def _local_extract_keywords(text: str, top_k: int = 15, domain: str | None = Non
 # =========================
 # Main Pipeline
 # =========================
-def analyze_video(video_path: str, display_name: str | None = None):
+def analyze_video(
+    video_path: str,
+    display_name: str | None = None,
+    hook_duration_seconds: int = 60,
+):
     print(f"[pipeline] analyze_video start: {video_path}", flush=True)
     # Lazy import heavy NLP models to avoid failing app startup
     # when model files are not cached yet.
@@ -2205,23 +2251,27 @@ def analyze_video(video_path: str, display_name: str | None = None):
         print(f"[pipeline] ML model import failed: {exc}", flush=True)
         ml_import_ok = False
 
-    max_audio_seconds = int(os.getenv("ANALYZE_MAX_AUDIO_SECONDS", "60") or "60")
-    hook_seconds = max(15, min(max_audio_seconds, 180))
-    audio_path = tempfile.NamedTemporaryFile(prefix="content_ai_", suffix=".wav", delete=False).name
+    hook_seconds = max(10, min(int(hook_duration_seconds or 60), 300))
+    with tempfile.NamedTemporaryFile(
+        prefix="content_ai_",
+        suffix=".wav",
+        delete=False,
+    ) as audio_file:
+        audio_path = audio_file.name
     try:
-        print(f"[pipeline] extracting audio first {hook_seconds}s...", flush=True)
+        print("[pipeline] extracting audio from full video...", flush=True)
         update_current_job(
             stage="extracting_audio",
             progress=24,
-            message=f"Extracting first {hook_seconds}s hook audio",
+            message="Extracting audio from full video",
         )
-        audio_ok = extract_audio(video_path, audio_path, max_seconds=hook_seconds)
+        audio_ok = extract_audio(video_path, audio_path)
 
         print("[pipeline] transcribing audio...", flush=True)
         update_current_job(
             stage="transcribing",
             progress=38,
-            message=f"Transcribing first {hook_seconds}s of audio",
+            message="Transcribing full video",
         )
         if audio_ok:
             try:
@@ -2271,6 +2321,9 @@ def analyze_video(video_path: str, display_name: str | None = None):
         )
     else:
         stt["transcript_source"] = "speech_to_text"
+
+    stt_segments = stt.get("segments") or []
+    hook_transcript = transcript_for_time_window(stt_segments, hook_seconds)
 
     # Decide whether to use aggressive correction based on segment-level confidence
     avg_no_speech = stt.get("avg_no_speech_prob")
@@ -2516,6 +2569,7 @@ def analyze_video(video_path: str, display_name: str | None = None):
                 "all_keywords": final_keywords,
                 "entity_keywords": entity_keywords[:5],
                 "context_keywords": context_keywords[:10],
+                "hook_transcript": hook_transcript,
                 "comparison_dimensions": comparison_dimensions,
                 "dimension_status": dimension_status,
                 "recommendation_policy": {
@@ -2538,6 +2592,11 @@ def analyze_video(video_path: str, display_name: str | None = None):
                     "fallback_reason": stt.get("fallback_reason"),
                     "warning": stt.get("warning"),
                     "hook_seconds_analyzed": hook_seconds,
+                    "hook_segment_count": segment_count_for_time_window(
+                        stt_segments,
+                        hook_seconds,
+                    ),
+                    "transcript_scope": "full_clip",
                 },
             },
         }

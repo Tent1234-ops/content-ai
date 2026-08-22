@@ -26,6 +26,11 @@ class DurationRecommendation(BaseModel):
 class DatasetProfileResponseItem(BaseModel):
     domain: str
     sample_size: int
+    eligible_pool_size: int = 0
+    view_metric_version: str = ""
+    view_metric_cohort_size: int = 0
+    excluded_incompatible_view_metric_rows: int = 0
+    selection_rule: str = "none"
     source: str = "youtube"
     source_platform_counts: dict[str, int] = Field(default_factory=dict)
     top_keywords: list[RecommendationKeywordItem]

@@ -424,9 +424,12 @@ class _EvidenceCard extends StatelessWidget {
       if (evidence.licenseName.isNotEmpty) evidence.licenseName,
     ].join(' · ');
     final selectionText = evidence.selectionRule ==
-            'top_40_percent_by_average_views_per_day_and_engagement_rate'
-        ? 'Top 40% in the same category by average views/day and engagement rate'
-        : evidence.selectionRule.replaceAll('_', ' ');
+            'single_view_metric_cohort_then_top_40_percent'
+        ? 'One compatible view-count cohort, then the top 40% in the same category'
+        : evidence.selectionRule ==
+                'top_40_percent_by_average_views_per_day_and_engagement_rate'
+            ? 'Top 40% in the same category by average views/day and engagement rate'
+            : evidence.selectionRule.replaceAll('_', ' ');
     final examples = evidence.exemplarTitles.isNotEmpty
         ? evidence.exemplarTitles.take(3).toList()
         : datasetProfile.exemplarTitles.take(3).toList();
@@ -516,6 +519,14 @@ class _EvidenceCard extends StatelessWidget {
                       '${evidence.eligiblePoolSize} eligible clips'
                   : '${evidence.datasetSampleSize} clips',
             ),
+            if (evidence.viewMetricVersion.isNotEmpty) ...[
+              const Divider(height: 20),
+              _SummaryRow(
+                icon: Icons.rule_outlined,
+                label: 'View metric cohort',
+                value: _viewMetricEvidenceText(evidence),
+              ),
+            ],
             if (verificationText.isNotEmpty) ...[
               const Divider(height: 20),
               _SummaryRow(
@@ -590,6 +601,25 @@ class _EvidenceCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _viewMetricEvidenceText(RecommendationEvidence evidence) {
+  final label = switch (evidence.viewMetricVersion) {
+    'youtube_qualified_view_v1' =>
+      'YouTube qualified views, captured before 24 Aug 2026',
+    'youtube_play_start_view_v2' =>
+      'YouTube play starts, captured from 24 Aug 2026',
+    'google_interest_v1' => 'Google search-interest signal',
+    'tiktok_public_view_v1' => 'TikTok public views',
+    _ => evidence.viewMetricVersion.replaceAll('_', ' '),
+  };
+  final cohort = evidence.viewMetricCohortSize > 0
+      ? '; ${evidence.viewMetricCohortSize} compatible clips'
+      : '';
+  final excluded = evidence.excludedIncompatibleViewMetricRows > 0
+      ? '; ${evidence.excludedIncompatibleViewMetricRows} incompatible rows excluded'
+      : '';
+  return '$label$cohort$excluded';
 }
 
 class _SummaryRow extends StatelessWidget {
@@ -907,12 +937,14 @@ class _SectionHeader extends StatelessWidget {
 String _transcriptSourceText(RecommendationEvidence evidence) {
   final source = evidence.transcriptSource;
   final seconds = evidence.hookSecondsAnalyzed;
-  final suffix = seconds == null ? '' : ' | first ${seconds}s analyzed';
+  final hookSuffix =
+      seconds == null ? '' : ' | first ${seconds}s used for hook';
   if (source == 'speech_to_text') {
-    return 'Speech-to-text$suffix';
+    final scope = evidence.transcriptScope == 'full_clip' ? ' (full clip)' : '';
+    return 'Speech-to-text$scope$hookSuffix';
   }
   if (source == 'fallback_filename') {
-    return 'Filename fallback (speech-to-text unavailable)$suffix';
+    return 'Filename fallback (speech-to-text unavailable)';
   }
-  return '$source$suffix';
+  return source;
 }

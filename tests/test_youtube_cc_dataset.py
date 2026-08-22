@@ -33,15 +33,19 @@ from app.services.youtube_cc_dataset import (
     CLASSIFICATION_DIVERSE_STRATEGY,
     RECOMMENDATION_HIGH_PERFORMANCE_STRATEGY,
     REVIEW_FIELDS,
+    YouTubeCollectionResumeCooldownError,
     YouTubeCCDatasetError,
     YouTubeQuotaExceededError,
     YouTubeTranscriptProviderBlockedError,
+    _review_rows,
     _youtube_get,
     collect_youtube_cc_candidates,
+    create_notebooklm_transcript_candidate,
     import_reviewed_youtube_cc_dataset,
     list_youtube_cc_review_queue,
     parse_iso8601_duration,
     repair_quota_waiting_run_statuses,
+    retarget_youtube_cc_collection_languages,
     resume_youtube_cc_collection,
     review_youtube_cc_candidate,
 )
@@ -152,6 +156,27 @@ class YouTubeCCDatasetTests(unittest.TestCase):
             writer.writeheader()
             writer.writerows(rows)
 
+    def test_legacy_review_csv_without_view_metric_version_is_readable(self):
+        legacy_fields = [
+            field for field in REVIEW_FIELDS if field != "view_metric_version"
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            review_path = Path(temp_dir) / "legacy-review.csv"
+            with review_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=legacy_fields)
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        **{field: "" for field in legacy_fields},
+                        "source_youtube_id": "legacy-video",
+                    }
+                )
+
+            rows = _review_rows(review_path)
+
+        self.assertEqual(rows[0]["source_youtube_id"], "legacy-video")
+        self.assertEqual(rows[0]["view_metric_version"], "")
+
     def test_duration_parser_and_five_minute_boundary(self):
         self.assertEqual(parse_iso8601_duration("PT5M"), 300)
         self.assertEqual(parse_iso8601_duration("PT4M59S"), 299)
@@ -159,12 +184,120 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         with self.assertRaises(YouTubeCCDatasetError):
             parse_iso8601_duration("not-a-duration")
 
+    def test_notebooklm_full_transcript_is_trainable_without_duration_limit(self):
+        video_id = "notebook001"
+        transcript = (
+            "รีวิวโทรศัพท์รุ่นใหม่แบบละเอียด กล้อง แบตเตอรี่ หน้าจอ "
+            "ประสิทธิภาพ ซอฟต์แวร์ และประสบการณ์ใช้งานจริง " * 8
+        ).strip()
+
+        def youtube_getter(resource, **_kwargs):
+            self.assertEqual(resource, "videos")
+            return {"items": [_video(video_id, duration="PT12M")]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            created = create_notebooklm_transcript_candidate(
+                self.db,
+                api_key="test-key",
+                video_url=f"https://www.youtube.com/watch?v={video_id}",
+                transcript=transcript,
+                proposed_leaf_key="phone",
+                transcript_language="th",
+                caption_type="unspecified",
+                youtube_getter=youtube_getter,
+                artifact_root=root / "raw",
+            )
+            candidate = created["candidate"]
+            self.assertEqual(candidate["transcript_scope"], "full_video")
+            self.assertEqual(
+                candidate["transcript_acquisition_method"],
+                "notebooklm_manual_source",
+            )
+            self.assertFalse(candidate["transcript_timestamps_available"])
+            self.assertEqual(candidate["duration_seconds"], 720)
+
+            review_youtube_cc_candidate(
+                self.db,
+                collection_run_id=created["collection_run_id"],
+                source_youtube_id=video_id,
+                decision="approve",
+                reviewer="admin@example.test [user:1]",
+                reviewed_leaf_key="phone",
+                transcript_quality="good",
+                notes="Full NotebookLM source transcript checked against the video.",
+                review_root=root / "reviews",
+            )
+
+        dataset = self.db.query(DatasetContent).filter_by(
+            source_youtube_id=video_id
+        ).one()
+        self.assertTrue(dataset.is_training_eligible)
+        self.assertTrue(dataset.is_keyword_recommendation_eligible)
+        self.assertFalse(dataset.is_duration_recommendation_eligible)
+        self.assertEqual(dataset.transcript_scope, "full_video")
+        self.assertEqual(dataset.transcript_window_seconds, 720)
+        self.assertEqual(dataset.transcript_end_seconds, 720)
+        self.assertEqual(production_transcript_query(self.db).count(), 1)
+
     def test_phone_and_camera_queries_exclude_common_false_positives(self):
         phone_queries = collection_queries_for_leaf("phone")
         camera_queries = collection_queries_for_leaf("camera")
         self.assertTrue(any("-case" in query for query in phone_queries))
         self.assertTrue(any("-phone" in query for query in camera_queries))
         self.assertTrue(any("mirrorless" in query for query in camera_queries))
+        self.assertEqual(len(phone_queries), len(set(phone_queries)))
+        self.assertTrue(any("งบ 5000" in query for query in phone_queries))
+        self.assertTrue(any("ถ่ายรูปกลางคืน" in query for query in phone_queries))
+        self.assertTrue(any("แกะกล่องมือถือ" in query for query in phone_queries))
+        self.assertTrue(any("หลังใช้ 1 เดือน" in query for query in phone_queries))
+
+    def test_new_collection_defaults_to_thai_only(self):
+        requested_languages = []
+        video_id = "thaidefault1"
+
+        def youtube_getter(resource, **_kwargs):
+            if resource == "search":
+                return _search_response([video_id])
+            if resource == "videos":
+                return {"items": [_video(video_id)]}
+            raise AssertionError(resource)
+
+        def recording_transcript(requested_video_id, languages):
+            requested_languages.append(tuple(languages))
+            return _transcript(requested_video_id, languages)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result = collect_youtube_cc_candidates(
+                self.db,
+                api_key="test-key",
+                candidate_path=root / "candidates.jsonl",
+                review_path=root / "review.csv",
+                manifest_path=root / "manifest.json",
+                dataset_version="youtube-cc-thai-default-v1",
+                leaf_keys=["phone"],
+                target_per_leaf=1,
+                performance_target_per_leaf=0,
+                max_pages_per_query=1,
+                transcript_fetcher=recording_transcript,
+                youtube_getter=youtube_getter,
+            )
+
+        queries = result["config"]["queries_by_leaf"]["phone"]
+        self.assertEqual(requested_languages, [("th",)])
+        self.assertEqual(tuple(result["config"]["languages"]), ("th",))
+        self.assertEqual(result["config"]["min_thai_per_leaf"], 1)
+        self.assertEqual(
+            result["config"]["language_balance_policy"],
+            "thai_only_v1",
+        )
+        self.assertTrue(
+            all(
+                any("\u0e00" <= character <= "\u0e7f" for character in query)
+                for query in queries
+            )
+        )
 
     def test_collection_creates_real_candidate_artifact_but_no_dataset_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -176,6 +309,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
             ]
             with reviews.open("r", encoding="utf-8", newline="") as handle:
                 review_rows = list(csv.DictReader(handle))
+            manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
 
         self.assertEqual(result["status"], "collected")
         self.assertEqual(len(candidate_rows), 3)
@@ -187,6 +321,10 @@ class YouTubeCCDatasetTests(unittest.TestCase):
             all(item["transcript_window_seconds"] == 300 for item in candidate_rows)
         )
         self.assertTrue(all(not item["decision"] for item in review_rows))
+        self.assertEqual(
+            sum(manifest_payload["view_metric_versions"].values()),
+            len(candidate_rows),
+        )
         self.assertEqual(self.db.query(DatasetContent).count(), 0)
         run = self.db.query(DatasetCollectionRun).one()
         self.assertEqual(run.transcripts_collected, 3)
@@ -287,6 +425,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.assertEqual(counts[RECOMMENDATION_HIGH_PERFORMANCE_STRATEGY], 2)
         self.assertEqual(counts[CLASSIFICATION_DIVERSE_STRATEGY], 2)
         self.assertTrue(all(row["average_views_per_day"] > 0 for row in rows))
+        self.assertTrue(all(row["view_metric_version"] for row in rows))
         self.assertEqual(
             sorted(row["performance_rank_within_leaf"] for row in rows),
             [1, 2, 3, 4],
@@ -360,6 +499,98 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         leaf_progress = result["progress"]["by_leaf"][0]
         self.assertEqual(leaf_progress["thai_minimum"], 2)
         self.assertEqual(leaf_progress["language_counts"]["th"], 2)
+
+    def test_existing_approved_thai_satisfies_collection_minimum(self):
+        existing_transcript = "approved Thai phone transcript"
+        self.db.add(
+            DatasetContent(
+                title="Approved Thai phone review",
+                transcript=existing_transcript,
+                dataset_source="youtube_cc",
+                dataset_version="youtube-cc-existing-thai-v1",
+                source_record_id="existing-thai-phone",
+                source_youtube_id="existingth01",
+                source_channel_id="existing-thai-channel",
+                taxonomy_leaf_key="phone",
+                category_level_1="Technology",
+                category_level_2="Electronics",
+                category_level_3="Phone",
+                language="th",
+                transcript_sha256=hashlib.sha256(
+                    existing_transcript.encode()
+                ).hexdigest(),
+                is_training_eligible=True,
+                is_active=True,
+            )
+        )
+        self.db.commit()
+        ids = [f"existingen{i:02d}" for i in range(4)]
+
+        def youtube_getter(resource, **kwargs):
+            if resource == "search":
+                return _search_response(ids)
+            if resource == "videos":
+                return {
+                    "items": [
+                        _video(video_id, index)
+                        for index, video_id in enumerate(kwargs["id"].split(","))
+                    ]
+                }
+            raise AssertionError(resource)
+
+        def english_transcript(video_id, _languages):
+            transcript = f"English phone review transcript {video_id}"
+            return {
+                "language": "en",
+                "caption_type": "manual",
+                "segments": [
+                    {"text": transcript, "start": 0.0, "duration": 20.0}
+                ],
+                "segment_count": 1,
+                "start_seconds": 0.0,
+                "end_seconds": 20.0,
+                "transcript": transcript,
+                "transcript_sha256": hashlib.sha256(
+                    transcript.encode()
+                ).hexdigest(),
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result = collect_youtube_cc_candidates(
+                self.db,
+                api_key="test-key",
+                candidate_path=root / "candidates.jsonl",
+                review_path=root / "review.csv",
+                manifest_path=root / "manifest.json",
+                dataset_version="youtube-cc-existing-thai-v1",
+                leaf_keys=["phone"],
+                target_per_leaf=4,
+                performance_target_per_leaf=0,
+                languages=["th", "en"],
+                min_thai_per_leaf=1,
+                max_videos_per_channel_per_leaf=3,
+                max_pages_per_query=1,
+                transcript_fetcher=english_transcript,
+                youtube_getter=youtube_getter,
+            )
+
+        self.assertEqual(result["status"], "collected")
+        self.assertNotIn(
+            "non_thai_capacity_reserved",
+            result["quality_filters"]["skipped_by_reason"],
+        )
+        leaf_progress = result["progress"]["by_leaf"][0]
+        self.assertEqual(leaf_progress["language_counts"]["en"], 4)
+        self.assertEqual(
+            leaf_progress["existing_training_language_counts"]["th"],
+            1,
+        )
+        self.assertEqual(
+            leaf_progress["cumulative_training_language_counts"]["th"],
+            1,
+        )
+        self.assertEqual(leaf_progress["thai_remaining"], 0)
 
     def test_collection_caps_each_channel_within_a_leaf(self):
         ids = [f"channelcap{i:02d}" for i in range(5)]
@@ -532,6 +763,248 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.assertEqual(manifest["search_state"], {})
         self.assertTrue(manifest["transcript_provider"]["retryable"])
         self.assertEqual(callbacks, ["running", "transcript_waiting"])
+
+    def test_pacing_budget_checkpoints_and_resume_skips_attempted_transcripts(self):
+        video_ids = ["paced00001", "paced00002", "paced00003"]
+        transcript_calls = []
+
+        def youtube_getter(resource, **kwargs):
+            if resource == "search":
+                return _search_response(video_ids)
+            if resource == "videos":
+                requested = kwargs["id"].split(",")
+                return {
+                    "items": [
+                        _video(video_id, video_ids.index(video_id))
+                        for video_id in requested
+                    ]
+                }
+            raise AssertionError(resource)
+
+        def recording_transcript(video_id, languages):
+            transcript_calls.append(video_id)
+            return _transcript(video_id, languages)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first = collect_youtube_cc_candidates(
+                self.db,
+                api_key="test-key",
+                candidate_path=root / "candidates.jsonl",
+                review_path=root / "review.csv",
+                manifest_path=root / "manifest.json",
+                dataset_version="youtube-cc-pacing-v1",
+                leaf_keys=["phone"],
+                target_per_leaf=3,
+                performance_target_per_leaf=0,
+                languages=["th", "en"],
+                min_thai_per_leaf=0,
+                max_pages_per_query=1,
+                max_transcript_attempts_per_execution=1,
+                transcript_fetcher=recording_transcript,
+                youtube_getter=youtube_getter,
+            )
+            run = self.db.query(DatasetCollectionRun).one()
+
+            self.assertEqual(first["status"], "pacing_paused")
+            self.assertTrue(first["pacing"]["retryable"])
+            self.assertEqual(first["pacing"]["cooldown_minutes"], 30.0)
+            self.assertIn("next_resume_at", first["pacing"])
+            self.assertIsNone(run.completed_at)
+            self.assertEqual(transcript_calls, [video_ids[0]])
+
+            with self.assertRaises(YouTubeCollectionResumeCooldownError):
+                resume_youtube_cc_collection(
+                    self.db,
+                    collection_run_id=run.collection_run_id,
+                    api_key="test-key",
+                    max_pages_per_query=1,
+                    max_transcript_attempts_per_execution=3,
+                    transcript_fetcher=recording_transcript,
+                    youtube_getter=youtube_getter,
+                )
+
+            resumed = resume_youtube_cc_collection(
+                self.db,
+                collection_run_id=run.collection_run_id,
+                api_key="test-key",
+                max_pages_per_query=1,
+                max_transcript_attempts_per_execution=3,
+                resume_cooldown_minutes=0,
+                transcript_fetcher=recording_transcript,
+                youtube_getter=youtube_getter,
+            )
+
+        self.assertEqual(resumed["status"], "collected")
+        self.assertEqual(transcript_calls, video_ids)
+        self.db.refresh(run)
+        self.assertEqual(run.resume_count, 1)
+        self.assertEqual(run.transcripts_collected, 3)
+
+    def test_retarget_run_to_thai_archives_non_thai_candidates(self):
+        video_ids = ["retargetth1", "retargeten1", "retargetth2"]
+
+        def youtube_getter(resource, **kwargs):
+            if resource == "search":
+                return _search_response(video_ids)
+            if resource == "videos":
+                requested = kwargs["id"].split(",")
+                return {
+                    "items": [
+                        _video(video_id, video_ids.index(video_id))
+                        for video_id in requested
+                    ]
+                }
+            raise AssertionError(resource)
+
+        def mixed_transcript(video_id, _languages):
+            language = "en" if video_id == "retargeten1" else "th"
+            transcript = f"{language} transcript {video_id}"
+            return {
+                "language": language,
+                "caption_type": "manual",
+                "segments": [
+                    {"text": transcript, "start": 0.0, "duration": 20.0}
+                ],
+                "segment_count": 1,
+                "start_seconds": 0.0,
+                "end_seconds": 20.0,
+                "transcript": transcript,
+                "transcript_sha256": hashlib.sha256(
+                    transcript.encode()
+                ).hexdigest(),
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first = collect_youtube_cc_candidates(
+                self.db,
+                api_key="test-key",
+                candidate_path=root / "candidates.jsonl",
+                review_path=root / "review.csv",
+                manifest_path=root / "manifest.json",
+                dataset_version="youtube-cc-retarget-v1",
+                leaf_keys=["phone"],
+                target_per_leaf=3,
+                performance_target_per_leaf=0,
+                languages=["th", "en"],
+                min_thai_per_leaf=0,
+                max_pages_per_query=1,
+                max_transcript_attempts_per_execution=2,
+                transcript_fetcher=mixed_transcript,
+                youtube_getter=youtube_getter,
+            )
+            run = self.db.query(DatasetCollectionRun).one()
+            self.assertEqual(first["status"], "pacing_paused")
+
+            retargeted = retarget_youtube_cc_collection_languages(
+                self.db,
+                collection_run_id=run.collection_run_id,
+                languages=("th",),
+            )
+            candidate_rows = [
+                json.loads(line)
+                for line in (root / "candidates.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            review_rows = _review_rows(root / "review.csv")
+            archive_path = Path(
+                retargeted["retarget"]["excluded_artifact_path"]
+            )
+            archived_rows = [
+                json.loads(line)
+                for line in archive_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+
+            self.db.refresh(run)
+            config = json.loads(run.query_config_json)
+            self.assertEqual(config["languages"], ["th"])
+            self.assertEqual(config["language_balance_policy"], "thai_only_v1")
+            self.assertEqual(config["min_thai_per_leaf"], 3)
+            self.assertTrue(
+                all(
+                    any("\u0e00" <= character <= "\u0e7f" for character in query)
+                    for query in config["queries_by_leaf"]["phone"]
+                )
+            )
+            self.assertEqual(json.loads(run.languages_json), ["th"])
+            self.assertEqual(run.transcripts_collected, 1)
+            self.assertEqual(retargeted["progress"]["language_counts"], {"th": 1})
+            self.assertEqual(len(candidate_rows), 1)
+            self.assertEqual(candidate_rows[0]["transcript_language"], "th")
+            self.assertEqual(candidate_rows[0]["run_key"], run.run_key)
+            self.assertEqual(len(review_rows), 1)
+            self.assertEqual(len(archived_rows), 1)
+            self.assertEqual(archived_rows[0]["transcript_language"], "en")
+            self.assertEqual(
+                archived_rows[0]["exclusion"]["allowed_languages"],
+                ["th"],
+            )
+
+            next_ids = ["retargeten1", "freshthai01"]
+            transcript_calls = []
+
+            def next_youtube_getter(resource, **kwargs):
+                if resource == "search":
+                    return _search_response(next_ids)
+                if resource == "videos":
+                    requested = kwargs["id"].split(",")
+                    return {
+                        "items": [
+                            _video(video_id, next_ids.index(video_id))
+                            for video_id in requested
+                        ]
+                    }
+                raise AssertionError(resource)
+
+            def next_transcript(video_id, languages):
+                transcript_calls.append(video_id)
+                return _transcript(video_id, languages)
+
+            next_result = collect_youtube_cc_candidates(
+                self.db,
+                api_key="test-key",
+                candidate_path=root / "candidates-next.jsonl",
+                review_path=root / "review-next.csv",
+                manifest_path=root / "manifest-next.json",
+                dataset_version="youtube-cc-retarget-next-v1",
+                leaf_keys=["phone"],
+                target_per_leaf=1,
+                performance_target_per_leaf=0,
+                max_pages_per_query=1,
+                transcript_fetcher=next_transcript,
+                youtube_getter=next_youtube_getter,
+            )
+            next_rows = [
+                json.loads(line)
+                for line in (root / "candidates-next.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+
+            self.assertEqual(transcript_calls, ["freshthai01"])
+            self.assertEqual(
+                [row["source_youtube_id"] for row in next_rows],
+                ["freshthai01"],
+            )
+            self.assertEqual(
+                next_result["deduplication"]["prior_excluded_artifacts"],
+                1,
+            )
+            self.assertEqual(
+                next_result["deduplication"]["prior_excluded_artifact_rows"],
+                1,
+            )
+            self.assertGreaterEqual(
+                next_result["deduplication"]["skipped_by_reason"][
+                    "duplicate_previous_video"
+                ],
+                1,
+            )
 
     def test_empty_schema_three_run_upgrades_quality_controls_on_resume(self):
         video_id = "upgraded001"

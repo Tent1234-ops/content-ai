@@ -669,6 +669,17 @@ class _CandidateReviewCard extends StatelessWidget {
                   avatar: Icon(Icons.model_training_outlined, size: 18),
                   label: Text('Classification + keywords'),
                 ),
+                if (candidate.transcriptAcquisitionMethod ==
+                    'notebooklm_manual_source')
+                  const Chip(
+                    avatar: Icon(Icons.text_snippet_outlined, size: 18),
+                    label: Text('NotebookLM source'),
+                  ),
+                if (candidate.transcriptScope == 'full_video')
+                  const Chip(
+                    avatar: Icon(Icons.subject_outlined, size: 18),
+                    label: Text('Full video transcript'),
+                  ),
                 Chip(
                   avatar: Icon(
                     candidate.datasetUsage['duration_recommendation'] == true
@@ -694,6 +705,24 @@ class _CandidateReviewCard extends StatelessWidget {
                 maxLines: 5,
                 overflow: TextOverflow.ellipsis,
               ),
+            ),
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 8),
+              title: Text(
+                'Full transcript (${candidate.transcript.length} characters)',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 320),
+                  child: SingleChildScrollView(
+                    child: SelectionArea(
+                      child: Text(candidate.transcript),
+                    ),
+                  ),
+                ),
+              ],
             ),
             if (candidate.reviewer != null) ...[
               const SizedBox(height: 10),

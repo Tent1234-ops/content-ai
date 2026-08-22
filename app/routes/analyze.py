@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from app.api.deps import require_roles
 from app.database.db import SessionLocal
 from app.database.models import User
+from app.services.admin_settings import get_admin_config
 from app.services.ai_pipeline import analyze_video as pipeline_analyze
 from app.services.classification import classify_text_domain
 from app.services.jobs import enqueue, update_current_job
@@ -46,6 +47,13 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
     transcript = str(result.get("transcript") or "")
     nlp_result = run_nlp_pipeline(transcript or filename, 10)
     analysis = result.get("analysis", {})
+    hook_transcript = str(analysis.get("hook_transcript") or "")
+    hook_nlp_result = run_nlp_pipeline(hook_transcript, 10) if hook_transcript else {}
+    hook_terms = [
+        item["keyword"] for item in hook_nlp_result.get("top_keywords", [])
+    ]
+    if not hook_terms:
+        hook_terms = list(hook_nlp_result.get("filtered_tokens", []))[:8]
     classification = classify_text_domain(
         db,
         title=filename,
@@ -80,7 +88,7 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
         domain=selected_domain,
         user_keywords=user_keywords,
         dimension_status=analysis.get("dimension_status", []),
-        hook_terms=nlp_result.get("filtered_tokens", [])[:8],
+        hook_terms=hook_terms,
         source_prefix="youtube",
         profile_limit=80,
     )
@@ -88,9 +96,10 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
     recommendation["content_keywords"] = [
         item["keyword"] for item in nlp_result.get("top_keywords", [])
     ][:12]
-    recommendation["hook_terms"] = nlp_result.get("filtered_tokens", [])[:8]
+    recommendation["hook_terms"] = hook_terms[:8]
     if isinstance(recommendation.get("evidence"), dict):
         recommendation["evidence"]["transcript_source"] = stt_meta.get("transcript_source") or "unknown"
+        recommendation["evidence"]["transcript_scope"] = stt_meta.get("transcript_scope") or "unknown"
         recommendation["evidence"]["hook_seconds_analyzed"] = stt_meta.get("hook_seconds_analyzed")
         recommendation["evidence"]["stt_fallback_reason"] = stt_meta.get("fallback_reason")
         recommendation["evidence"]["warning"] = stt_meta.get("warning")
@@ -100,8 +109,13 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
 def analyze_video_job(file_path: str, filename: str, user_id: int | None = None) -> dict:
     db = SessionLocal()
     try:
-        update_current_job(stage="extracting_audio", progress=18, message="Extracting hook audio segment")
-        result = pipeline_analyze(file_path, display_name=filename)
+        config = get_admin_config(db)
+        update_current_job(stage="extracting_audio", progress=18, message="Preparing full video audio")
+        result = pipeline_analyze(
+            file_path,
+            display_name=filename,
+            hook_duration_seconds=config.hook_analysis_duration,
+        )
         recommendation, _nlp_result = _build_recommendation(db, filename=filename, result=result)
         result["recommendation"] = recommendation
         return result
@@ -116,8 +130,13 @@ def analyze_and_save_video_job(file_path: str, filename: str, user_id: int) -> d
         if user is None:
             raise RuntimeError("User not found for analysis job.")
 
-        update_current_job(stage="extracting_audio", progress=18, message="Extracting hook audio segment")
-        result = pipeline_analyze(file_path, display_name=filename)
+        config = get_admin_config(db)
+        update_current_job(stage="extracting_audio", progress=18, message="Preparing full video audio")
+        result = pipeline_analyze(
+            file_path,
+            display_name=filename,
+            hook_duration_seconds=config.hook_analysis_duration,
+        )
         transcript = str(result.get("transcript") or "")
         recommendation, nlp_result = _build_recommendation(db, filename=filename, result=result)
         update_current_job(stage="saving", progress=90, message="Saving analysis to My Ideas")

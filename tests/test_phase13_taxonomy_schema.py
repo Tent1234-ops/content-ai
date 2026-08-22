@@ -34,6 +34,10 @@ from app.services.taxonomy import (
     taxonomy_coverage,
     taxonomy_path,
 )
+from app.services.view_metrics import (
+    YOUTUBE_PLAY_START_VIEW_V2,
+    YOUTUBE_QUALIFIED_VIEW_V1,
+)
 
 
 HASH_A = hashlib.sha256(b"candidate artifact").hexdigest()
@@ -102,7 +106,7 @@ class Phase13TaxonomySchemaTests(unittest.TestCase):
                     category_level_1=path["category_level_1"],
                     category_level_2=path["category_level_2"],
                     category_level_3=path["category_level_3"],
-                    language="th" if index % 2 == 0 else "en",
+                    language="th",
                     verification_status="human_verified",
                     label_source="human_review",
                     license_name=YOUTUBE_CC_LICENSE_NAME,
@@ -276,6 +280,42 @@ class Phase13TaxonomySchemaTests(unittest.TestCase):
             for dataset_id in profile["dataset_row_ids"]
         ]
         self.assertEqual(min(selected_scores), 18.0)
+
+    def test_recommendation_never_ranks_across_view_metric_versions(self):
+        self._add_verified_leaf_rows("phone", 30)
+        rows = (
+            self.db.query(DatasetContent)
+            .filter(DatasetContent.taxonomy_leaf_key == "phone")
+            .order_by(DatasetContent.dataset_id)
+            .all()
+        )
+        legacy_ids = set()
+        for index, row in enumerate(rows):
+            if index < 20:
+                row.view_metric_version = YOUTUBE_QUALIFIED_VIEW_V1
+                row.trend_score = float(index)
+                legacy_ids.add(row.dataset_id)
+            else:
+                row.view_metric_version = YOUTUBE_PLAY_START_VIEW_V2
+                row.trend_score = 100_000.0 + index
+        self.db.commit()
+        sync_taxonomy_registry(self.db)
+
+        profile = build_dataset_profile_for_domain(
+            self.db,
+            domain="phone",
+            source_prefix="youtube",
+            limit=150,
+        )
+
+        self.assertEqual(profile["eligible_pool_size"], 30)
+        self.assertEqual(profile["view_metric_cohort_size"], 20)
+        self.assertEqual(profile["excluded_incompatible_view_metric_rows"], 10)
+        self.assertEqual(
+            profile["view_metric_version"],
+            YOUTUBE_QUALIFIED_VIEW_V1,
+        )
+        self.assertTrue(set(profile["dataset_row_ids"]).issubset(legacy_ids))
 
     def test_saved_unknown_analysis_tracks_current_taxonomy(self):
         user = User(

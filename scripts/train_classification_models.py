@@ -16,6 +16,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from app.database.db import Base, SessionLocal, engine
 from app.database.migrations import (
     migrate_phase13_taxonomy_schema,
+    migrate_view_metric_schema,
     migrate_youtube_cc_dataset_schema,
 )
 from app.services.classification_training import (
@@ -111,6 +112,7 @@ def main() -> int:
     Base.metadata.create_all(bind=engine)
     migrate_phase13_taxonomy_schema(engine)
     migrate_youtube_cc_dataset_schema(engine)
+    migrate_view_metric_schema(engine)
     db = SessionLocal()
     try:
         sync_taxonomy_registry(db)

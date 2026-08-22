@@ -18,12 +18,22 @@ from app.core.config import settings
 from app.database.db import Base, SessionLocal, engine
 from app.database.migrations import (
     migrate_phase13_taxonomy_schema,
+    migrate_view_metric_schema,
     migrate_youtube_cc_dataset_schema,
 )
-from app.services.dataset_contract import DEFAULT_YOUTUBE_CC_DATASET_VERSION
+from app.services.dataset_contract import (
+    DEFAULT_COLLECTION_LANGUAGES,
+    DEFAULT_YOUTUBE_CC_DATASET_VERSION,
+)
 from app.services.taxonomy import ACTIVE_LEAF_KEYS, sync_taxonomy_registry
 from app.services.youtube_cc_dataset import (
+    DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS,
+    DEFAULT_MAX_TRANSCRIPT_ATTEMPTS_PER_EXECUTION,
     DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF,
+    DEFAULT_RESUME_COOLDOWN_MINUTES,
+    DEFAULT_TRANSCRIPT_DELAY_SECONDS,
+    DEFAULT_TRANSCRIPT_JITTER_SECONDS,
+    YouTubeCollectionResumeCooldownError,
     YouTubeCCDatasetError,
     YouTubeQuotaExceededError,
     YouTubeTranscriptProviderBlockedError,
@@ -52,15 +62,19 @@ def parse_args() -> argparse.Namespace:
         default=",".join(ACTIVE_LEAF_KEYS),
         help="Comma-separated taxonomy leaves",
     )
-    parser.add_argument("--languages", default="th,en")
+    parser.add_argument(
+        "--languages",
+        default=",".join(DEFAULT_COLLECTION_LANGUAGES),
+        help="Transcript languages to collect (Thai-only by default)",
+    )
     parser.add_argument("--target-per-leaf", type=int, default=50)
     parser.add_argument(
         "--min-thai-per-leaf",
         type=int,
         default=None,
         help=(
-            "Minimum Thai transcripts reserved per leaf; defaults to 40%% of "
-            "--target-per-leaf when Thai is selected"
+            "Minimum Thai transcripts per leaf; defaults to the full target in "
+            "Thai-only mode, or 40%% when multiple languages are selected"
         ),
     )
     parser.add_argument(
@@ -82,8 +96,54 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-pages-per-query",
         type=int,
-        default=None,
-        help="Page budget per query for this execution (new runs default to 2)",
+        default=1,
+        help="Page budget per query for this execution (safe default: 1)",
+    )
+    parser.add_argument(
+        "--transcript-delay-seconds",
+        type=float,
+        default=DEFAULT_TRANSCRIPT_DELAY_SECONDS,
+        help=(
+            "Base delay before each public transcript attempt "
+            f"(default: {DEFAULT_TRANSCRIPT_DELAY_SECONDS:g})"
+        ),
+    )
+    parser.add_argument(
+        "--transcript-jitter-seconds",
+        type=float,
+        default=DEFAULT_TRANSCRIPT_JITTER_SECONDS,
+        help=(
+            "Random extra delay before each transcript attempt "
+            f"(default: up to {DEFAULT_TRANSCRIPT_JITTER_SECONDS:g})"
+        ),
+    )
+    parser.add_argument(
+        "--max-transcript-attempts",
+        type=int,
+        default=DEFAULT_MAX_TRANSCRIPT_ATTEMPTS_PER_EXECUTION,
+        help=(
+            "Checkpoint and pause after this many transcript attempts in one "
+            "execution "
+            f"(default: {DEFAULT_MAX_TRANSCRIPT_ATTEMPTS_PER_EXECUTION})"
+        ),
+    )
+    parser.add_argument(
+        "--resume-cooldown-minutes",
+        type=float,
+        default=DEFAULT_RESUME_COOLDOWN_MINUTES,
+        help=(
+            "Minimum wait between pacing-paused executions "
+            f"(default: {DEFAULT_RESUME_COOLDOWN_MINUTES:g} minutes)"
+        ),
+    )
+    parser.add_argument(
+        "--blocked-resume-cooldown-hours",
+        type=float,
+        default=DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS,
+        help=(
+            "Minimum wait after an explicit transcript-provider block "
+            f"(default: {DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS:g} hours)"
+        ),
     )
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument(
@@ -136,6 +196,7 @@ def main() -> int:
     Base.metadata.create_all(bind=engine)
     migrate_phase13_taxonomy_schema(engine)
     migrate_youtube_cc_dataset_schema(engine)
+    migrate_view_metric_schema(engine)
     db = SessionLocal()
     try:
         sync_taxonomy_registry(db)
@@ -148,6 +209,15 @@ def main() -> int:
                 max_pages_per_query=args.max_pages_per_query,
                 timeout_seconds=args.timeout,
                 progress_callback=_print_progress,
+                transcript_delay_seconds=args.transcript_delay_seconds,
+                transcript_jitter_seconds=args.transcript_jitter_seconds,
+                max_transcript_attempts_per_execution=(
+                    args.max_transcript_attempts
+                ),
+                resume_cooldown_minutes=args.resume_cooldown_minutes,
+                blocked_resume_cooldown_hours=(
+                    args.blocked_resume_cooldown_hours
+                ),
             )
         else:
             result = collect_youtube_cc_candidates(
@@ -166,11 +236,28 @@ def main() -> int:
                     args.max_videos_per_channel_per_leaf
                 ),
                 region_code=args.region,
-                max_pages_per_query=args.max_pages_per_query or 2,
+                max_pages_per_query=args.max_pages_per_query,
                 timeout_seconds=args.timeout,
                 progress_callback=_print_progress,
+                transcript_delay_seconds=args.transcript_delay_seconds,
+                transcript_jitter_seconds=args.transcript_jitter_seconds,
+                max_transcript_attempts_per_execution=(
+                    args.max_transcript_attempts
+                ),
+                resume_cooldown_minutes=args.resume_cooldown_minutes,
+                blocked_resume_cooldown_hours=(
+                    args.blocked_resume_cooldown_hours
+                ),
             )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("status") == "pacing_paused":
+            next_resume_at = (result.get("pacing") or {}).get("next_resume_at")
+            print(
+                "\nPacing pause: wait at least "
+                f"{args.resume_cooldown_minutes:g} minutes before resuming this run."
+            )
+            if next_resume_at:
+                print(f"Next guarded resume (UTC): {next_resume_at}")
         result_review_path = (
             result.get("human_review_template") or {}
         ).get("path", review_path)
@@ -184,6 +271,16 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except YouTubeCollectionResumeCooldownError as exc:
+        retry_local = exc.retry_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+        remaining_minutes = max(1, round(exc.remaining_seconds / 60))
+        print(
+            "COOLDOWN_ACTIVE: no provider request was sent. "
+            f"Wait about {remaining_minutes} more minute(s); "
+            f"next guarded resume is {retry_local} local time.\n{exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(4)
     except YouTubeQuotaExceededError as exc:
         print(
             "QUOTA_WAITING: YouTube search quota is exhausted. "

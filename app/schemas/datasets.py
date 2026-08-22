@@ -53,6 +53,7 @@ class DatasetContentItem(BaseModel):
     reviewed_at: Optional[datetime] = None
     review_notes: Optional[str] = None
     statistics_captured_at: Optional[datetime] = None
+    view_metric_version: str
     license_verified_at: Optional[datetime] = None
     is_training_eligible: bool
     is_active: bool

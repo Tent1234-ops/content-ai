@@ -5,6 +5,16 @@ from typing import Dict
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
+from app.services.view_metrics import (
+    GOOGLE_INTEREST_V1,
+    PROVIDER_NATIVE_V1,
+    TIKTOK_PUBLIC_VIEW_V1,
+    UNKNOWN_VIEW_METRIC,
+    YOUTUBE_PLAY_START_VIEW_V2,
+    YOUTUBE_QUALIFIED_VIEW_V1,
+    YOUTUBE_VIEW_METRIC_CHANGE_AT,
+)
+
 
 PHASE13_DATASET_COLUMNS = {
     "dataset_source": "VARCHAR(100) NOT NULL DEFAULT 'legacy'",
@@ -61,6 +71,11 @@ YOUTUBE_CC_DATASET_COLUMNS = {
     "transcript_end_seconds": "FLOAT NULL",
     "transcript_window_seconds": "INT NULL",
     "transcript_source": "VARCHAR(50) NULL",
+    "transcript_acquisition_method": (
+        "VARCHAR(64) NOT NULL DEFAULT 'youtube_transcript_api'"
+    ),
+    "transcript_scope": "VARCHAR(32) NOT NULL DEFAULT 'first_window'",
+    "transcript_timestamps_available": "BOOLEAN NOT NULL DEFAULT TRUE",
     "caption_type": "VARCHAR(50) NULL",
     "transcript_quality": "VARCHAR(30) NULL",
     "reviewed_by": "VARCHAR(255) NULL",
@@ -83,6 +98,19 @@ YOUTUBE_CC_COLLECTION_RUN_COLUMNS = {
     "duplicates_skipped": "INT NOT NULL DEFAULT 0",
     "resume_count": "INT NOT NULL DEFAULT 0",
     "last_resumed_at": "DATETIME NULL",
+}
+
+VIEW_METRIC_COLUMNS = {
+    "dataset_contents": {
+        "view_metric_version": (
+            f"VARCHAR(64) NOT NULL DEFAULT '{UNKNOWN_VIEW_METRIC}'"
+        ),
+    },
+    "trend_snapshot_items": {
+        "view_metric_version": (
+            f"VARCHAR(64) NOT NULL DEFAULT '{UNKNOWN_VIEW_METRIC}'"
+        ),
+    },
 }
 
 
@@ -372,6 +400,15 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
         connection.execute(
             text(
                 "UPDATE dataset_contents SET "
+                "transcript_acquisition_method = "
+                "COALESCE(transcript_acquisition_method, 'youtube_transcript_api'), "
+                "transcript_scope = COALESCE(transcript_scope, 'first_window') "
+                "WHERE dataset_source = 'youtube_cc'"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE dataset_contents SET "
                 "is_duration_recommendation_eligible = CASE "
                 "WHEN dataset_source = 'youtube_cc' "
                 "AND is_training_eligible = TRUE "
@@ -414,4 +451,138 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
         "added_indexes": added_indexes,
         "added_constraints": added_constraints,
         "legacy_rows_deactivated": legacy_rows_deactivated,
+    }
+
+
+def migrate_view_metric_schema(engine: Engine) -> Dict[str, object]:
+    """Version public view counts and backfill existing metric snapshots."""
+    added_columns: list[str] = []
+    added_indexes: list[str] = []
+    backfilled_rows: dict[str, int] = {}
+    cutoff = YOUTUBE_VIEW_METRIC_CHANGE_AT.replace(tzinfo=None).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        for table_name, definitions in VIEW_METRIC_COLUMNS.items():
+            if table_name not in tables:
+                continue
+            existing = {
+                column["name"] for column in inspector.get_columns(table_name)
+            }
+            for column_name, sql_type in definitions.items():
+                if column_name in existing:
+                    continue
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} "
+                        f"ADD COLUMN {column_name} {sql_type}"
+                    )
+                )
+                added_columns.append(f"{table_name}.{column_name}")
+
+        inspector = inspect(connection)
+
+        def ensure_index(
+            table_name: str,
+            index_name: str,
+            columns: tuple[str, ...],
+        ) -> None:
+            if table_name not in tables:
+                return
+            names = {
+                str(item.get("name"))
+                for item in inspector.get_indexes(table_name)
+            }
+            if index_name in names:
+                return
+            connection.execute(
+                text(
+                    f"CREATE INDEX {index_name} ON {table_name} "
+                    f"({', '.join(columns)})"
+                )
+            )
+            added_indexes.append(index_name)
+
+        ensure_index(
+            "dataset_contents",
+            "ix_dataset_view_metric_leaf",
+            ("view_metric_version", "taxonomy_leaf_key"),
+        )
+        ensure_index(
+            "trend_snapshot_items",
+            "ix_trend_snapshot_platform_metric",
+            ("platform", "view_metric_version"),
+        )
+
+        if "dataset_contents" in tables:
+            result = connection.execute(
+                text(
+                    "UPDATE dataset_contents SET view_metric_version = CASE "
+                    "WHEN LOWER(COALESCE(source_platform, '')) LIKE 'youtube%' "
+                    "AND COALESCE(statistics_captured_at, created_at) < :cutoff "
+                    "THEN :youtube_v1 "
+                    "WHEN LOWER(COALESCE(source_platform, '')) LIKE 'youtube%' "
+                    "THEN :youtube_v2 "
+                    "WHEN LOWER(COALESCE(source_platform, '')) LIKE 'google%' "
+                    "THEN :google_v1 "
+                    "WHEN LOWER(COALESCE(source_platform, '')) LIKE 'tiktok%' "
+                    "THEN :tiktok_v1 ELSE :provider_v1 END "
+                    "WHERE view_metric_version IS NULL "
+                    "OR view_metric_version = '' "
+                    "OR view_metric_version = :unknown"
+                ),
+                {
+                    "cutoff": cutoff,
+                    "youtube_v1": YOUTUBE_QUALIFIED_VIEW_V1,
+                    "youtube_v2": YOUTUBE_PLAY_START_VIEW_V2,
+                    "google_v1": GOOGLE_INTEREST_V1,
+                    "tiktok_v1": TIKTOK_PUBLIC_VIEW_V1,
+                    "provider_v1": PROVIDER_NATIVE_V1,
+                    "unknown": UNKNOWN_VIEW_METRIC,
+                },
+            )
+            backfilled_rows["dataset_contents"] = max(
+                int(result.rowcount or 0),
+                0,
+            )
+
+        if "trend_snapshot_items" in tables:
+            result = connection.execute(
+                text(
+                    "UPDATE trend_snapshot_items SET view_metric_version = CASE "
+                    "WHEN LOWER(COALESCE(platform, '')) LIKE 'youtube%' "
+                    "AND created_at < :cutoff THEN :youtube_v1 "
+                    "WHEN LOWER(COALESCE(platform, '')) LIKE 'youtube%' "
+                    "THEN :youtube_v2 "
+                    "WHEN LOWER(COALESCE(platform, '')) LIKE 'google%' "
+                    "THEN :google_v1 "
+                    "WHEN LOWER(COALESCE(platform, '')) LIKE 'tiktok%' "
+                    "THEN :tiktok_v1 ELSE :provider_v1 END "
+                    "WHERE view_metric_version IS NULL "
+                    "OR view_metric_version = '' "
+                    "OR view_metric_version = :unknown"
+                ),
+                {
+                    "cutoff": cutoff,
+                    "youtube_v1": YOUTUBE_QUALIFIED_VIEW_V1,
+                    "youtube_v2": YOUTUBE_PLAY_START_VIEW_V2,
+                    "google_v1": GOOGLE_INTEREST_V1,
+                    "tiktok_v1": TIKTOK_PUBLIC_VIEW_V1,
+                    "provider_v1": PROVIDER_NATIVE_V1,
+                    "unknown": UNKNOWN_VIEW_METRIC,
+                },
+            )
+            backfilled_rows["trend_snapshot_items"] = max(
+                int(result.rowcount or 0),
+                0,
+            )
+
+    return {
+        "cutoff_utc": YOUTUBE_VIEW_METRIC_CHANGE_AT.isoformat(),
+        "added_columns": added_columns,
+        "added_indexes": added_indexes,
+        "backfilled_rows": backfilled_rows,
     }

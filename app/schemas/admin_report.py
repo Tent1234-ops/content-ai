@@ -51,6 +51,7 @@ class AdminDatasetItem(BaseModel):
     reviewed_at: Optional[datetime] = None
     review_notes: Optional[str] = None
     statistics_captured_at: Optional[datetime] = None
+    view_metric_version: str
     license_verified_at: Optional[datetime] = None
     is_training_eligible: bool
     is_active: bool
@@ -99,6 +100,8 @@ class AdminDatasetCreate(BaseModel):
     transcript_start_seconds: Optional[float] = Field(default=None, ge=0)
     transcript_end_seconds: Optional[float] = Field(default=None, ge=0, le=300)
     transcript_window_seconds: Optional[int] = Field(default=None, ge=1, le=300)
+    statistics_captured_at: Optional[datetime] = None
+    view_metric_version: Optional[str] = Field(default=None, max_length=64)
     is_training_eligible: bool = False
     is_active: bool = True
     views: int = Field(default=0, ge=0)
@@ -145,6 +148,8 @@ class AdminDatasetUpdate(BaseModel):
     transcript_start_seconds: Optional[float] = Field(default=None, ge=0)
     transcript_end_seconds: Optional[float] = Field(default=None, ge=0, le=300)
     transcript_window_seconds: Optional[int] = Field(default=None, ge=1, le=300)
+    statistics_captured_at: Optional[datetime] = None
+    view_metric_version: Optional[str] = Field(default=None, max_length=64)
     is_training_eligible: Optional[bool] = None
     is_active: Optional[bool] = None
     views: Optional[int] = Field(default=None, ge=0)

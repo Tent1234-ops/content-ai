@@ -8,15 +8,66 @@ from app.schemas.dataset_review import (
     DatasetReviewDecisionRequest,
     DatasetReviewDecisionResponse,
     DatasetReviewQueueResponse,
+    NotebookLMTranscriptCandidateRequest,
+    NotebookLMTranscriptCandidateResponse,
 )
+from app.core.config import settings
 from app.services.youtube_cc_dataset import (
     YouTubeCCDatasetError,
+    YouTubeQuotaExceededError,
+    create_notebooklm_transcript_candidate,
     list_youtube_cc_review_queue,
     review_youtube_cc_candidate,
 )
 
 
 router = APIRouter(prefix="/admin/dataset-review", tags=["admin-dataset-review"])
+
+
+@router.post(
+    "/notebooklm/candidates",
+    response_model=NotebookLMTranscriptCandidateResponse,
+)
+def create_notebooklm_candidate(
+    payload: NotebookLMTranscriptCandidateRequest,
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = create_notebooklm_transcript_candidate(
+            db,
+            api_key=settings.youtube_api_key,
+            video_url=payload.video_url,
+            transcript=payload.transcript,
+            proposed_leaf_key=payload.proposed_leaf_key,
+            transcript_language=payload.transcript_language,
+            caption_type=payload.caption_type,
+            collection_strategy=payload.collection_strategy,
+            collection_run_id=payload.collection_run_id,
+            dataset_version=payload.dataset_version,
+            region_code=settings.youtube_region,
+        )
+    except YouTubeQuotaExceededError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except YouTubeCCDatasetError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    db.add(
+        SystemLog(
+            user_id=current_user.user_id,
+            action="notebooklm_candidate_created",
+            status="success",
+            detail=(
+                f"YouTube CC candidate {result['candidate']['source_youtube_id']}; "
+                f"run={result['collection_run_id']}; "
+                f"leaf={payload.proposed_leaf_key}"
+            ),
+        )
+    )
+    db.commit()
+    return result
 
 
 @router.get("/queue", response_model=DatasetReviewQueueResponse)

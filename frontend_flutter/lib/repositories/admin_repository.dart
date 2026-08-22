@@ -97,6 +97,33 @@ class AdminRepository {
     );
   }
 
+  Future<NotebookLMImportResult> createNotebookLMCandidate({
+    required String videoUrl,
+    required String transcript,
+    required String proposedLeafKey,
+    required String transcriptLanguage,
+    required String captionType,
+    required String collectionStrategy,
+    int? collectionRunId,
+  }) async {
+    final response = await _client.post(
+      '/admin/dataset-review/notebooklm/candidates',
+      {
+        'video_url': videoUrl.trim(),
+        'transcript': transcript.trim(),
+        'proposed_leaf_key': proposedLeafKey,
+        'transcript_language': transcriptLanguage,
+        'caption_type': captionType,
+        'collection_strategy': collectionStrategy,
+        'collection_run_id': collectionRunId,
+        'dataset_version': 'youtube-cc-th-v1',
+      },
+    );
+    return NotebookLMImportResult.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
+
   Future<PaginatedResult<ClusterRunSummary>> listClusterRuns({
     required int limit,
     required int offset,

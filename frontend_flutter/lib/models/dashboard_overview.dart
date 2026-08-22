@@ -87,6 +87,8 @@ class DashboardTrendItem {
     required this.comments,
     required this.publishedAt,
     required this.engagementSignal,
+    required this.viewMetricVersion,
+    required this.metricVersionChanged,
     required this.engagementChangePercent,
     required this.engagementDelta,
     required this.engagementRatePerMinute,
@@ -112,6 +114,8 @@ class DashboardTrendItem {
   final int comments;
   final String publishedAt;
   final num engagementSignal;
+  final String viewMetricVersion;
+  final bool metricVersionChanged;
   final num engagementChangePercent;
   final num engagementDelta;
   final num engagementRatePerMinute;
@@ -142,6 +146,8 @@ class DashboardTrendItem {
       engagementSignal: (json['engagement_signal'] as num?) ??
           (json['trend_score'] as num?) ??
           0,
+      viewMetricVersion: json['view_metric_version']?.toString() ?? '',
+      metricVersionChanged: json['metric_version_changed'] == true,
       engagementChangePercent: json['engagement_change_percent'] as num? ?? 0,
       engagementDelta: json['engagement_delta'] as num? ?? 0,
       engagementRatePerMinute: json['engagement_rate_per_minute'] as num? ?? 0,

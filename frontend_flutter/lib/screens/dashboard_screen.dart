@@ -1624,6 +1624,8 @@ String _momentumTooltip(DashboardTrendItem item) {
   final seconds = item.comparisonWindowSeconds;
   final window = seconds > 0 ? ' Comparison window: ${seconds}s.' : '';
   switch (item.changeKind) {
+    case 'metric_baseline':
+      return 'YouTube changed the public view-count definition. This snapshot starts a new baseline and is not compared with the previous metric version.';
     case 'velocity_up':
     case 'velocity_down':
       return 'Audience activity compared over a stable window using views, likes, and comments. '

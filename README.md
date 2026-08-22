@@ -43,6 +43,18 @@ Duration เฉพาะเมื่อ source video ยาวไม่เกิ
 
 คลิปที่ไม่อยู่ในขอบเขตหรือมีหลักฐานไม่พอจะได้ผลลัพธ์ `Unknown/Other`
 
+## Public View-Count Migration
+
+For an existing database, apply the public view-count version migration:
+
+```powershell
+python -B scripts/migrate_view_metrics.py
+```
+
+This records which YouTube public `viewCount` definition produced each sample
+and prevents Dashboard and Recommendation comparisons across the 24 August
+2026 definition change.
+
 ## Backend Setup
 
 ```powershell
@@ -71,8 +83,12 @@ ASR_MODEL_DIR=models_cache/faster_whisper
 ASR_LOCAL_FILES_ONLY=1
 ASR_REQUIRE_MODEL_READY=1
 ASR_LANGUAGE=auto
-ANALYZE_MAX_AUDIO_SECONDS=300
 ```
+
+User uploads are limited to 300 seconds. Flutter reads video metadata before
+upload and the backend verifies it again with `ffprobe`. Accepted videos are
+transcribed in full. The configured hook duration only selects timestamped ASR
+segments for hook-keyword analysis; it does not truncate the main transcript.
 
 เตรียมโมเดลและ schema:
 
@@ -120,7 +136,7 @@ Creative Commons metadata จากนั้นใช้ `youtube-transcript-api
 python -B scripts/collect_youtube_cc_candidates.py `
   --leaves phone `
   --target-per-leaf 5 `
-  --languages th,en `
+  --languages th `
   --region TH
 ```
 
@@ -131,9 +147,9 @@ python -B scripts/collect_youtube_cc_candidates.py `
   --leaves phone,camera,laptop `
   --target-per-leaf 50 `
   --performance-per-leaf 15 `
-  --min-thai-per-leaf 20 `
+  --min-thai-per-leaf 50 `
   --max-videos-per-channel-per-leaf 3 `
-  --languages th,en `
+  --languages th `
   --region TH `
   --max-pages-per-query 1
 ```
@@ -143,12 +159,21 @@ discovered with `order=viewCount` and 35 `classification_diverse` candidates
 discovered with `order=relevance`. Existing YouTube IDs and transcript hashes in
 both `dataset_contents` and earlier collection artifacts are skipped. Source videos
 may be longer than 5 minutes; the collector keeps their full duration metadata and
-uses the first 300 transcript seconds as the model input.
+uses the first 300 transcript seconds for legacy collector candidates. The
+NotebookLM import path below accepts the complete source transcript with no
+training-duration limit. Only user uploads and duration-recommendation evidence
+remain limited to 300 seconds.
 
-ค่าเริ่มต้นสำรองอย่างน้อย 40% ของ candidate ในแต่ละ leaf ให้ transcript ภาษาไทย
-(`20/50`) และรับไม่เกิน 3 คลิปจาก Channel ID เดียวกันต่อ leaf กติกานี้นับร่วมกับ
-candidate artifacts และ production dataset เดิม การข้ามเพราะ language reservation หรือ
-channel cap ถูกบันทึกเป็น `quality_filters` ไม่ถูกนับเป็น collection error
+The production application is Thai-first. New collection runs default to
+`--languages th`; only human-reviewed Thai transcripts count toward taxonomy
+readiness, model training, and recommendation evidence. Existing English rows
+remain in storage for provenance but are excluded from the production dataset
+query.
+
+เมื่อใช้โหมดภาษาไทย เป้าหมาย 50 candidate ต่อ leaf หมายถึง transcript ภาษาไทย 50 รายการ
+และรับไม่เกิน 3 คลิปจาก Channel ID เดียวกันต่อ leaf กติกานี้นับร่วมกับ candidate artifacts
+และ production dataset เดิม การข้ามเพราะภาษาไม่ตรงหรือเกิน channel cap จะถูกบันทึกเป็น
+`quality_filters` โดยไม่ถูกนับเป็น collection error
 
 If a schema-version-4 run ends as `partial` or `quota_waiting`, continue it from
 the saved page tokens:
@@ -159,6 +184,31 @@ python -B scripts/collect_youtube_cc_candidates.py `
   --max-pages-per-query 1
 ```
 
+The CLI uses a conservative 30-minute pacing profile by default: at most three
+public-transcript attempts per execution, a 60-90 second delay between attempts,
+and an enforced 30-minute cooldown before the same paused run can resume. An
+early resume exits without contacting the provider. An explicit provider block
+uses a separate 24-hour guard. These controls reduce rate-limit risk but cannot
+guarantee availability of the unofficial public-transcript endpoint.
+
+For Run 7, the guarded command is:
+
+```powershell
+python -B scripts/collect_youtube_cc_candidates.py `
+  --resume-run-id 7 `
+  --max-pages-per-query 1
+```
+
+To narrow an unfinished, unreviewed legacy run from `th,en` to Thai-only before
+resuming it:
+
+```powershell
+python -B scripts/retarget_youtube_cc_run.py --run-id YOUR_RUN_ID --languages th
+```
+
+Non-Thai candidates are moved to a hashed `excluded-for-th.jsonl` audit artifact;
+they are not silently deleted.
+
 A run with any human review event cannot be resumed because its candidate
 artifact is immutable. Start a new run instead; cross-run deduplication keeps
 previous approved, rejected, and pending candidates out of the new artifact.
@@ -166,6 +216,23 @@ Runs created under the old five-minute source filter, including local run 2, als
 must not be resumed because pages already scanned by that run omitted long videos.
 Start a new run after API quota is available; the 35 preserved candidates from run 2
 will be skipped automatically.
+
+### NotebookLM Full-Transcript Import
+
+Use `/#/admin-transcript-import` when the unofficial transcript provider is
+rate-limited. Paste a public YouTube Creative Commons URL and the complete source
+transcript displayed by NotebookLM. Do not paste an AI summary or rewritten answer.
+
+The backend verifies current YouTube metadata, public status, captions, Creative
+Commons license, duration, channel diversity, YouTube-ID duplication, and transcript
+hash duplication before creating a candidate. The candidate still requires an Admin
+Approve/Reject decision in `/#/admin-dataset-review`; it never enters
+`dataset_contents` directly.
+
+Several items can be added to the same NotebookLM batch until its first review
+decision. After review starts, use the new-batch button before importing more items.
+Full transcripts from videos longer than five minutes are eligible for classification
+and keyword training, but are excluded from recommended-duration calculations.
 
 ระหว่างรัน CLI จะแสดง progress แยก leaf, Thai transcript และจำนวนช่องหลังทุก checkpoint
 หน้า Admin `Dataset Review` แสดงข้อมูลชุดเดียวกัน เมื่อ YouTube ตอบ HTTP 429 ระบบใช้สถานะ

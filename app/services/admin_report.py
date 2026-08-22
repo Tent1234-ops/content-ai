@@ -5,6 +5,7 @@ from app.database.models import Cluster, ClusterMembership, ClusterRun, DatasetC
 from app.schemas.admin_report import AdminDatasetCreate, AdminDatasetUpdate
 from app.services.dataset_eligibility import validate_training_eligibility_values
 from app.services.persistence import log_system_event
+from app.services.view_metrics import resolve_view_metric_version
 
 
 def list_admin_datasets(
@@ -43,6 +44,11 @@ def create_admin_dataset(
     user_id: int | None = None,
 ) -> DatasetContent:
     values = payload.model_dump()
+    values["view_metric_version"] = resolve_view_metric_version(
+        values.get("source_platform"),
+        values.get("statistics_captured_at"),
+        values.get("view_metric_version"),
+    )
     validate_training_eligibility_values(values)
     item = DatasetContent(**values)
     db.add(item)
@@ -72,6 +78,24 @@ def update_admin_dataset(
     update_data = payload.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(item, key, value)
+    explicit_metric_version = update_data.get("view_metric_version")
+    metric_inputs_changed = any(
+        key in update_data
+        for key in (
+            "source_platform",
+            "statistics_captured_at",
+            "views",
+        )
+    )
+    item.view_metric_version = resolve_view_metric_version(
+        item.source_platform,
+        item.statistics_captured_at or item.created_at,
+        (
+            explicit_metric_version
+            if explicit_metric_version is not None
+            else None if metric_inputs_changed else item.view_metric_version
+        ),
+    )
     try:
         validate_training_eligibility_values(item)
     except ValueError:
