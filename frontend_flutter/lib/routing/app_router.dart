@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../screens/admin_cluster_runs_screen.dart';
 import '../screens/auth_gate.dart';
 import '../screens/admin_console_screen.dart';
 import '../screens/admin_dataset_review_screen.dart';
@@ -25,7 +24,6 @@ class AppRouter {
     '/admin-console',
     '/admin-dataset-review',
     '/admin-datasets',
-    '/admin-clusters',
     '/admin-logs',
     '/admin-transcript-import',
   };
@@ -64,8 +62,6 @@ class AppRouter {
         return _page(const AdminDatasetReviewScreen(), settings);
       case '/admin-datasets':
         return _page(const AdminDatasetsScreen(), settings);
-      case '/admin-clusters':
-        return _page(const AdminClusterRunsScreen(), settings);
       case '/admin-logs':
         return _page(const AdminLogsScreen(), settings);
       case '/admin-transcript-import':

@@ -295,7 +295,7 @@ def migrate_phase13_taxonomy_schema(engine: Engine) -> Dict[str, object]:
 
 
 def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
-    """Add YouTube CC provenance fields and disable non-production evidence."""
+    """Add YouTube provenance fields and disable non-production evidence."""
     added_columns: list[str] = []
     added_indexes: list[str] = []
     added_constraints: list[str] = []
@@ -392,7 +392,7 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
             text(
                 "UPDATE dataset_contents SET "
                 "is_keyword_recommendation_eligible = CASE "
-                "WHEN dataset_source = 'youtube_cc' "
+                "WHEN dataset_source IN ('youtube_cc', 'youtube_public_research') "
                 "AND is_training_eligible = TRUE "
                 "AND is_active = TRUE THEN TRUE ELSE FALSE END"
             )
@@ -403,14 +403,14 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
                 "transcript_acquisition_method = "
                 "COALESCE(transcript_acquisition_method, 'youtube_transcript_api'), "
                 "transcript_scope = COALESCE(transcript_scope, 'first_window') "
-                "WHERE dataset_source = 'youtube_cc'"
+                "WHERE dataset_source IN ('youtube_cc', 'youtube_public_research')"
             )
         )
         connection.execute(
             text(
                 "UPDATE dataset_contents SET "
                 "is_duration_recommendation_eligible = CASE "
-                "WHEN dataset_source = 'youtube_cc' "
+                "WHEN dataset_source IN ('youtube_cc', 'youtube_public_research') "
                 "AND is_training_eligible = TRUE "
                 "AND is_active = TRUE "
                 "AND duration_seconds > 0 "

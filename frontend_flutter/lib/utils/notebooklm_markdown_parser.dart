@@ -29,6 +29,11 @@ class NotebookLmMarkdownParser {
     r'^\s*[-*]\s+([^:]+):\s*(.*?)\s*$',
     caseSensitive: false,
   );
+  static final RegExp _standaloneBoldMetadata = RegExp(
+    r'^\s*\*\*([^*]+?):\*\*\s*(.*?)\s*$',
+    caseSensitive: false,
+  );
+  static final RegExp _documentTitle = RegExp(r'^#\s+(.+?)\s*$');
 
   static NotebookLmMarkdownDocument parse(String markdown) {
     final normalized = markdown
@@ -41,6 +46,21 @@ class NotebookLmMarkdownParser {
 
     final lines = normalized.split('\n');
     final metadata = _readMetadata(lines);
+    final sourceTitle = metadata['source video'] ??
+        metadata['video title'] ??
+        metadata['ชื่อวิดีโอ'] ??
+        _readDocumentTitle(lines);
+    final creatorChannel = metadata['creator channel'] ??
+        metadata['channel title'] ??
+        metadata['ช่อง'] ??
+        metadata['ชื่อช่อง'];
+    final sourceUrl = metadata['source url'] ??
+        metadata['video url'] ??
+        metadata['video link'] ??
+        metadata['youtube url'] ??
+        metadata['ลิงก์วิดีโอ'] ??
+        metadata['ลิงก์ยูทูบ'] ??
+        _urlFrom(metadata['source video']);
     var headingIndex = -1;
     var headingLevel = 0;
     for (var index = 0; index < lines.length; index++) {
@@ -50,24 +70,28 @@ class NotebookLmMarkdownParser {
       headingLevel = (match.group(1) ?? '').length;
       break;
     }
-    if (headingIndex < 0) {
-      throw const FormatException(
-        'Transcript section not found. Expected a heading such as '
-        '"## Cleaned Transcription Text".',
-      );
-    }
-
-    var endIndex = lines.length;
-    for (var index = headingIndex + 1; index < lines.length; index++) {
-      final match = _anyHeading.firstMatch(lines[index].trim());
-      final level = (match?.group(1) ?? '').length;
-      if (match != null && level <= headingLevel) {
-        endIndex = index;
-        break;
+    late final List<String> transcriptLines;
+    if (headingIndex >= 0) {
+      var endIndex = lines.length;
+      for (var index = headingIndex + 1; index < lines.length; index++) {
+        final match = _anyHeading.firstMatch(lines[index].trim());
+        final level = (match?.group(1) ?? '').length;
+        if (match != null && level <= headingLevel) {
+          endIndex = index;
+          break;
+        }
       }
+      transcriptLines = lines.sublist(headingIndex + 1, endIndex);
+    } else {
+      final compactStart = _compactTranscriptStart(lines);
+      if (compactStart < 0 || sourceUrl == null) {
+        throw const FormatException(
+          'Transcript section not found. Expected a transcript heading or '
+          'a compact document with title, source metadata, and transcript.',
+        );
+      }
+      transcriptLines = lines.sublist(compactStart);
     }
-
-    final transcriptLines = lines.sublist(headingIndex + 1, endIndex);
     _trimBlankAndRuleLines(transcriptLines);
     if (transcriptLines.isNotEmpty &&
         transcriptLines.first.trimLeft().startsWith('```')) {
@@ -93,26 +117,52 @@ class NotebookLmMarkdownParser {
 
     return NotebookLmMarkdownDocument(
       transcript: transcript,
-      sourceTitle: metadata['source video'] ?? metadata['video title'],
-      creatorChannel: metadata['creator channel'] ?? metadata['channel title'],
-      sourceUrl: metadata['source url'] ??
-          metadata['video url'] ??
-          metadata['youtube url'] ??
-          _urlFrom(metadata['source video']),
+      sourceTitle: sourceTitle,
+      creatorChannel: creatorChannel,
+      sourceUrl: sourceUrl,
     );
   }
 
   static Map<String, String> _readMetadata(List<String> lines) {
     final values = <String, String>{};
     for (final line in lines) {
-      final match =
-          _boldMetadata.firstMatch(line) ?? _plainMetadata.firstMatch(line);
+      final match = _metadataMatch(line);
       if (match == null) continue;
       final key = (match.group(1) ?? '').trim().toLowerCase();
       final value = (match.group(2) ?? '').trim();
       if (key.isNotEmpty && value.isNotEmpty) values[key] = value;
     }
     return values;
+  }
+
+  static RegExpMatch? _metadataMatch(String line) {
+    return _boldMetadata.firstMatch(line) ??
+        _plainMetadata.firstMatch(line) ??
+        _standaloneBoldMetadata.firstMatch(line);
+  }
+
+  static String? _readDocumentTitle(List<String> lines) {
+    for (final line in lines) {
+      final match = _documentTitle.firstMatch(line.trim());
+      final title = match?.group(1)?.trim();
+      if (title != null && title.isNotEmpty) return title;
+    }
+    return null;
+  }
+
+  static int _compactTranscriptStart(List<String> lines) {
+    var sawMetadata = false;
+    for (var index = 0; index < lines.length; index++) {
+      final line = lines[index];
+      if (_isBlankOrRule(line)) continue;
+      if (index == 0 && _documentTitle.hasMatch(line.trim())) continue;
+      if (_metadataMatch(line) != null) {
+        sawMetadata = true;
+        continue;
+      }
+      return sawMetadata ? index : -1;
+    }
+    return -1;
   }
 
   static String? _urlFrom(String? value) {

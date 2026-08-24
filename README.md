@@ -1,8 +1,8 @@
 # Content AI Analysis Recommendation System
 
 เว็บแอปสำหรับวิเคราะห์คลิปรีวิวความยาวไม่เกิน 5 นาที ถอดเสียงด้วย Faster Whisper
-จำแนกหมวดหมู่แบบหลายระดับ สกัดคำสำคัญ และเปรียบเทียบกับคลิป YouTube
-Creative Commons ในหมวดเดียวกันที่ผ่านการตรวจโดยมนุษย์ เพื่อแนะนำ keyword gap
+จำแนกหมวดหมู่แบบหลายระดับ สกัดคำสำคัญ และเปรียบเทียบกับ Transcript จากวิดีโอ
+YouTube สาธารณะในหมวดเดียวกันที่ผ่านการตรวจโดยมนุษย์ เพื่อแนะนำ keyword gap
 และความยาวคลิปที่เหมาะสม
 
 ## System Components
@@ -12,17 +12,17 @@ Creative Commons ในหมวดเดียวกันที่ผ่าน
 - Frontend: Flutter Web
 - Speech-to-Text: Faster Whisper multilingual `small`
 - Live dashboard: YouTube, Google Trends และ TikTok แบบ partial result
-- Recommendation dataset: YouTube Creative Commons + public transcript + human-reviewed label
+- Recommendation dataset: public YouTube metadata + source transcript + human-reviewed label
 
 ## Important Dataset Policy
 
 ระบบไม่มี demo seed สำหรับ Classification หรือ Recommendation อีกต่อไป ข้อมูลหนึ่งแถวจะถูกใช้จริงได้เมื่อผ่านเงื่อนไขทั้งหมด:
 
-- YouTube API ยืนยัน `status.license=creativeCommon`
+- YouTube API ยืนยันว่าวิดีโอเป็น Public และบันทึก License จริงของแต่ละคลิป
 - วิดีโอต้นทางมี duration ที่ตรวจสอบได้ โดยไม่จำกัดความยาวของ source video
-- มี transcript ภาษาไทยหรืออังกฤษจาก public caption
+- มี transcript ภาษาไทยหรืออังกฤษจาก public caption หรือ NotebookLM manual import
 - คนตรวจวิดีโอ, transcript และหมวดหมู่ แล้วระบุ `decision=approve`
-- มี reviewer, reviewed time, transcript quality และ license provenance ครบ
+- มี reviewer, reviewed time, transcript quality, source URL และ license provenance ครบ
 - อยู่ใน taxonomy `content-taxonomy-v1`
 - แบ่ง train/validation/test ตาม Channel ID เพื่อป้องกันข้อมูลช่องเดียวกันรั่วข้ามชุด
 
@@ -122,10 +122,10 @@ flutter pub get
 flutter run -d edge --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
-## Build YouTube CC Dataset
+## Build Public YouTube Research Dataset
 
-ขั้นตอนนี้ไม่ดาวน์โหลดไฟล์วิดีโอ Collector ใช้ YouTube Data API เพื่อค้นหาและยืนยัน
-Creative Commons metadata จากนั้นใช้ `youtube-transcript-api` เพื่ออ่าน public captions
+ขั้นตอนนี้ไม่ดาวน์โหลดไฟล์วิดีโอ Collector ใช้ YouTube Data API เพื่อค้นหา Public videos
+และบันทึก License จากนั้นใช้ `youtube-transcript-api` เพื่ออ่าน public captions
 ที่หน้า YouTube เปิดให้ดูได้
 
 ### 1. Collect Candidates
@@ -220,12 +220,13 @@ will be skipped automatically.
 ### NotebookLM Full-Transcript Import
 
 Use `/#/admin-transcript-import` when the unofficial transcript provider is
-rate-limited. Paste a public YouTube Creative Commons URL and the complete source
+rate-limited. Paste a public YouTube URL and the complete source
 transcript displayed by NotebookLM. Do not paste an AI summary or rewritten answer.
 
-The backend verifies current YouTube metadata, public status, captions, Creative
-Commons license, duration, channel diversity, YouTube-ID duplication, and transcript
-hash duplication before creating a candidate. The candidate still requires an Admin
+The backend verifies current YouTube metadata, public status, recorded license,
+duration, channel diversity, YouTube-ID duplication, and transcript hash duplication
+before creating a candidate. Public captions are required only for the automatic
+collector, not for a transcript supplied through NotebookLM. The candidate still requires an Admin
 Approve/Reject decision in `/#/admin-dataset-review`; it never enters
 `dataset_contents` directly.
 
@@ -240,9 +241,9 @@ and keyword training, but are excluded from recommended-duration calculations.
 
 ผลลัพธ์ถูกแยกเป็น:
 
-- `data/raw/youtube_cc/<version>/candidates-*.jsonl`: metadata และ transcript จริง
-- `data/reviews/youtube_cc/<version>/review-*.csv`: แบบฟอร์ม human review
-- `data/manifests/youtube-cc-*.json`: hash, config และผลการเก็บข้อมูล
+- `data/raw/youtube_public/<version>/candidates-*.jsonl`: metadata และ transcript จริง
+- `data/reviews/youtube_public/<version>/review-*.csv`: แบบฟอร์ม human review
+- `data/manifests/youtube-public-*.json`: hash, config และผลการเก็บข้อมูล
 - `dataset_collection_runs`: audit ของแต่ละรอบ
 
 ### 2. Human Review
@@ -273,8 +274,8 @@ and keyword training, but are excluded from recommended-duration calculations.
 
 ```powershell
 python -B scripts/import_youtube_cc_reviews.py `
-  --candidates "data\raw\youtube_cc\youtube-cc-th-v1\candidates-YYYYMMDD-HHMMSS.jsonl" `
-  --reviews "data\reviews\youtube_cc\youtube-cc-th-v1\review-YYYYMMDD-HHMMSS.csv"
+  --candidates "data\raw\youtube_public\youtube-public-research-th-v1\candidates-YYYYMMDD-HHMMSS.jsonl" `
+  --reviews "data\reviews\youtube_public\youtube-public-research-th-v1\review-YYYYMMDD-HHMMSS.csv"
 ```
 
 Importer ทำงานแบบ atomic หาก review ที่กรอกแล้วมีแม้แต่หนึ่งแถวไม่ถูกต้อง จะไม่บันทึก
@@ -291,7 +292,7 @@ python -B scripts/verify_submission_dataset.py --require-ready
 ดูรายหมวดผ่าน `GET /classification/taxonomy` ค่า `ready=true` หมายถึงหมวดนั้นมีอย่างน้อย
 30 ตัวอย่างจริงที่ผ่านกติกา production ไม่ได้หมายถึงโมเดลผ่านเกณฑ์ความแม่นยำ 80% แล้ว
 
-รายละเอียดเพิ่มเติมอยู่ใน [YouTube CC dataset guide](docs/youtube_cc_dataset.md)
+รายละเอียดเพิ่มเติมอยู่ใน [public YouTube dataset guide](docs/youtube_cc_dataset.md)
 
 ### 5. Train And Evaluate Classification Models
 

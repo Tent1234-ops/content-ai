@@ -9,6 +9,23 @@ import '../utils/notebooklm_markdown_parser.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
 
+enum _TranscriptInputMode { files, manual }
+
+enum _MarkdownImportStatus { ready, importing, imported, failed }
+
+class _MarkdownImportItem {
+  _MarkdownImportItem({
+    required this.fileName,
+    required this.document,
+  });
+
+  final String fileName;
+  final NotebookLmMarkdownDocument document;
+  _MarkdownImportStatus status = _MarkdownImportStatus.ready;
+  NotebookLMImportResult? result;
+  String? error;
+}
+
 class AdminTranscriptImportScreen extends StatefulWidget {
   const AdminTranscriptImportScreen({super.key, this.repository});
 
@@ -31,11 +48,11 @@ class _AdminTranscriptImportScreenState
   String _language = 'th';
   String _captionType = 'unspecified';
   String _strategy = 'classification_diverse';
+  _TranscriptInputMode _inputMode = _TranscriptInputMode.files;
   int? _batchRunId;
   NotebookLMImportResult? _lastResult;
   String? _error;
-  String? _transcriptFileName;
-  int? _transcriptFileCharacters;
+  final List<_MarkdownImportItem> _markdownFiles = [];
   bool _loadingTaxonomy = true;
   bool _submitting = false;
   bool _readingMarkdown = false;
@@ -75,7 +92,16 @@ class _AdminTranscriptImportScreenState
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate() || _leafKey == null) return;
+    if (_leafKey == null) return;
+    if (_inputMode == _TranscriptInputMode.files) {
+      await _submitMarkdownFiles();
+      return;
+    }
+    if (!_formKey.currentState!.validate()) return;
+    await _submitManualTranscript();
+  }
+
+  Future<void> _submitManualTranscript() async {
     setState(() {
       _submitting = true;
       _error = null;
@@ -96,8 +122,6 @@ class _AdminTranscriptImportScreenState
         _lastResult = result;
         _videoUrlController.clear();
         _transcriptController.clear();
-        _transcriptFileName = null;
-        _transcriptFileCharacters = null;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -110,6 +134,100 @@ class _AdminTranscriptImportScreenState
     }
   }
 
+  Future<void> _submitMarkdownFiles() async {
+    final importable = _markdownFiles
+        .where((item) => item.status != _MarkdownImportStatus.imported)
+        .toList();
+    if (importable.isEmpty) {
+      setState(() {
+        _error = _markdownFiles.isEmpty
+            ? 'Select one or more Markdown files first.'
+            : 'All selected files are already imported.';
+      });
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    var imported = 0;
+    var failed = 0;
+    for (final item in importable) {
+      if (!mounted) break;
+      setState(() {
+        item.status = _MarkdownImportStatus.importing;
+        item.error = null;
+      });
+      try {
+        final result = await _repository.createNotebookLMCandidate(
+          videoUrl: item.document.sourceUrl!,
+          transcript: item.document.transcript,
+          proposedLeafKey: _leafKey!,
+          transcriptLanguage: _language,
+          captionType: _captionType,
+          collectionStrategy: _strategy,
+          collectionRunId: _batchRunId,
+        );
+        if (!mounted) break;
+        setState(() {
+          _batchRunId = result.collectionRunId;
+          _lastResult = result;
+          item.result = result;
+          item.status = _MarkdownImportStatus.imported;
+        });
+        imported++;
+      } catch (error) {
+        if (!mounted) break;
+        setState(() {
+          item.status = _MarkdownImportStatus.failed;
+          item.error = error.toString();
+        });
+        failed++;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _submitting = false;
+      _error = failed == 0
+          ? null
+          : '$failed file${failed == 1 ? '' : 's'} failed. '
+              'Review each file and retry the failed items.';
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Imported $imported file${imported == 1 ? '' : 's'}'
+          '${failed == 0 ? '' : '; $failed failed'}',
+        ),
+      ),
+    );
+  }
+
+  String _sourceIdentity(String rawUrl) {
+    final normalizedUrl = rawUrl.trim();
+    final uri = Uri.tryParse(normalizedUrl);
+    if (uri != null) {
+      final host = uri.host.toLowerCase().replaceFirst('www.', '');
+      String? videoId;
+      if (host == 'youtu.be' && uri.pathSegments.isNotEmpty) {
+        videoId = uri.pathSegments.first;
+      } else if (host == 'youtube.com' || host == 'm.youtube.com') {
+        videoId = uri.queryParameters['v'];
+        if (videoId == null && uri.pathSegments.length >= 2) {
+          final route = uri.pathSegments.first.toLowerCase();
+          if (route == 'shorts' || route == 'embed') {
+            videoId = uri.pathSegments[1];
+          }
+        }
+      }
+      if (videoId != null && RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(videoId)) {
+        return 'youtube:${videoId.toLowerCase()}';
+      }
+    }
+    return normalizedUrl.toLowerCase();
+  }
+
   Future<void> _pickMarkdownTranscript() async {
     setState(() {
       _readingMarkdown = true;
@@ -119,37 +237,59 @@ class _AdminTranscriptImportScreenState
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: const ['md'],
-        allowMultiple: false,
+        allowMultiple: true,
         withData: true,
       );
       if (result == null) return;
 
-      final file = result.files.single;
-      final bytes = file.bytes;
-      if (bytes == null) {
-        throw const FormatException('The selected file could not be read.');
+      final existingUrls = _markdownFiles
+          .map((item) => _sourceIdentity(item.document.sourceUrl!))
+          .toSet();
+      final parsedFiles = <_MarkdownImportItem>[];
+      final errors = <String>[];
+      for (final file in result.files) {
+        try {
+          final bytes = file.bytes;
+          if (bytes == null) {
+            throw const FormatException('The file could not be read.');
+          }
+          if (bytes.length > 4 * 1024 * 1024) {
+            throw const FormatException('The file must be 4 MB or smaller.');
+          }
+          final markdown = utf8.decode(bytes, allowMalformed: false);
+          final document = NotebookLmMarkdownParser.parse(markdown);
+          final sourceUrl = document.sourceUrl?.trim();
+          if (sourceUrl == null || sourceUrl.isEmpty) {
+            throw const FormatException(
+              'A source YouTube URL is required in the file metadata.',
+            );
+          }
+          final sourceIdentity = _sourceIdentity(sourceUrl);
+          if (!existingUrls.add(sourceIdentity)) {
+            throw const FormatException(
+              'Another selected file uses the same source URL.',
+            );
+          }
+          parsedFiles.add(
+            _MarkdownImportItem(fileName: file.name, document: document),
+          );
+        } on FormatException catch (error) {
+          errors.add('${file.name}: ${error.message}');
+        } catch (error) {
+          errors.add('${file.name}: $error');
+        }
       }
-      if (bytes.length > 4 * 1024 * 1024) {
-        throw const FormatException(
-            'The Markdown file must be 4 MB or smaller.');
-      }
-
-      final markdown = utf8.decode(bytes, allowMalformed: false);
-      final document = NotebookLmMarkdownParser.parse(markdown);
       if (!mounted) return;
       setState(() {
-        _transcriptController.text = document.transcript;
-        _transcriptFileName = file.name;
-        _transcriptFileCharacters = document.transcript.length;
-        if (_videoUrlController.text.trim().isEmpty &&
-            document.sourceUrl != null) {
-          _videoUrlController.text = document.sourceUrl!;
-        }
+        _inputMode = _TranscriptInputMode.files;
+        _markdownFiles.addAll(parsedFiles);
+        _error = errors.isEmpty ? null : errors.join('\n');
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Loaded ${document.transcript.length} transcript characters',
+            'Loaded ${parsedFiles.length} file${parsedFiles.length == 1 ? '' : 's'}'
+            '${errors.isEmpty ? '' : '; ${errors.length} skipped'}',
           ),
         ),
       );
@@ -164,24 +304,56 @@ class _AdminTranscriptImportScreenState
     }
   }
 
-  void _clearMarkdownTranscript() {
+  void _removeMarkdownFile(_MarkdownImportItem item) {
     setState(() {
-      _transcriptController.clear();
-      _transcriptFileName = null;
-      _transcriptFileCharacters = null;
+      _markdownFiles.remove(item);
+      _error = null;
     });
   }
 
-  void _startNewBatch() {
+  Future<void> _startNewBatch() async {
+    final hasUnsavedInput = _markdownFiles.any(
+          (item) => item.status != _MarkdownImportStatus.imported,
+        ) ||
+        _videoUrlController.text.trim().isNotEmpty ||
+        _transcriptController.text.trim().isNotEmpty;
+    if (hasUnsavedInput) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Start a new import batch?'),
+          content: const Text(
+            'Unsubmitted files and pasted transcript text will be cleared.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Start separate batch'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
     setState(() {
       _batchRunId = null;
       _lastResult = null;
       _error = null;
+      _markdownFiles.clear();
+      _videoUrlController.clear();
+      _transcriptController.clear();
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final importableFileCount = _markdownFiles
+        .where((item) => item.status != _MarkdownImportStatus.imported)
+        .length;
     return AppShell(
       title: 'Transcript Import',
       currentRoute: '/admin-transcript-import',
@@ -190,7 +362,7 @@ class _AdminTranscriptImportScreenState
         IconButton(
           onPressed: _submitting ? null : _startNewBatch,
           icon: const Icon(Icons.create_new_folder_outlined),
-          tooltip: 'Start new batch',
+          tooltip: 'Start separate import batch',
         ),
         IconButton(
           onPressed: () => Navigator.pushNamed(
@@ -238,26 +410,50 @@ class _AdminTranscriptImportScreenState
                                 ),
                               ],
                               const SizedBox(height: 16),
-                              TextFormField(
-                                controller: _videoUrlController,
-                                decoration: const InputDecoration(
-                                  labelText: 'YouTube Creative Commons URL',
-                                  prefixIcon: Icon(Icons.link),
-                                ),
-                                keyboardType: TextInputType.url,
-                                validator: (value) {
-                                  final raw = value?.trim() ?? '';
-                                  if (raw.isEmpty) {
-                                    return 'YouTube URL is required';
-                                  }
-                                  final uri = Uri.tryParse(raw);
-                                  if (uri == null || !uri.hasScheme) {
-                                    return 'Enter a valid YouTube URL';
-                                  }
-                                  return null;
-                                },
+                              SegmentedButton<_TranscriptInputMode>(
+                                segments: const [
+                                  ButtonSegment(
+                                    value: _TranscriptInputMode.files,
+                                    icon: Icon(Icons.file_upload_outlined),
+                                    label: Text('Markdown files'),
+                                  ),
+                                  ButtonSegment(
+                                    value: _TranscriptInputMode.manual,
+                                    icon: Icon(Icons.edit_note_outlined),
+                                    label: Text('Manual paste'),
+                                  ),
+                                ],
+                                selected: {_inputMode},
+                                onSelectionChanged: _submitting
+                                    ? null
+                                    : (values) => setState(
+                                          () => _inputMode = values.first,
+                                        ),
                               ),
                               const SizedBox(height: 12),
+                              if (_inputMode ==
+                                  _TranscriptInputMode.manual) ...[
+                                TextFormField(
+                                  controller: _videoUrlController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'YouTube source URL',
+                                    prefixIcon: Icon(Icons.link),
+                                  ),
+                                  keyboardType: TextInputType.url,
+                                  validator: (value) {
+                                    final raw = value?.trim() ?? '';
+                                    if (raw.isEmpty) {
+                                      return 'YouTube URL is required';
+                                    }
+                                    final uri = Uri.tryParse(raw);
+                                    if (uri == null || !uri.hasScheme) {
+                                      return 'Enter a valid YouTube URL';
+                                    }
+                                    return null;
+                                  },
+                                ),
+                                const SizedBox(height: 12),
+                              ],
                               LayoutBuilder(
                                 builder: (context, constraints) {
                                   final width = constraints.maxWidth < 720
@@ -369,76 +565,39 @@ class _AdminTranscriptImportScreenState
                                     setState(() => _strategy = values.first),
                               ),
                               const SizedBox(height: 12),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  OutlinedButton.icon(
-                                    onPressed: _readingMarkdown || _submitting
-                                        ? null
-                                        : _pickMarkdownTranscript,
-                                    icon: _readingMarkdown
-                                        ? const SizedBox.square(
-                                            dimension: 18,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          )
-                                        : const Icon(
-                                            Icons.upload_file_outlined),
-                                    label: Text(
-                                      _readingMarkdown
-                                          ? 'Reading file'
-                                          : 'Import .md',
-                                    ),
+                              if (_inputMode == _TranscriptInputMode.files)
+                                _MarkdownFileQueue(
+                                  items: _markdownFiles,
+                                  reading: _readingMarkdown,
+                                  submitting: _submitting,
+                                  onPickFiles: _pickMarkdownTranscript,
+                                  onRemove: _removeMarkdownFile,
+                                )
+                              else
+                                TextFormField(
+                                  controller: _transcriptController,
+                                  minLines: 12,
+                                  maxLines: 24,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Full source transcript',
+                                    alignLabelWithHint: true,
                                   ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: _transcriptFileName == null
-                                        ? const SizedBox.shrink()
-                                        : ListTile(
-                                            dense: true,
-                                            contentPadding: EdgeInsets.zero,
-                                            leading: const Icon(
-                                              Icons.description_outlined,
-                                            ),
-                                            title: Text(
-                                              _transcriptFileName!,
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            subtitle: Text(
-                                              '$_transcriptFileCharacters transcript characters',
-                                            ),
-                                            trailing: IconButton(
-                                              onPressed:
-                                                  _clearMarkdownTranscript,
-                                              icon: const Icon(Icons.close),
-                                              tooltip: 'Remove imported file',
-                                            ),
-                                          ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              TextFormField(
-                                controller: _transcriptController,
-                                minLines: 12,
-                                maxLines: 24,
-                                decoration: const InputDecoration(
-                                  labelText: 'Full source transcript',
-                                  alignLabelWithHint: true,
+                                  validator: (value) {
+                                    final raw = value?.trim() ?? '';
+                                    if (raw.length < 80) {
+                                      return 'Paste the complete transcript (at least 80 characters)';
+                                    }
+                                    return null;
+                                  },
                                 ),
-                                validator: (value) {
-                                  final raw = value?.trim() ?? '';
-                                  if (raw.length < 80) {
-                                    return 'Paste the complete transcript (at least 80 characters)';
-                                  }
-                                  return null;
-                                },
-                              ),
                               const SizedBox(height: 16),
                               FilledButton.icon(
-                                onPressed: _submitting ? null : _submit,
+                                onPressed: _submitting ||
+                                        (_inputMode ==
+                                                _TranscriptInputMode.files &&
+                                            importableFileCount == 0)
+                                    ? null
+                                    : _submit,
                                 icon: _submitting
                                     ? const SizedBox.square(
                                         dimension: 18,
@@ -449,11 +608,18 @@ class _AdminTranscriptImportScreenState
                                     : const Icon(Icons.playlist_add_check),
                                 label: Text(
                                   _submitting
-                                      ? 'Validating'
-                                      : 'Validate and add candidate',
+                                      ? 'Importing candidates'
+                                      : _inputMode == _TranscriptInputMode.files
+                                          ? importableFileCount == 0
+                                              ? _markdownFiles.isEmpty
+                                                  ? 'Select files to import'
+                                                  : 'All selected files imported'
+                                              : 'Validate and import $importableFileCount file${importableFileCount == 1 ? '' : 's'}'
+                                          : 'Validate and add candidate',
                                 ),
                               ),
-                              if (_lastResult != null) ...[
+                              if (_inputMode == _TranscriptInputMode.manual &&
+                                  _lastResult != null) ...[
                                 const SizedBox(height: 16),
                                 _ValidatedCandidateBand(
                                   result: _lastResult!,
@@ -470,6 +636,207 @@ class _AdminTranscriptImportScreenState
                     ),
                   ],
                 ),
+    );
+  }
+}
+
+class _MarkdownFileQueue extends StatelessWidget {
+  const _MarkdownFileQueue({
+    required this.items,
+    required this.reading,
+    required this.submitting,
+    required this.onPickFiles,
+    required this.onRemove,
+  });
+
+  final List<_MarkdownImportItem> items;
+  final bool reading;
+  final bool submitting;
+  final VoidCallback onPickFiles;
+  final ValueChanged<_MarkdownImportItem> onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: reading || submitting ? null : onPickFiles,
+              icon: reading
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.file_upload_outlined),
+              label: Text(reading ? 'Reading files' : 'Select .md files'),
+            ),
+            if (items.isNotEmpty) ...[
+              const Spacer(),
+              Text(
+                '${items.length} selected',
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: items.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.description_outlined,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'No Markdown files selected',
+                        style: TextStyle(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : Column(
+                  children: [
+                    for (var index = 0; index < items.length; index++) ...[
+                      _MarkdownFileRow(
+                        item: items[index],
+                        submitting: submitting,
+                        onRemove: () => onRemove(items[index]),
+                      ),
+                      if (index < items.length - 1)
+                        Divider(
+                          height: 1,
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                    ],
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MarkdownFileRow extends StatelessWidget {
+  const _MarkdownFileRow({
+    required this.item,
+    required this.submitting,
+    required this.onRemove,
+  });
+
+  final _MarkdownImportItem item;
+  final bool submitting;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final statusLabel = switch (item.status) {
+      _MarkdownImportStatus.ready => 'Ready',
+      _MarkdownImportStatus.importing => 'Importing',
+      _MarkdownImportStatus.imported => 'Imported',
+      _MarkdownImportStatus.failed => 'Failed',
+    };
+    final statusColor = switch (item.status) {
+      _MarkdownImportStatus.ready => theme.colorScheme.onSurfaceVariant,
+      _MarkdownImportStatus.importing => theme.colorScheme.primary,
+      _MarkdownImportStatus.imported => Colors.green.shade700,
+      _MarkdownImportStatus.failed => theme.colorScheme.error,
+    };
+    final title = item.document.sourceTitle?.trim();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: item.status == _MarkdownImportStatus.importing
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(Icons.description_outlined, color: statusColor),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title == null || title.isEmpty ? item.fileName : title,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  item.fileName,
+                  style: theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      statusLabel,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: statusColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      '${item.document.transcript.length} characters',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  item.document.sourceUrl ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                if (item.error != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    item.error!,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: submitting ? null : onRemove,
+            icon: const Icon(Icons.close),
+            tooltip: 'Remove from list',
+          ),
+        ],
+      ),
     );
   }
 }
@@ -558,7 +925,8 @@ class _ValidatedCandidateBand extends StatelessWidget {
               Chip(label: Text(candidate.proposedLeafKey)),
               Chip(label: Text(candidate.transcriptLanguage.toUpperCase())),
               const Chip(label: Text('Full video transcript')),
-              const Chip(label: Text('Creative Commons verified')),
+              Chip(label: Text(candidate.licenseName)),
+              const Chip(label: Text('Academic use only')),
             ],
           ),
           const SizedBox(height: 12),

@@ -20,9 +20,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
   late final AdminRepository _repository;
   final _searchController = TextEditingController();
   DatasetReviewQueueResult? _queue;
-  String _status = 'pending';
   String _leafKey = 'all';
-  int? _runId;
   int _offset = 0;
   final int _limit = 12;
   bool _loading = false;
@@ -51,9 +49,8 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
       final result = await _repository.listDatasetReviewQueue(
         limit: _limit,
         offset: _offset,
-        status: _status,
+        status: 'pending',
         leafKey: _leafKey,
-        collectionRunId: _runId,
         search: _searchController.text,
       );
       if (!mounted) return;
@@ -174,21 +171,10 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                     const SizedBox(height: 16),
                     _ReviewFilters(
                       searchController: _searchController,
-                      status: _status,
                       leafKey: _leafKey,
-                      runId: _runId,
                       taxonomy: queue.taxonomy,
-                      runs: queue.runs,
-                      onStatusChanged: (value) {
-                        setState(() => _status = value);
-                        _applyFilters();
-                      },
                       onLeafChanged: (value) {
                         setState(() => _leafKey = value);
-                        _applyFilters();
-                      },
-                      onRunChanged: (value) {
-                        setState(() => _runId = value);
                         _applyFilters();
                       },
                       onSearch: _applyFilters,
@@ -197,12 +183,10 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                     _TaxonomyProgress(taxonomy: queue.taxonomy),
                     const SizedBox(height: 16),
                     if (queue.items.isEmpty)
-                      EmptyStateView(
-                        title: _status == 'pending'
-                            ? 'No candidates waiting for review'
-                            : 'No review records found',
+                      const EmptyStateView(
+                        title: 'No candidates waiting for review',
                         message:
-                            'Collect more YouTube CC candidates or adjust the filters.',
+                            'Import more transcripts or adjust the category filter.',
                         icon: Icons.fact_check_outlined,
                       )
                     else
@@ -450,26 +434,16 @@ class _CollectionRunProgress extends StatelessWidget {
 class _ReviewFilters extends StatelessWidget {
   const _ReviewFilters({
     required this.searchController,
-    required this.status,
     required this.leafKey,
-    required this.runId,
     required this.taxonomy,
-    required this.runs,
-    required this.onStatusChanged,
     required this.onLeafChanged,
-    required this.onRunChanged,
     required this.onSearch,
   });
 
   final TextEditingController searchController;
-  final String status;
   final String leafKey;
-  final int? runId;
   final List<DatasetReviewTaxonomyLeaf> taxonomy;
-  final List<DatasetReviewRun> runs;
-  final ValueChanged<String> onStatusChanged;
   final ValueChanged<String> onLeafChanged;
-  final ValueChanged<int?> onRunChanged;
   final VoidCallback onSearch;
 
   @override
@@ -478,7 +452,7 @@ class _ReviewFilters extends StatelessWidget {
       builder: (context, constraints) {
         final fieldWidth = constraints.maxWidth < 720
             ? constraints.maxWidth
-            : (constraints.maxWidth - 36) / 4;
+            : (constraints.maxWidth - 12) / 2;
         return Wrap(
           spacing: 12,
           runSpacing: 12,
@@ -492,22 +466,6 @@ class _ReviewFilters extends StatelessWidget {
                   prefixIcon: Icon(Icons.search),
                 ),
                 onSubmitted: (_) => onSearch(),
-              ),
-            ),
-            SizedBox(
-              width: fieldWidth,
-              child: DropdownButtonFormField<String>(
-                initialValue: status,
-                decoration: const InputDecoration(labelText: 'Review status'),
-                items: const [
-                  DropdownMenuItem(value: 'pending', child: Text('Pending')),
-                  DropdownMenuItem(value: 'approved', child: Text('Approved')),
-                  DropdownMenuItem(value: 'rejected', child: Text('Rejected')),
-                  DropdownMenuItem(value: 'all', child: Text('All')),
-                ],
-                onChanged: (value) {
-                  if (value != null) onStatusChanged(value);
-                },
               ),
             ),
             SizedBox(
@@ -529,28 +487,6 @@ class _ReviewFilters extends StatelessWidget {
                 onChanged: (value) {
                   if (value != null) onLeafChanged(value);
                 },
-              ),
-            ),
-            SizedBox(
-              width: fieldWidth,
-              child: DropdownButtonFormField<int?>(
-                initialValue: runId,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Collection run'),
-                items: [
-                  const DropdownMenuItem<int?>(
-                      value: null, child: Text('All runs')),
-                  ...runs.map(
-                    (run) => DropdownMenuItem<int?>(
-                      value: run.collectionRunId,
-                      child: Text(
-                        'Run ${run.collectionRunId} (${run.pending} pending)',
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                ],
-                onChanged: onRunChanged,
               ),
             ),
           ],
@@ -615,6 +551,10 @@ class _CandidateReviewCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final passedChecks =
         candidate.automatedChecks.values.where((value) => value).length;
+    final transcriptOrigin =
+        candidate.transcriptAcquisitionMethod == 'notebooklm_manual_source'
+            ? 'NotebookLM transcript'
+            : '${candidate.captionType} captions';
     return Card(
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
@@ -645,7 +585,7 @@ class _CandidateReviewCard extends StatelessWidget {
             ),
             Text(
               '${candidate.channelTitle} | ${candidate.durationSeconds}s | '
-              '${candidate.transcriptLanguage.toUpperCase()} ${candidate.captionType} captions',
+              '${candidate.transcriptLanguage.toUpperCase()} | $transcriptOrigin',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 10),
@@ -654,6 +594,7 @@ class _CandidateReviewCard extends StatelessWidget {
               runSpacing: 8,
               children: [
                 Chip(label: Text('Suggested: ${candidate.proposedLeafKey}')),
+                Chip(label: Text(candidate.licenseName)),
                 Chip(
                   avatar: Icon(
                     candidate.allAutomatedChecksPass

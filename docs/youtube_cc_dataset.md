@@ -1,10 +1,15 @@
-# YouTube Creative Commons Transcript Dataset
+# Public YouTube Transcript Dataset For Academic Research
 
 ## Objective
 
-สร้างชุดข้อมูลจริงสำหรับ Classification และ Recommendation โดยใช้วิดีโอ YouTube
-ที่ผู้เผยแพร่เลือก Creative Commons, transcript จริงจาก public caption และ label ที่มนุษย์ตรวจ
-ไม่ใช้ generated transcript, generated label หรือ demo seed เป็น production evidence
+สร้างชุดข้อมูลสำหรับ Classification และ Recommendation ของโครงงานมหาวิทยาลัย โดยใช้
+metadata ของวิดีโอ YouTube สาธารณะ, transcript จาก public caption หรือ NotebookLM manual
+import และ label ที่มนุษย์ตรวจ ไม่ใช้ generated label หรือ demo seed เป็น production evidence
+ระบบไม่ดาวน์โหลดหรือเผยแพร่ไฟล์วิดีโอต้นฉบับ และไม่เผยแพร่ Dataset ภายนอกโครงงาน
+
+`YouTube Standard License` ไม่ได้ให้สิทธินำผลงานไปใช้ซ้ำแบบเดียวกับ CC BY การเก็บแถว
+ประเภทนี้จึงถูกจำกัดไว้สำหรับการศึกษา/ประเมินระบบภายในโครงงาน และต้องตรวจนโยบายของ
+สถาบันหรือขออนุญาตเจ้าของสิทธิ์ก่อนเผยแพร่ Dataset, โมเดล หรือใช้งานนอกขอบเขตดังกล่าว
 
 ## Data Flow
 
@@ -14,14 +19,14 @@ Project taxonomy queries
         v
 YouTube search.list
   type=video
-  videoLicense=creativeCommon
   videoCaption=closedCaption
         |
         v
 YouTube videos.list
   snippet, contentDetails, statistics, status
         |
-        +-- reject: license is not creativeCommon
+        +-- record: Standard YouTube or Creative Commons license
+        +-- reject: video is not public
         +-- reject: duration is missing or invalid
         +-- reject: no supported public transcript
         |
@@ -53,7 +58,7 @@ Reviewer จึงต้องดูคลิปหรืออ่าน transcr
 Approve เมื่อครบทุกข้อ:
 
 1. ลิงก์เปิดได้และตรงกับ metadata
-2. วิดีโอมี Creative Commons ณ เวลาที่ collect
+2. วิดีโอเป็น Public และระบบบันทึก License ณ เวลาที่ collect
 3. เนื้อหาหลักอยู่ใน taxonomy leaf ที่เลือก
 4. Transcript สะท้อนเสียงในคลิปและมีข้อมูลพอสำหรับจำแนก
 5. Duration ของวิดีโอต้นทางตรวจสอบได้และมากกว่า 0 วินาที
@@ -68,16 +73,17 @@ Approve เมื่อครบทุกข้อ:
 ### NotebookLM acquisition path
 
 NotebookLM is an acquisition method, not the dataset source and not the labeler.
-The underlying source remains a public YouTube video whose current API metadata
-reports `status.license=creativeCommon`. Admins paste the exact source transcript,
-not a NotebookLM summary, into `/#/admin-transcript-import`.
+The underlying source remains a public YouTube video. The backend records whether
+YouTube reports `status.license=youtube` or `status.license=creativeCommon`.
+Admins paste the exact source transcript, not a NotebookLM summary, into
+`/#/admin-transcript-import`.
 
-The backend verifies metadata and license, creates an immutable hashed candidate,
+The backend verifies public metadata and records the license, creates an immutable hashed candidate,
 deduplicates by YouTube ID and transcript SHA-256, and sends it through the same
 human review workflow. Approved rows record:
 
 ```text
-transcript_source             = youtube_public_caption
+transcript_source             = notebooklm_source_transcript
 transcript_acquisition_method = notebooklm_manual_source
 transcript_scope              = full_video
 transcript_timestamps_available = false
@@ -93,7 +99,7 @@ readiness coverage ใช้ query เดียวกัน จึงไม่�
 ค่าหลักของแถว production:
 
 ```text
-dataset_source      = youtube_cc
+dataset_source      = youtube_public_research
 verification_status = human_verified
 label_source        = human_review
 transcript_source   = youtube_public_caption
@@ -260,11 +266,12 @@ artifact reload และ prediction ได้ โหมดนี้ใช้เ
 
 ## Source Notes
 
-- YouTube Search API รองรับ `videoLicense=creativeCommon` และ `videoCaption=closedCaption`:
+- YouTube Search API ใช้ค้นหาวิดีโอสาธารณะ โดย collector รุ่นปัจจุบันไม่กรองชนิด license
+  และจะอ่าน `status.license` ของแต่ละวิดีโอแล้วเก็บค่าจริงแทน:
   https://developers.google.com/youtube/v3/docs/search/list
 - Videos API ให้ duration, statistics และ `status.license`:
   https://developers.google.com/youtube/v3/docs/videos
-- YouTube อธิบาย Creative Commons Attribution ที่:
+- YouTube อธิบายความแตกต่างระหว่าง Standard YouTube License และ Creative Commons Attribution ที่:
   https://support.google.com/youtube/answer/2797468
 - Official Captions API ต้องใช้สิทธิ์ OAuth ที่เหมาะสมสำหรับการดาวน์โหลด caption:
   https://developers.google.com/youtube/v3/guides/implementation/captions

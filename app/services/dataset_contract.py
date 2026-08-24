@@ -4,12 +4,26 @@ import hashlib
 
 
 YOUTUBE_CC_DATASET_SOURCE = "youtube_cc"
+YOUTUBE_PUBLIC_DATASET_SOURCE = "youtube_public_research"
+SUPPORTED_YOUTUBE_DATASET_SOURCES = (
+    YOUTUBE_PUBLIC_DATASET_SOURCE,
+    YOUTUBE_CC_DATASET_SOURCE,
+)
 DEFAULT_YOUTUBE_CC_DATASET_VERSION = "youtube-cc-th-v1"
+DEFAULT_YOUTUBE_PUBLIC_DATASET_VERSION = "youtube-public-research-th-v1"
 YOUTUBE_CC_LABEL_SOURCE = "human_review"
 YOUTUBE_CC_VERIFICATION_STATUS = "human_verified"
 YOUTUBE_CC_LICENSE_NAME = "YouTube Creative Commons Attribution"
 YOUTUBE_CC_LICENSE_URL = "https://support.google.com/youtube/answer/2797468"
+YOUTUBE_STANDARD_LICENSE_NAME = "YouTube Standard License"
+YOUTUBE_LICENSE_INFO_URL = "https://support.google.com/youtube/answer/2797468"
+SUPPORTED_YOUTUBE_LICENSE_CODES = ("creativeCommon", "youtube")
 YOUTUBE_CC_TRANSCRIPT_SOURCE = "youtube_public_caption"
+NOTEBOOKLM_TRANSCRIPT_SOURCE = "notebooklm_source_transcript"
+SUPPORTED_TRANSCRIPT_SOURCES = (
+    YOUTUBE_CC_TRANSCRIPT_SOURCE,
+    NOTEBOOKLM_TRANSCRIPT_SOURCE,
+)
 YOUTUBE_TRANSCRIPT_API_ACQUISITION = "youtube_transcript_api"
 NOTEBOOKLM_TRANSCRIPT_ACQUISITION = "notebooklm_manual_source"
 SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS = (
@@ -33,6 +47,16 @@ TRANSCRIPT_WINDOW_SECONDS = 300
 USER_UPLOAD_MAX_DURATION_SECONDS = 300
 RECOMMENDATION_DURATION_MAX_SECONDS = 300
 SPLIT_STRATEGY = "channel_sha256_bucket_v1_70_15_15"
+
+
+def youtube_license_metadata(license_code: str) -> tuple[str, str]:
+    """Return the recorded YouTube license label without treating it as reuse permission."""
+    normalized = str(license_code or "").strip()
+    if normalized == "creativeCommon":
+        return YOUTUBE_CC_LICENSE_NAME, YOUTUBE_CC_LICENSE_URL
+    if normalized == "youtube":
+        return YOUTUBE_STANDARD_LICENSE_NAME, YOUTUBE_LICENSE_INFO_URL
+    return "Unknown YouTube License", YOUTUBE_LICENSE_INFO_URL
 
 
 def channel_dataset_split(channel_id: str) -> tuple[str, str]:

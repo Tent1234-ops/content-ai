@@ -4,7 +4,6 @@ import 'recommendation_result.dart' hide DatasetProfile;
 class AdminOverviewReport {
   const AdminOverviewReport({
     required this.datasetTotal,
-    required this.clusterRunTotal,
     required this.systemLogTotal,
     required this.topSources,
     required this.topCategories,
@@ -12,7 +11,6 @@ class AdminOverviewReport {
   });
 
   final int datasetTotal;
-  final int clusterRunTotal;
   final int systemLogTotal;
   final List<ChartItem> topSources;
   final List<ChartItem> topCategories;
@@ -21,7 +19,6 @@ class AdminOverviewReport {
   factory AdminOverviewReport.fromJson(Map<String, dynamic> json) {
     return AdminOverviewReport(
       datasetTotal: (json['dataset_total'] as num?)?.toInt() ?? 0,
-      clusterRunTotal: (json['cluster_run_total'] as num?)?.toInt() ?? 0,
       systemLogTotal: (json['system_log_total'] as num?)?.toInt() ?? 0,
       topSources: (json['top_sources'] as List<dynamic>? ?? const [])
           .map((item) => ChartItem.fromJson(
@@ -199,8 +196,7 @@ class AdminSettings {
 
   factory AdminSettings.fromJson(Map<String, dynamic> json) {
     return AdminSettings(
-      maxKeywordsDisplay:
-          (json['max_keywords_display'] as num?)?.toInt() ?? 10,
+      maxKeywordsDisplay: (json['max_keywords_display'] as num?)?.toInt() ?? 10,
       hookAnalysisDuration:
           (json['hook_analysis_duration'] as num?)?.toInt() ?? 60,
       autoScanIntervalHours:

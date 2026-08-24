@@ -60,7 +60,7 @@ def create_notebooklm_candidate(
             action="notebooklm_candidate_created",
             status="success",
             detail=(
-                f"YouTube CC candidate {result['candidate']['source_youtube_id']}; "
+                f"YouTube candidate {result['candidate']['source_youtube_id']}; "
                 f"run={result['collection_run_id']}; "
                 f"leaf={payload.proposed_leaf_key}"
             ),
@@ -127,7 +127,7 @@ def review_dataset_candidate(
             action=f"dataset_review_{payload.decision}",
             status="success",
             detail=(
-                f"YouTube CC candidate {source_youtube_id}; "
+                f"YouTube candidate {source_youtube_id}; "
                 f"run={collection_run_id}; leaf={payload.reviewed_leaf_key or '-'}"
             ),
         )

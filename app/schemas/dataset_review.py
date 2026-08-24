@@ -28,6 +28,9 @@ class DatasetReviewCandidateItem(BaseModel):
     title: str
     video_url: str
     channel_title: str
+    youtube_license_code: str
+    license_name: str
+    public_captions_available: bool
     proposed_leaf_key: str
     transcript_language: str
     caption_type: str
@@ -99,7 +102,7 @@ class NotebookLMTranscriptCandidateRequest(BaseModel):
     ] = "classification_diverse"
     collection_run_id: int | None = Field(default=None, ge=1)
     dataset_version: str = Field(
-        default="youtube-cc-th-v1",
+        default="youtube-public-research-th-v1",
         min_length=1,
         max_length=100,
     )

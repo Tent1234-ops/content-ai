@@ -58,7 +58,7 @@ Frontend polling endpoint สถานะหลักคือ `queued`, `runnin
 ### `GET /classification/taxonomy`
 
 คืนโครงสร้าง `content-taxonomy-v1`, readiness และ sample coverage ของ 12 leaf categories
-หนึ่ง leaf พร้อมใช้เมื่อมี YouTube Creative Commons transcripts ที่ผ่าน human review อย่างน้อย
+หนึ่ง leaf พร้อมใช้เมื่อมี public YouTube transcripts ที่ผ่าน human review อย่างน้อย
 30 แถวตาม production eligibility contract
 
 ### `POST /classification/text`
@@ -73,7 +73,7 @@ Frontend polling endpoint สถานะหลักคือ `queued`, `runnin
 ### `POST /recommendation/from-text`
 
 สกัด user keywords, keyword gap, hook keywords และ recommended duration
-Evidence ใช้เฉพาะ human-reviewed YouTube CC rows ใน leaf เดียวกัน
+Evidence ใช้เฉพาะ human-reviewed public YouTube rows ใน leaf เดียวกัน
 
 ### `GET /recommendation/from-content/{content_id}`
 
@@ -92,7 +92,7 @@ Evidence ใช้เฉพาะ human-reviewed YouTube CC rows ใน leaf เ
 - `PUT /admin/datasets/{dataset_id}`: Admin อัปเดตแถว
 
 การเพิ่มแถวผ่าน Admin ไม่ทำให้เป็น training data อัตโนมัติ Production training row ต้องผ่าน
-YouTube CC review importer และกติกาใน `app/services/dataset_eligibility.py`
+YouTube review importer และกติกาใน `app/services/dataset_eligibility.py`
 
 ## Dashboard And Trends
 
@@ -163,7 +163,7 @@ Content-Type: application/json
   "caption_type": "unspecified",
   "collection_strategy": "classification_diverse",
   "collection_run_id": null,
-  "dataset_version": "youtube-cc-th-v1"
+  "dataset_version": "youtube-public-research-th-v1"
 }
 ```
 

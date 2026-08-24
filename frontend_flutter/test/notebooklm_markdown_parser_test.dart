@@ -51,6 +51,39 @@ This must not enter the training transcript.
     expect(document.transcript, isNot(contains('Notes')));
   });
 
+  test('accepts NotebookLM Video Link metadata', () {
+    final document = NotebookLmMarkdownParser.parse('''
+## Metadata
+- **Video Link:** https://youtu.be/nG3ITcW2vTg?si=example
+
+## Cleaned Transcription Text
+$longTranscript
+''');
+
+    expect(
+      document.sourceUrl,
+      'https://youtu.be/nG3ITcW2vTg?si=example',
+    );
+  });
+
+  test('accepts compact Thai metadata followed directly by transcript', () {
+    final document = NotebookLmMarkdownParser.parse('''
+# รีวิวกล้อง Canon EOS R50V
+**ช่อง:** Camera Example
+**ลิงก์วิดีโอ:** https://youtu.be/bgtxAFTUS1w?si=example
+
+$longTranscript
+''');
+
+    expect(document.sourceTitle, 'รีวิวกล้อง Canon EOS R50V');
+    expect(document.creatorChannel, 'Camera Example');
+    expect(
+      document.sourceUrl,
+      'https://youtu.be/bgtxAFTUS1w?si=example',
+    );
+    expect(document.transcript, longTranscript);
+  });
+
   test('removes a code fence around the transcript', () {
     final document = NotebookLmMarkdownParser.parse('''
 ## Full source transcript

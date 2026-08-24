@@ -31,7 +31,7 @@ from app.services.taxonomy import MIN_VERIFIED_SAMPLES, sync_taxonomy_registry
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Prepare channel-grouped YouTube CC splits and benchmark multiple "
+            "Prepare channel-grouped public YouTube splits and benchmark multiple "
             "taxonomy classifiers. Evaluated models are never activated automatically."
         )
     )

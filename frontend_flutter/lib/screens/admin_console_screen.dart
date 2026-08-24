@@ -121,7 +121,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
     final overview = _overview;
     final report = _recommendationReport;
     final datasetHealth = report?.datasetHealth;
-    final profileHealth = report?.profileHealth;
 
     return AppShell(
       title: 'Admin Console',
@@ -145,9 +144,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                           _AdminMetricCard(
                               title: 'Datasets',
                               value: '${overview.datasetTotal}'),
-                          _AdminMetricCard(
-                              title: 'Cluster Runs',
-                              value: '${overview.clusterRunTotal}'),
                           _AdminMetricCard(
                               title: 'Logs',
                               value: '${overview.systemLogTotal}'),
@@ -189,12 +185,6 @@ class _AdminConsoleScreenState extends State<AdminConsoleScreen> {
                         onSave: _saveSettings,
                       ),
                       const SizedBox(height: 16),
-                      _RecommendationCoreCard(
-                        report: report,
-                        profileHealth: profileHealth,
-                        datasetHealth: datasetHealth,
-                      ),
-                      const SizedBox(height: 16),
                       _VisualSummaryCard(overview: overview),
                       const SizedBox(height: 16),
                       _ComparisonCard(comparisons: _comparisons),
@@ -215,7 +205,7 @@ class _ManagementCard extends StatelessWidget {
             leading: const Icon(Icons.fact_check_outlined),
             title: const Text('Dataset Review'),
             subtitle: const Text(
-              'Approve, reject, or relabel real YouTube CC transcript candidates',
+              'Approve, reject, or relabel public YouTube transcript candidates',
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.pushNamed(context, '/admin-dataset-review'),
@@ -223,17 +213,9 @@ class _ManagementCard extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.storage_outlined),
             title: const Text('Datasets'),
-            subtitle: const Text(
-                'View, add, and update YouTube, Google, and TikTok records'),
+            subtitle: const Text('View and update approved dataset records'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.pushNamed(context, '/admin-datasets'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.bubble_chart_outlined),
-            title: const Text('Cluster Runs'),
-            subtitle: const Text('Run and inspect KMeans/HDBSCAN cluster jobs'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.pushNamed(context, '/admin-clusters'),
           ),
           ListTile(
             leading: const Icon(Icons.receipt_long_outlined),
@@ -291,7 +273,7 @@ class _SettingsPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Analysis Settings',
+            Text('Runtime Analysis & Trend Settings',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             Row(
@@ -368,68 +350,6 @@ class _SettingsPanel extends StatelessWidget {
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.save_outlined),
               label: Text(saving ? 'Saving...' : 'Save settings'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _RecommendationCoreCard extends StatelessWidget {
-  const _RecommendationCoreCard({
-    required this.report,
-    required this.profileHealth,
-    required this.datasetHealth,
-  });
-
-  final RecommendationAdminReport report;
-  final ProfileHealth? profileHealth;
-  final DatasetHealth? datasetHealth;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Recommendation Core',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Text(
-              'Datasets ${datasetHealth?.totalDatasetContents ?? 0} | duration coverage ${(datasetHealth?.durationCoverageRatio ?? 0).toStringAsFixed(2)}',
-            ),
-            const SizedBox(height: 12),
-            _DomainBlock(
-                title: 'YouTube domains',
-                domains: profileHealth?.youtubeDomains ?? const []),
-            _DomainBlock(
-                title: 'Google domains',
-                domains: profileHealth?.googleDomains ?? const []),
-            _DomainBlock(
-                title: 'TikTok domains',
-                domains: profileHealth?.tiktokDomains ?? const []),
-            const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                    child: _ProfilePreview(
-                        title: 'YouTube Profiles',
-                        profiles: report.youtubeProfiles)),
-                const SizedBox(width: 12),
-                Expanded(
-                    child: _ProfilePreview(
-                        title: 'Google Profiles',
-                        profiles: report.googleProfiles)),
-                const SizedBox(width: 12),
-                Expanded(
-                    child: _ProfilePreview(
-                        title: 'TikTok Profiles',
-                        profiles: report.tiktokProfiles)),
-              ],
             ),
           ],
         ),
@@ -524,63 +444,6 @@ class _ComparisonCard extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _DomainBlock extends StatelessWidget {
-  const _DomainBlock({required this.title, required this.domains});
-
-  final String title;
-  final List<String> domains;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title),
-          const SizedBox(height: 6),
-          if (domains.isEmpty)
-            const Text('No domains yet')
-          else
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children:
-                  domains.map((domain) => Chip(label: Text(domain))).toList(),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfilePreview extends StatelessWidget {
-  const _ProfilePreview({required this.title, required this.profiles});
-
-  final String title;
-  final List<DatasetProfile> profiles;
-
-  @override
-  Widget build(BuildContext context) {
-    final visible = profiles.take(3).toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        if (visible.isEmpty)
-          const Text('No profiles yet')
-        else
-          ...visible.map((profile) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                    '${profile.domain} | samples ${profile.sampleSize} | ${profile.duration.recommendedRange}'),
-              )),
-      ],
     );
   }
 }

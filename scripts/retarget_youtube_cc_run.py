@@ -29,7 +29,7 @@ from app.services.youtube_cc_dataset import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Narrow an unfinished, unreviewed YouTube CC collection run to a "
+            "Narrow an unfinished, unreviewed YouTube collection run to a "
             "smaller transcript-language set while archiving excluded candidates."
         )
     )

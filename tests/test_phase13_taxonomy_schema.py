@@ -174,7 +174,7 @@ class Phase13TaxonomySchemaTests(unittest.TestCase):
         self.db.refresh(phone)
         self.assertTrue(phone.is_active)
 
-    def test_coverage_requires_thirty_verified_youtube_cc_rows_per_leaf(self):
+    def test_coverage_requires_thirty_verified_youtube_rows_per_leaf(self):
         self.db.add(
             DatasetContent(
                 title="unreviewed candidate",
@@ -193,7 +193,7 @@ class Phase13TaxonomySchemaTests(unittest.TestCase):
         for leaf_key in ACTIVE_LEAF_KEYS:
             self._add_verified_leaf_rows(leaf_key, 29)
         before = taxonomy_coverage(self.db)
-        self.assertEqual(before["source_dataset"], "youtube_cc")
+        self.assertEqual(before["source_dataset"], "youtube_public_research")
         self.assertEqual(before["ready_leaf_count"], 0)
         for leaf_key in ACTIVE_LEAF_KEYS:
             self._add_verified_leaf_rows(leaf_key, 1)
@@ -272,7 +272,7 @@ class Phase13TaxonomySchemaTests(unittest.TestCase):
 
         self.assertEqual(profile["eligible_pool_size"], 30)
         self.assertEqual(profile["sample_size"], 12)
-        self.assertEqual(profile["source"], "youtube_cc_human_verified")
+        self.assertEqual(profile["source"], "youtube_public_human_verified")
         self.assertEqual(sum(profile["source_platform_counts"].values()), 12)
         self.assertEqual(len(profile["dataset_row_ids"]), 12)
         selected_scores = [

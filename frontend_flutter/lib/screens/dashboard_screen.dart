@@ -1022,8 +1022,6 @@ class _MetricsGrid extends StatelessWidget {
       _MetricItem(
           'Dataset', metrics.totalDatasetContents, Icons.dataset_outlined),
       _MetricItem('Users', metrics.totalUsers, Icons.people_outline),
-      _MetricItem('Cluster runs', metrics.totalClusterRuns,
-          Icons.bubble_chart_outlined),
       _MetricItem(
           'My analyses', metrics.myAnalysisResults, Icons.assessment_outlined),
     ];
@@ -1036,7 +1034,7 @@ class _MetricsGrid extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           itemCount: items.length,
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: wide ? 4 : 2,
+            crossAxisCount: wide ? 3 : 2,
             mainAxisExtent: 104,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,

@@ -1,5 +1,4 @@
 import '../models/admin_report.dart';
-import '../models/cluster_run.dart';
 import '../models/common_models.dart';
 import '../models/dataset_item.dart';
 import '../models/dataset_review.dart';
@@ -116,46 +115,10 @@ class AdminRepository {
         'caption_type': captionType,
         'collection_strategy': collectionStrategy,
         'collection_run_id': collectionRunId,
-        'dataset_version': 'youtube-cc-th-v1',
+        'dataset_version': 'youtube-public-research-th-v1',
       },
     );
     return NotebookLMImportResult.fromJson(
-      Map<String, dynamic>.from(response as Map),
-    );
-  }
-
-  Future<PaginatedResult<ClusterRunSummary>> listClusterRuns({
-    required int limit,
-    required int offset,
-    String algorithm = 'all',
-  }) async {
-    final buffer =
-        StringBuffer('/admin/clusters/runs?limit=$limit&offset=$offset');
-    if (algorithm != 'all') {
-      buffer.write('&algorithm=$algorithm');
-    }
-    final response =
-        Map<String, dynamic>.from(await _client.get(buffer.toString()) as Map);
-    return PaginatedResult<ClusterRunSummary>(
-      total: (response['total'] as num?)?.toInt() ?? 0,
-      items: (response['items'] as List<dynamic>? ?? const [])
-          .map((item) => ClusterRunSummary.fromJson(
-              Map<String, dynamic>.from(item as Map)))
-          .toList(),
-    );
-  }
-
-  Future<ClusterRunDetail> getClusterRun(int runId) async {
-    final response = await _client.get('/admin/clusters/runs/$runId');
-    return ClusterRunDetail.fromJson(
-        Map<String, dynamic>.from(response as Map));
-  }
-
-  Future<DatasetClusterRunResult> runClusteringFromDataset(
-    Map<String, dynamic> payload,
-  ) async {
-    final response = await _client.post('/clustering/from-dataset', payload);
-    return DatasetClusterRunResult.fromJson(
       Map<String, dynamic>.from(response as Map),
     );
   }

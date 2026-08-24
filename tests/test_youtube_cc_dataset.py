@@ -60,7 +60,14 @@ def _search_response(video_ids):
     }
 
 
-def _video(video_id, index=0, *, duration="PT2M10S"):
+def _video(
+    video_id,
+    index=0,
+    *,
+    duration="PT2M10S",
+    license_code="creativeCommon",
+    caption="true",
+):
     return {
         "id": video_id,
         "snippet": {
@@ -72,13 +79,13 @@ def _video(video_id, index=0, *, duration="PT2M10S"):
             "publishedAt": "2025-01-01T00:00:00Z",
             "liveBroadcastContent": "none",
         },
-        "contentDetails": {"duration": duration, "caption": "true"},
+        "contentDetails": {"duration": duration, "caption": caption},
         "statistics": {
             "viewCount": str(10000 + index * 1000),
             "likeCount": str(500 + index * 10),
             "commentCount": str(40 + index),
         },
-        "status": {"license": "creativeCommon"},
+        "status": {"license": license_code, "privacyStatus": "public"},
     }
 
 
@@ -238,6 +245,66 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.assertEqual(dataset.transcript_scope, "full_video")
         self.assertEqual(dataset.transcript_window_seconds, 720)
         self.assertEqual(dataset.transcript_end_seconds, 720)
+        self.assertEqual(production_transcript_query(self.db).count(), 1)
+
+    def test_notebooklm_accepts_standard_license_without_public_captions(self):
+        video_id = "standard001"
+        transcript = (
+            "ทดสอบรีวิวมือถือจาก NotebookLM ทั้งคลิป มีข้อมูลหน้าจอ กล้อง "
+            "แบตเตอรี่ ราคา และประสบการณ์ใช้งานจริง " * 8
+        ).strip()
+
+        def youtube_getter(resource, **_kwargs):
+            self.assertEqual(resource, "videos")
+            return {
+                "items": [
+                    _video(
+                        video_id,
+                        duration="PT17M26S",
+                        license_code="youtube",
+                        caption="false",
+                    )
+                ]
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            created = create_notebooklm_transcript_candidate(
+                self.db,
+                api_key="test-key",
+                video_url=f"https://www.youtube.com/watch?v={video_id}",
+                transcript=transcript,
+                proposed_leaf_key="phone",
+                transcript_language="th",
+                caption_type="unspecified",
+                youtube_getter=youtube_getter,
+                artifact_root=root / "raw",
+            )
+            candidate = created["candidate"]
+            self.assertEqual(candidate["youtube_license_code"], "youtube")
+            self.assertEqual(candidate["license_name"], "YouTube Standard License")
+            self.assertFalse(candidate["public_captions_available"])
+            self.assertTrue(all(candidate["automated_checks"].values()))
+
+            review_youtube_cc_candidate(
+                self.db,
+                collection_run_id=created["collection_run_id"],
+                source_youtube_id=video_id,
+                decision="approve",
+                reviewer="admin@example.test [user:1]",
+                reviewed_leaf_key="phone",
+                transcript_quality="good",
+                notes="NotebookLM transcript checked against the public source.",
+                review_root=root / "reviews",
+            )
+
+        dataset = self.db.query(DatasetContent).filter_by(
+            source_youtube_id=video_id
+        ).one()
+        self.assertEqual(dataset.dataset_source, "youtube_public_research")
+        self.assertEqual(dataset.license_name, "YouTube Standard License")
+        self.assertEqual(dataset.transcript_source, "notebooklm_source_transcript")
+        self.assertTrue(dataset.is_training_eligible)
         self.assertEqual(production_transcript_query(self.db).count(), 1)
 
     def test_phone_and_camera_queries_exclude_common_false_positives(self):
@@ -1353,7 +1420,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.assertEqual(self.db.query(DatasetContent).count(), 1)
         self.assertEqual(self.db.query(DatasetReviewEvent).count(), 2)
         row = self.db.query(DatasetContent).one()
-        self.assertEqual(row.dataset_source, "youtube_cc")
+        self.assertEqual(row.dataset_source, "youtube_public_research")
         self.assertEqual(row.taxonomy_version, TAXONOMY_VERSION)
         self.assertEqual(row.verification_status, "human_verified")
         self.assertEqual(row.label_source, "human_review")

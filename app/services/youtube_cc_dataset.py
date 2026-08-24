@@ -28,23 +28,27 @@ from app.database.models import (
 from app.services.dataset_contract import (
     ACCEPTED_TRANSCRIPT_QUALITIES,
     DEFAULT_COLLECTION_LANGUAGES,
-    DEFAULT_YOUTUBE_CC_DATASET_VERSION,
+    DEFAULT_YOUTUBE_PUBLIC_DATASET_VERSION,
     NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
+    NOTEBOOKLM_TRANSCRIPT_SOURCE,
     RECOMMENDATION_DURATION_MAX_SECONDS,
     SPLIT_STRATEGY,
     SUPPORTED_CAPTION_TYPES,
     SUPPORTED_TRANSCRIPT_LANGUAGES,
+    SUPPORTED_TRANSCRIPT_SOURCES,
     TRANSCRIPT_SCOPE_FIRST_WINDOW,
     TRANSCRIPT_SCOPE_FULL_VIDEO,
     TRANSCRIPT_WINDOW_SECONDS,
     YOUTUBE_CC_DATASET_SOURCE,
     YOUTUBE_CC_LABEL_SOURCE,
-    YOUTUBE_CC_LICENSE_NAME,
-    YOUTUBE_CC_LICENSE_URL,
     YOUTUBE_CC_TRANSCRIPT_SOURCE,
     YOUTUBE_CC_VERIFICATION_STATUS,
+    YOUTUBE_PUBLIC_DATASET_SOURCE,
+    SUPPORTED_YOUTUBE_DATASET_SOURCES,
+    SUPPORTED_YOUTUBE_LICENSE_CODES,
     YOUTUBE_TRANSCRIPT_API_ACQUISITION,
     channel_dataset_split,
+    youtube_license_metadata,
 )
 from app.services.dataset_eligibility import validate_training_eligibility_values
 from app.services.taxonomy import (
@@ -432,6 +436,7 @@ def _make_candidate(
     collection_strategy: str,
     search_order: str,
     search_rank: int,
+    dataset_source: str = YOUTUBE_PUBLIC_DATASET_SOURCE,
 ) -> dict[str, Any]:
     snippet = item.get("snippet") or {}
     content_details = item.get("contentDetails") or {}
@@ -439,10 +444,12 @@ def _make_candidate(
     status = item.get("status") or {}
     video_id = str(item.get("id") or "").strip()
     duration_seconds = parse_iso8601_duration(str(content_details.get("duration") or ""))
+    youtube_license_code = str(status.get("license") or "").strip()
+    license_name, license_url = youtube_license_metadata(youtube_license_code)
     candidate = {
         "schema_version": COLLECTION_SCHEMA_VERSION,
         "run_key": run_key,
-        "dataset_source": YOUTUBE_CC_DATASET_SOURCE,
+        "dataset_source": dataset_source,
         "dataset_version": dataset_version,
         "taxonomy_version": TAXONOMY_VERSION,
         "proposed_leaf_key": leaf_key,
@@ -471,9 +478,9 @@ def _make_candidate(
         "views": int(statistics.get("viewCount") or 0),
         "likes": int(statistics.get("likeCount") or 0),
         "comments": int(statistics.get("commentCount") or 0),
-        "youtube_license_code": str(status.get("license") or ""),
-        "license_name": YOUTUBE_CC_LICENSE_NAME,
-        "license_url": YOUTUBE_CC_LICENSE_URL,
+        "youtube_license_code": youtube_license_code,
+        "license_name": license_name,
+        "license_url": license_url,
         "transcript_source": str(
             transcript.get("transcript_source") or YOUTUBE_CC_TRANSCRIPT_SOURCE
         ),
@@ -754,7 +761,9 @@ def repair_quota_waiting_run_statuses(db: Session) -> dict[str, Any]:
     runs = (
         db.query(DatasetCollectionRun)
         .filter(
-            DatasetCollectionRun.dataset_source == YOUTUBE_CC_DATASET_SOURCE,
+            DatasetCollectionRun.dataset_source.in_(
+                SUPPORTED_YOUTUBE_DATASET_SOURCES
+            ),
             DatasetCollectionRun.status == "failed",
         )
         .all()
@@ -876,7 +885,9 @@ def _dedup_catalog(
     runs = (
         db.query(DatasetCollectionRun)
         .filter(
-            DatasetCollectionRun.dataset_source == YOUTUBE_CC_DATASET_SOURCE,
+            DatasetCollectionRun.dataset_source.in_(
+                SUPPORTED_YOUTUBE_DATASET_SOURCES
+            ),
             DatasetCollectionRun.collection_run_id != exclude_run_id,
         )
         .all()
@@ -1306,7 +1317,7 @@ def _persist_collection_state(
         "schema_version": COLLECTION_SCHEMA_VERSION,
         "collection_run_id": collection_run.collection_run_id,
         "run_key": collection_run.run_key,
-        "dataset_source": YOUTUBE_CC_DATASET_SOURCE,
+        "dataset_source": collection_run.dataset_source,
         "dataset_version": collection_run.dataset_version,
         "taxonomy_version": TAXONOMY_VERSION,
         "status": status,
@@ -1569,7 +1580,6 @@ def _execute_collection(
                             "part": "snippet",
                             "q": query,
                             "type": "video",
-                            "videoLicense": "creativeCommon",
                             "videoCaption": "closedCaption",
                             "maxResults": 50,
                             "order": search_order,
@@ -1577,6 +1587,8 @@ def _execute_collection(
                             "relevanceLanguage": query_language,
                             "safeSearch": "moderate",
                         }
+                        if collection_run.dataset_source == YOUTUBE_CC_DATASET_SOURCE:
+                            search_params["videoLicense"] = "creativeCommon"
                         if page_token:
                             search_params["pageToken"] = page_token
                         search = youtube_getter(
@@ -1660,8 +1672,19 @@ def _execute_collection(
                                 except YouTubeCCDatasetError:
                                     rejected_reasons["invalid_duration"] += 1
                                     continue
-                                if status.get("license") != "creativeCommon":
+                                license_code = str(status.get("license") or "")
+                                if license_code not in SUPPORTED_YOUTUBE_LICENSE_CODES:
+                                    rejected_reasons["unsupported_youtube_license"] += 1
+                                    continue
+                                if (
+                                    collection_run.dataset_source
+                                    == YOUTUBE_CC_DATASET_SOURCE
+                                    and license_code != "creativeCommon"
+                                ):
                                     rejected_reasons["not_creative_common"] += 1
+                                    continue
+                                if str(status.get("privacyStatus") or "public") != "public":
+                                    rejected_reasons["not_public"] += 1
                                     continue
                                 if duration <= 0:
                                     rejected_reasons["non_positive_duration"] += 1
@@ -1759,6 +1782,7 @@ def _execute_collection(
                                         int(query_state.get("pages_fetched") or 0) * 50
                                         + search_rank
                                     ),
+                                    dataset_source=collection_run.dataset_source,
                                 )
                                 candidates.append(candidate)
                                 candidate_video_ids.add(video_id)
@@ -1898,7 +1922,7 @@ def collect_youtube_cc_candidates(
     candidate_path: str | Path,
     review_path: str | Path,
     manifest_path: str | Path,
-    dataset_version: str = DEFAULT_YOUTUBE_CC_DATASET_VERSION,
+    dataset_version: str = DEFAULT_YOUTUBE_PUBLIC_DATASET_VERSION,
     leaf_keys: Sequence[str] = ACTIVE_LEAF_KEYS,
     target_per_leaf: int = 50,
     performance_target_per_leaf: int | None = None,
@@ -1957,6 +1981,7 @@ def collect_youtube_cc_candidates(
         )
     run_config = {
         "schema_version": COLLECTION_SCHEMA_VERSION,
+        "license_policy": "public_youtube_license_recorded_v1",
         "dataset_version": dataset_version,
         "leaf_keys": normalized_leaves,
         "target_per_leaf": target_per_leaf,
@@ -1999,7 +2024,7 @@ def collect_youtube_cc_candidates(
     run_key = _sha256_text(_canonical_json(run_config))
     collection_run = DatasetCollectionRun(
         run_key=run_key,
-        dataset_source=YOUTUBE_CC_DATASET_SOURCE,
+        dataset_source=YOUTUBE_PUBLIC_DATASET_SOURCE,
         dataset_version=dataset_version,
         status="running",
         region_code=region_code.upper(),
@@ -2070,8 +2095,8 @@ def resume_youtube_cc_collection(
     collection_run = db.get(DatasetCollectionRun, collection_run_id)
     if collection_run is None:
         raise YouTubeCCDatasetError(f"Collection run {collection_run_id} not found")
-    if collection_run.dataset_source != YOUTUBE_CC_DATASET_SOURCE:
-        raise YouTubeCCDatasetError("Only YouTube CC collection runs can be resumed")
+    if collection_run.dataset_source not in SUPPORTED_YOUTUBE_DATASET_SOURCES:
+        raise YouTubeCCDatasetError("Only YouTube dataset collection runs can be resumed")
     review_event_count = (
         db.query(DatasetReviewEvent)
         .filter(DatasetReviewEvent.collection_run_id == collection_run_id)
@@ -2556,8 +2581,13 @@ def import_reviewed_youtube_cc_dataset(
     first_candidate = next(iter(candidates.values()))
     run_key = str(first_candidate.get("run_key") or "")
     dataset_version = str(first_candidate.get("dataset_version") or "")
+    dataset_source = str(
+        first_candidate.get("dataset_source") or YOUTUBE_PUBLIC_DATASET_SOURCE
+    )
     if not run_key or not dataset_version:
         raise YouTubeCCDatasetError("Candidate artifact has no run or dataset version")
+    if dataset_source not in SUPPORTED_YOUTUBE_DATASET_SOURCES:
+        raise YouTubeCCDatasetError("Candidate artifact has an unsupported dataset source")
 
     collection_run = (
         db.query(DatasetCollectionRun)
@@ -2567,7 +2597,7 @@ def import_reviewed_youtube_cc_dataset(
     if collection_run is None:
         collection_run = DatasetCollectionRun(
             run_key=run_key,
-            dataset_source=YOUTUBE_CC_DATASET_SOURCE,
+            dataset_source=dataset_source,
             dataset_version=dataset_version,
             status="collected",
             region_code=str(first_candidate.get("region_code") or "TH"),
@@ -2647,10 +2677,10 @@ def import_reviewed_youtube_cc_dataset(
                     + ", ".join(ACCEPTED_TRANSCRIPT_QUALITIES)
                 )
                 continue
-            if candidate.get("youtube_license_code") != "creativeCommon":
-                errors.append(f"row {row_number}: license is not Creative Commons")
+            if candidate.get("youtube_license_code") not in SUPPORTED_YOUTUBE_LICENSE_CODES:
+                errors.append(f"row {row_number}: YouTube license metadata is missing")
                 continue
-            if candidate.get("transcript_source") != YOUTUBE_CC_TRANSCRIPT_SOURCE:
+            if candidate.get("transcript_source") not in SUPPORTED_TRANSCRIPT_SOURCES:
                 errors.append(f"row {row_number}: transcript source is not accepted")
                 continue
             if candidate.get("caption_type") not in SUPPORTED_CAPTION_TYPES:
@@ -2680,7 +2710,10 @@ def import_reviewed_youtube_cc_dataset(
             .first()
         )
         if decision == "reject":
-            if dataset is not None and dataset.dataset_source == YOUTUBE_CC_DATASET_SOURCE:
+            if (
+                dataset is not None
+                and dataset.dataset_source in SUPPORTED_YOUTUBE_DATASET_SOURCES
+            ):
                 dataset.is_active = False
                 dataset.is_training_eligible = False
             db.add(
@@ -2715,7 +2748,10 @@ def import_reviewed_youtube_cc_dataset(
                 f"row {row_number}: transcript duplicates dataset {duplicate_transcript.dataset_id}"
             )
             continue
-        if dataset is not None and dataset.dataset_source != YOUTUBE_CC_DATASET_SOURCE:
+        if (
+            dataset is not None
+            and dataset.dataset_source not in SUPPORTED_YOUTUBE_DATASET_SOURCES
+        ):
             errors.append(
                 f"row {row_number}: YouTube ID already belongs to {dataset.dataset_source}"
             )
@@ -2723,6 +2759,9 @@ def import_reviewed_youtube_cc_dataset(
 
         split, creator_group_key = _split_for_channel(str(candidate.get("channel_id") or ""))
         path = taxonomy_path(reviewed_leaf)
+        license_name, license_url = youtube_license_metadata(
+            str(candidate.get("youtube_license_code") or "")
+        )
         raw_metadata = dict(candidate.get("raw_metadata") or {})
         raw_metadata["collection"] = {
             "strategy": str(candidate.get("collection_strategy") or ""),
@@ -2755,7 +2794,7 @@ def import_reviewed_youtube_cc_dataset(
             "transcript": str(candidate.get("transcript") or ""),
             "category": reviewed_leaf,
             "source_platform": "youtube",
-            "dataset_source": YOUTUBE_CC_DATASET_SOURCE,
+            "dataset_source": collection_run.dataset_source,
             "dataset_version": dataset_version,
             "collection_run_id": collection_run.collection_run_id,
             "source_record_id": video_id,
@@ -2778,8 +2817,8 @@ def import_reviewed_youtube_cc_dataset(
             "language": str(candidate.get("transcript_language") or ""),
             "verification_status": YOUTUBE_CC_VERIFICATION_STATUS,
             "label_source": YOUTUBE_CC_LABEL_SOURCE,
-            "license_name": YOUTUBE_CC_LICENSE_NAME,
-            "license_url": YOUTUBE_CC_LICENSE_URL,
+            "license_name": license_name,
+            "license_url": license_url,
             "data_split": split,
             "split_strategy": SPLIT_STRATEGY,
             "creator_group_key": creator_group_key,
@@ -2792,7 +2831,7 @@ def import_reviewed_youtube_cc_dataset(
                 or candidate.get("duration_seconds")
                 or TRANSCRIPT_WINDOW_SECONDS
             ),
-            "transcript_source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+            "transcript_source": str(candidate.get("transcript_source") or ""),
             "transcript_acquisition_method": str(
                 candidate.get("transcript_acquisition_method")
                 or YOUTUBE_TRANSCRIPT_API_ACQUISITION
@@ -2901,7 +2940,7 @@ def import_reviewed_youtube_cc_dataset(
     return {
         "status": "success",
         "run_key": run_key,
-        "dataset_source": YOUTUBE_CC_DATASET_SOURCE,
+        "dataset_source": collection_run.dataset_source,
         "dataset_version": dataset_version,
         "taxonomy_version": TAXONOMY_VERSION,
         "candidate_artifact_sha256": candidate_file_sha256,
@@ -2985,7 +3024,7 @@ def create_notebooklm_transcript_candidate(
     caption_type: str = "unspecified",
     collection_strategy: str = CLASSIFICATION_DIVERSE_STRATEGY,
     collection_run_id: int | None = None,
-    dataset_version: str = DEFAULT_YOUTUBE_CC_DATASET_VERSION,
+    dataset_version: str = DEFAULT_YOUTUBE_PUBLIC_DATASET_VERSION,
     region_code: str = "TH",
     timeout_seconds: float = 10.0,
     youtube_getter: Callable[..., dict[str, Any]] = _youtube_get,
@@ -3023,15 +3062,12 @@ def create_notebooklm_transcript_candidate(
     snippet = item.get("snippet") or {}
     content_details = item.get("contentDetails") or {}
     status = item.get("status") or {}
-    if str(status.get("license") or "") != "creativeCommon":
-        raise YouTubeCCDatasetError(
-            "The video is not licensed as YouTube Creative Commons"
-        )
+    youtube_license_code = str(status.get("license") or "").strip()
+    if youtube_license_code not in SUPPORTED_YOUTUBE_LICENSE_CODES:
+        raise YouTubeCCDatasetError("YouTube license metadata is unavailable")
     privacy_status = str(status.get("privacyStatus") or "public")
     if privacy_status != "public":
         raise YouTubeCCDatasetError("The YouTube video must be public")
-    if str(content_details.get("caption") or "").lower() != "true":
-        raise YouTubeCCDatasetError("The YouTube video has no public captions")
     if str(snippet.get("liveBroadcastContent") or "none") != "none":
         raise YouTubeCCDatasetError("Live broadcasts cannot enter the training dataset")
     duration_seconds = parse_iso8601_duration(
@@ -3062,6 +3098,8 @@ def create_notebooklm_transcript_candidate(
             raise YouTubeCCDatasetError(
                 "The selected collection run is not a NotebookLM import batch"
             )
+        if collection_run.dataset_source not in SUPPORTED_YOUTUBE_DATASET_SOURCES:
+            raise YouTubeCCDatasetError("The selected batch is not a YouTube dataset")
         has_reviews = (
             db.query(DatasetReviewEvent.review_event_id)
             .filter(
@@ -3075,6 +3113,11 @@ def create_notebooklm_transcript_candidate(
             raise YouTubeCCDatasetError(
                 "This batch already has review decisions; start a new batch"
             )
+        if (
+            collection_run.dataset_source == YOUTUBE_CC_DATASET_SOURCE
+            and youtube_license_code != "creativeCommon"
+        ):
+            collection_run.dataset_source = YOUTUBE_PUBLIC_DATASET_SOURCE
         candidates = list(
             _load_candidates(
                 _candidate_artifact_for_run(collection_run),
@@ -3129,6 +3172,8 @@ def create_notebooklm_transcript_candidate(
         run_config = {
             "schema_version": COLLECTION_SCHEMA_VERSION,
             "collection_method": NOTEBOOKLM_COLLECTION_METHOD,
+            "license_policy": "public_youtube_license_recorded_v1",
+            "usage_policy": "academic_research_no_dataset_redistribution_v1",
             "transcript_scope": TRANSCRIPT_SCOPE_FULL_VIDEO,
             "transcript_timestamps_available": False,
             "leaf_keys": [leaf_key],
@@ -3143,7 +3188,7 @@ def create_notebooklm_transcript_candidate(
         }
         collection_run = DatasetCollectionRun(
             run_key=run_key,
-            dataset_source=YOUTUBE_CC_DATASET_SOURCE,
+            dataset_source=YOUTUBE_PUBLIC_DATASET_SOURCE,
             dataset_version=dataset_version,
             status="running",
             region_code=region_code,
@@ -3166,7 +3211,7 @@ def create_notebooklm_transcript_candidate(
         transcript={
             "language": language,
             "caption_type": normalized_caption_type,
-            "transcript_source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+            "transcript_source": NOTEBOOKLM_TRANSCRIPT_SOURCE,
             "transcript_acquisition_method": NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
             "transcript_scope": TRANSCRIPT_SCOPE_FULL_VIDEO,
             "transcript_timestamps_available": False,
@@ -3193,14 +3238,21 @@ def create_notebooklm_transcript_candidate(
         collection_strategy=collection_strategy,
         search_order="manual_selection",
         search_rank=len(candidates) + 1,
+        dataset_source=collection_run.dataset_source,
     )
     raw_metadata = dict(candidate.get("raw_metadata") or {})
     raw_metadata["transcript_provenance"] = {
-        "source": YOUTUBE_CC_TRANSCRIPT_SOURCE,
+        "source": NOTEBOOKLM_TRANSCRIPT_SOURCE,
         "acquisition_method": NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
         "scope": TRANSCRIPT_SCOPE_FULL_VIDEO,
         "timestamps_available": False,
         "submitted_at": _iso_z(collected_at),
+    }
+    raw_metadata["dataset_usage_policy"] = {
+        "purpose": "academic_research_and_coursework",
+        "dataset_redistribution_allowed": False,
+        "source_media_redistributed": False,
+        "human_review_required": True,
     }
     candidate["raw_metadata"] = raw_metadata
     candidate["candidate_sha256"] = _candidate_hash(candidate)
@@ -3328,6 +3380,17 @@ def _serialize_review_candidate(
         "title": str(candidate.get("title") or "Untitled"),
         "video_url": str(candidate.get("video_url") or ""),
         "channel_title": str(candidate.get("channel_title") or "Unknown channel"),
+        "youtube_license_code": str(candidate.get("youtube_license_code") or ""),
+        "license_name": str(candidate.get("license_name") or "Unknown YouTube License"),
+        "public_captions_available": bool(
+            str(
+                ((candidate.get("raw_metadata") or {}).get("contentDetails") or {}).get(
+                    "caption"
+                )
+                or "false"
+            ).lower()
+            == "true"
+        ),
         "proposed_leaf_key": normalize_taxonomy_leaf(
             candidate.get("proposed_leaf_key")
         ),
@@ -3353,14 +3416,22 @@ def _serialize_review_candidate(
         "transcript_preview": transcript[:700],
         "evidence_terms": _candidate_evidence_terms(candidate),
         "automated_checks": {
-            "creative_commons": candidate.get("youtube_license_code") == "creativeCommon",
+            "public_video": str(
+                ((candidate.get("raw_metadata") or {}).get("status") or {}).get(
+                    "privacyStatus"
+                )
+                or "public"
+            )
+            == "public",
+            "source_license_recorded": candidate.get("youtube_license_code")
+            in SUPPORTED_YOUTUBE_LICENSE_CODES,
             "source_duration_present": duration_seconds > 0,
             "transcript_covers_valid_duration": (
                 0 < float(candidate.get("transcript_end_seconds") or 0.0)
                 <= duration_seconds
             ),
-            "public_transcript": candidate.get("transcript_source")
-            == YOUTUBE_CC_TRANSCRIPT_SOURCE,
+            "transcript_provenance_recorded": candidate.get("transcript_source")
+            in SUPPORTED_TRANSCRIPT_SOURCES,
             "supported_language": candidate.get("transcript_language")
             in SUPPORTED_TRANSCRIPT_LANGUAGES,
             "supported_caption": candidate.get("caption_type")
@@ -3414,7 +3485,11 @@ def list_youtube_cc_review_queue(
 ) -> dict[str, Any]:
     query = (
         db.query(DatasetCollectionRun)
-        .filter(DatasetCollectionRun.dataset_source == YOUTUBE_CC_DATASET_SOURCE)
+        .filter(
+            DatasetCollectionRun.dataset_source.in_(
+                SUPPORTED_YOUTUBE_DATASET_SOURCES
+            )
+        )
         .order_by(DatasetCollectionRun.collection_run_id.desc())
     )
     if collection_run_id is not None:

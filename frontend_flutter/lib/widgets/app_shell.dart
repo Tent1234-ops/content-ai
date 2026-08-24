@@ -84,13 +84,6 @@ class AppShell extends StatelessWidget {
                 ),
               if (isAdmin)
                 ListTile(
-                  leading: const Icon(Icons.bubble_chart_outlined),
-                  title: const Text('Cluster Runs'),
-                  selected: currentRoute == '/admin-clusters',
-                  onTap: () => _navigate(context, '/admin-clusters'),
-                ),
-              if (isAdmin)
-                ListTile(
                   leading: const Icon(Icons.receipt_long_outlined),
                   title: const Text('System Logs'),
                   selected: currentRoute == '/admin-logs',

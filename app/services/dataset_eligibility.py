@@ -14,12 +14,12 @@ from app.services.dataset_contract import (
     PRODUCTION_SPLITS,
     RECOMMENDATION_DURATION_MAX_SECONDS,
     SUPPORTED_CAPTION_TYPES,
+    SUPPORTED_TRANSCRIPT_SOURCES,
     SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS,
     SUPPORTED_TRANSCRIPT_LANGUAGES,
     SUPPORTED_TRANSCRIPT_SCOPES,
-    YOUTUBE_CC_DATASET_SOURCE,
+    SUPPORTED_YOUTUBE_DATASET_SOURCES,
     YOUTUBE_CC_LABEL_SOURCE,
-    YOUTUBE_CC_TRANSCRIPT_SOURCE,
     YOUTUBE_CC_VERIFICATION_STATUS,
 )
 from app.services.taxonomy import ACTIVE_LEAF_KEYS, TAXONOMY_VERSION
@@ -29,7 +29,7 @@ def production_transcript_conditions(*, train_only: bool = False):
     conditions = [
         DatasetContent.is_active.is_(True),
         DatasetContent.is_training_eligible.is_(True),
-        DatasetContent.dataset_source == YOUTUBE_CC_DATASET_SOURCE,
+        DatasetContent.dataset_source.in_(SUPPORTED_YOUTUBE_DATASET_SOURCES),
         DatasetContent.dataset_version != "legacy-v1",
         DatasetContent.taxonomy_version == TAXONOMY_VERSION,
         DatasetContent.taxonomy_leaf_key.in_(ACTIVE_LEAF_KEYS),
@@ -37,7 +37,7 @@ def production_transcript_conditions(*, train_only: bool = False):
         DatasetContent.label_source == YOUTUBE_CC_LABEL_SOURCE,
         DatasetContent.language == PRIMARY_CONTENT_LANGUAGE,
         DatasetContent.source_platform == "youtube",
-        DatasetContent.transcript_source == YOUTUBE_CC_TRANSCRIPT_SOURCE,
+        DatasetContent.transcript_source.in_(SUPPORTED_TRANSCRIPT_SOURCES),
         DatasetContent.transcript_acquisition_method.in_(
             SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS
         ),
@@ -84,7 +84,6 @@ def production_transcript_conditions(*, train_only: bool = False):
         func.length(func.trim(DatasetContent.license_url)) > 0,
         func.length(func.trim(DatasetContent.reviewed_by)) > 0,
         func.length(func.trim(DatasetContent.raw_metadata_json)) > 2,
-        func.lower(func.trim(DatasetContent.license_name)).like("%creative commons%"),
         DatasetContent.transcript_window_seconds > 0,
         DatasetContent.transcript_end_seconds > 0,
         DatasetContent.transcript_end_seconds <= DatasetContent.duration_seconds,
@@ -142,8 +141,10 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
 
     if not value("collection_run_id"):
         errors.append("collection_run_id")
-    if str(value("dataset_source") or "") != YOUTUBE_CC_DATASET_SOURCE:
-        errors.append(f"dataset_source={YOUTUBE_CC_DATASET_SOURCE}")
+    if str(value("dataset_source") or "") not in SUPPORTED_YOUTUBE_DATASET_SOURCES:
+        errors.append(
+            "dataset_source=" + "/".join(SUPPORTED_YOUTUBE_DATASET_SOURCES)
+        )
     if str(value("dataset_version") or "") in {"", "legacy-v1"}:
         errors.append("dataset_version")
     if str(value("taxonomy_version") or "") != TAXONOMY_VERSION:
@@ -158,8 +159,8 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
         errors.append("language")
     if str(value("source_platform") or "") != "youtube":
         errors.append("source_platform=youtube")
-    if str(value("transcript_source") or "") != YOUTUBE_CC_TRANSCRIPT_SOURCE:
-        errors.append(f"transcript_source={YOUTUBE_CC_TRANSCRIPT_SOURCE}")
+    if str(value("transcript_source") or "") not in SUPPORTED_TRANSCRIPT_SOURCES:
+        errors.append("transcript_source")
     if (
         str(value("transcript_acquisition_method") or "")
         not in SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS
@@ -173,7 +174,7 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
         errors.append("transcript_quality")
     if str(value("data_split") or "") not in PRODUCTION_SPLITS:
         errors.append("data_split")
-    if "creative commons" not in str(value("license_name") or "").strip().lower():
+    if not str(value("license_name") or "").strip():
         errors.append("license_name")
     if not str(value("license_url") or "").strip():
         errors.append("license_url")
@@ -207,7 +208,7 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
 
     if errors:
         raise ValueError(
-            "Training-eligible YouTube CC row has invalid or missing provenance: "
+            "Training-eligible YouTube row has invalid or missing provenance: "
             + ", ".join(dict.fromkeys(errors))
         )
 

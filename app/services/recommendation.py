@@ -302,7 +302,7 @@ def _source_label(
             else ""
         )
         return (
-            "Human-reviewed YouTube Creative Commons transcripts "
+            "Human-reviewed public YouTube transcripts "
             f"({sample_size} high-performing clips{pool_label})"
         )
     if source_prefix == "google":
@@ -352,7 +352,7 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
         "dataset_row_ids": profile.get("dataset_row_ids") or [],
         "source_record_ids": profile.get("source_record_ids") or [],
         "keyword_score_explanation": (
-            "Keyword gap uses only human-reviewed YouTube Creative Commons transcripts "
+            "Keyword gap uses only human-reviewed public YouTube transcripts "
             "in the same taxonomy leaf. High-performing examples are selected from real "
             "YouTube statistics using average views per day and engagement rate captured "
             "during collection. Rows are ranked only inside one compatible "
@@ -570,7 +570,7 @@ def build_dataset_profile_for_domain(
         "exemplar_titles": [str(row.title) for row in rows[:5]],
         "dataset_row_ids": [int(row.dataset_id) for row in rows],
         "source_record_ids": [str(row.source_record_id) for row in rows],
-        "source": "youtube_cc_human_verified" if rows else "none",
+        "source": "youtube_public_human_verified" if rows else "none",
         "dataset_sources": sorted({str(row.dataset_source) for row in rows}),
         "dataset_versions": sorted({str(row.dataset_version) for row in rows}),
         "source_platform_counts": dict(platform_counts),
@@ -582,7 +582,11 @@ def build_dataset_profile_for_domain(
             if rows
             else "none"
         ),
-        "license_name": "YouTube Creative Commons Attribution" if rows else "",
+        "license_name": (
+            ", ".join(sorted({str(row.license_name) for row in rows}))
+            if rows
+            else ""
+        ),
         "verification_status": "human_verified" if rows else "",
     }
 

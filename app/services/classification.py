@@ -169,7 +169,7 @@ def _apply_taxonomy_contract(db: Session, result: Dict[str, object]) -> Dict[str
         )
         warning = (
             f"Category '{leaf_key}' has {sample_count}/{MIN_VERIFIED_SAMPLES} human-reviewed "
-            "YouTube CC samples; returning Unknown/Other until the coverage gate passes."
+            "human-reviewed public YouTube samples; returning Unknown/Other until the coverage gate passes."
         )
     elif confidence < MIN_TAXONOMY_CONFIDENCE or top_similarity < MIN_TAXONOMY_SIMILARITY:
         warning = (

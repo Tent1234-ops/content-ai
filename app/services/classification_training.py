@@ -32,7 +32,7 @@ from app.database.models import (
 from app.services.dataset_contract import (
     PRODUCTION_SPLITS,
     SPLIT_STRATEGY,
-    YOUTUBE_CC_DATASET_SOURCE,
+    YOUTUBE_PUBLIC_DATASET_SOURCE,
     channel_dataset_split,
 )
 from app.services.dataset_eligibility import production_transcript_query
@@ -353,7 +353,7 @@ def prepare_classification_dataset(
     report: dict[str, Any] = {
         "status": "ready" if readiness["ready"] else "not_ready",
         "ready": bool(readiness["ready"]),
-        "dataset_source": YOUTUBE_CC_DATASET_SOURCE,
+        "dataset_source": YOUTUBE_PUBLIC_DATASET_SOURCE,
         "dataset_versions": dataset_versions,
         "dataset_fingerprint": fingerprint,
         "taxonomy_version": TAXONOMY_VERSION,
@@ -951,7 +951,7 @@ def train_and_evaluate_classification_models(
                 taxonomy_version=TAXONOMY_VERSION,
                 model_type=str(result["model_type"]),
                 artifact_path=str(artifact_path.resolve()),
-                training_dataset_source=YOUTUBE_CC_DATASET_SOURCE,
+                training_dataset_source=YOUTUBE_PUBLIC_DATASET_SOURCE,
                 training_dataset_version=_dataset_version_for_model(
                     prepared.report
                 ),

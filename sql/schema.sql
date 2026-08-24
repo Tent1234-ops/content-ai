@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS taxonomy_nodes (
 CREATE TABLE IF NOT EXISTS dataset_collection_runs (
   collection_run_id INT AUTO_INCREMENT PRIMARY KEY,
   run_key VARCHAR(64) NOT NULL,
-  dataset_source VARCHAR(100) NOT NULL DEFAULT 'youtube_cc',
+    dataset_source VARCHAR(100) NOT NULL DEFAULT 'youtube_public_research',
   dataset_version VARCHAR(100) NOT NULL,
   status VARCHAR(30) NOT NULL DEFAULT 'running',
   region_code VARCHAR(10) NOT NULL DEFAULT 'TH',

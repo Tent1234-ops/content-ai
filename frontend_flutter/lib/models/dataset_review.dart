@@ -202,6 +202,9 @@ class DatasetReviewCandidate {
     required this.title,
     required this.videoUrl,
     required this.channelTitle,
+    required this.youtubeLicenseCode,
+    required this.licenseName,
+    required this.publicCaptionsAvailable,
     required this.proposedLeafKey,
     required this.transcriptLanguage,
     required this.captionType,
@@ -232,6 +235,9 @@ class DatasetReviewCandidate {
   final String title;
   final String videoUrl;
   final String channelTitle;
+  final String youtubeLicenseCode;
+  final String licenseName;
+  final bool publicCaptionsAvailable;
   final String proposedLeafKey;
   final String transcriptLanguage;
   final String captionType;
@@ -267,6 +273,10 @@ class DatasetReviewCandidate {
       title: json['title']?.toString() ?? '',
       videoUrl: json['video_url']?.toString() ?? '',
       channelTitle: json['channel_title']?.toString() ?? '',
+      youtubeLicenseCode: json['youtube_license_code']?.toString() ?? '',
+      licenseName: json['license_name']?.toString() ?? '',
+      publicCaptionsAvailable:
+          json['public_captions_available'] as bool? ?? false,
       proposedLeafKey: json['proposed_leaf_key']?.toString() ?? '',
       transcriptLanguage: json['transcript_language']?.toString() ?? 'und',
       captionType: json['caption_type']?.toString() ?? 'unknown',

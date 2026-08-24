@@ -4,13 +4,11 @@ class DashboardMetrics {
   const DashboardMetrics({
     required this.totalDatasetContents,
     required this.totalUsers,
-    required this.totalClusterRuns,
     required this.myAnalysisResults,
   });
 
   final int totalDatasetContents;
   final int totalUsers;
-  final int totalClusterRuns;
   final int myAnalysisResults;
 
   factory DashboardMetrics.fromJson(Map<String, dynamic> json) {
@@ -18,7 +16,6 @@ class DashboardMetrics {
       totalDatasetContents:
           (json['total_dataset_contents'] as num?)?.toInt() ?? 0,
       totalUsers: (json['total_users'] as num?)?.toInt() ?? 0,
-      totalClusterRuns: (json['total_cluster_runs'] as num?)?.toInt() ?? 0,
       myAnalysisResults: (json['my_analysis_results'] as num?)?.toInt() ?? 0,
     );
   }
@@ -434,7 +431,6 @@ class DashboardOverview {
       metrics: const DashboardMetrics(
         totalDatasetContents: 0,
         totalUsers: 0,
-        totalClusterRuns: 0,
         myAnalysisResults: 0,
       ),
       platformComparison: const [],

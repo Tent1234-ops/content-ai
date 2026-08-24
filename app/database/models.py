@@ -109,7 +109,9 @@ class DatasetCollectionRun(Base):
 
     collection_run_id = Column(Integer, primary_key=True)
     run_key = Column(String(64), nullable=False, unique=True, index=True)
-    dataset_source = Column(String(100), nullable=False, default="youtube_cc")
+    dataset_source = Column(
+        String(100), nullable=False, default="youtube_public_research"
+    )
     dataset_version = Column(String(100), nullable=False)
     status = Column(String(30), nullable=False, default="running")
     region_code = Column(String(10), nullable=False, default="TH")

@@ -23,7 +23,7 @@ from app.database.migrations import (
 )
 from app.services.dataset_contract import (
     DEFAULT_COLLECTION_LANGUAGES,
-    DEFAULT_YOUTUBE_CC_DATASET_VERSION,
+    DEFAULT_YOUTUBE_PUBLIC_DATASET_VERSION,
 )
 from app.services.taxonomy import ACTIVE_LEAF_KEYS, sync_taxonomy_registry
 from app.services.youtube_cc_dataset import (
@@ -50,13 +50,17 @@ def _csv_values(value: str) -> list[str]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Collect real YouTube Creative Commons videos and public captions. "
+            "Collect real public YouTube videos with public captions for an "
+            "academic, non-redistributed dataset. Both Standard YouTube and "
+            "Creative Commons licenses are recorded. "
             "Source video duration is unrestricted; model text uses the first "
             "300 transcript seconds. The generated review CSV contains no "
             "automatic approvals."
         )
     )
-    parser.add_argument("--dataset-version", default=DEFAULT_YOUTUBE_CC_DATASET_VERSION)
+    parser.add_argument(
+        "--dataset-version", default=DEFAULT_YOUTUBE_PUBLIC_DATASET_VERSION
+    )
     parser.add_argument(
         "--leaves",
         default=",".join(ACTIVE_LEAF_KEYS),
@@ -149,7 +153,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Optional output directory; defaults to data/raw/youtube_cc/<version>",
+        help="Optional output directory; defaults to data/raw/youtube_public/<version>",
     )
     parser.add_argument(
         "--resume-run-id",
@@ -188,10 +192,25 @@ def main() -> int:
         return 1
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S%f")
-    raw_dir = args.output_dir or ROOT / "data" / "raw" / "youtube_cc" / args.dataset_version
+    raw_dir = (
+        args.output_dir
+        or ROOT / "data" / "raw" / "youtube_public" / args.dataset_version
+    )
     candidate_path = raw_dir / f"candidates-{stamp}.jsonl"
-    review_path = ROOT / "data" / "reviews" / "youtube_cc" / args.dataset_version / f"review-{stamp}.csv"
-    manifest_path = ROOT / "data" / "manifests" / f"youtube-cc-{args.dataset_version}-{stamp}.json"
+    review_path = (
+        ROOT
+        / "data"
+        / "reviews"
+        / "youtube_public"
+        / args.dataset_version
+        / f"review-{stamp}.csv"
+    )
+    manifest_path = (
+        ROOT
+        / "data"
+        / "manifests"
+        / f"youtube-public-{args.dataset_version}-{stamp}.json"
+    )
 
     Base.metadata.create_all(bind=engine)
     migrate_phase13_taxonomy_schema(engine)

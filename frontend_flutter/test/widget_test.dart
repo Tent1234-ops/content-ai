@@ -42,22 +42,22 @@ void main() {
 
   test('recommendation evidence keeps dataset lineage', () {
     final evidence = RecommendationEvidence.fromJson({
-      'source': 'youtube_cc_human_verified',
-      'dataset_sources': ['youtube_cc'],
-      'dataset_versions': ['youtube-cc-th-v1'],
+      'source': 'youtube_public_human_verified',
+      'dataset_sources': ['youtube_public_research'],
+      'dataset_versions': ['youtube-public-research-th-v1'],
       'source_record_ids': ['video000001', 'video000002'],
       'data_source_label':
-          'Human-reviewed YouTube Creative Commons transcripts',
+          'Human-reviewed public YouTube transcripts',
       'dataset_sample_size': 2,
       'eligible_pool_size': 5,
       'source_platform_counts': {'youtube': 2},
       'language_counts': {'th': 1, 'en': 1},
       'verification_status': 'human_verified',
-      'license_name': 'YouTube Creative Commons Attribution',
+      'license_name': 'YouTube Standard License',
     });
 
-    expect(evidence.datasetSources, ['youtube_cc']);
-    expect(evidence.datasetVersions, ['youtube-cc-th-v1']);
+    expect(evidence.datasetSources, ['youtube_public_research']);
+    expect(evidence.datasetVersions, ['youtube-public-research-th-v1']);
     expect(evidence.sourceRecordIds.length, 2);
     expect(evidence.eligiblePoolSize, 5);
     expect(evidence.languageCounts, {'th': 1, 'en': 1});
@@ -131,6 +131,8 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Approve'), findsOneWidget);
     expect(find.widgetWithText(OutlinedButton, 'Reject'), findsOneWidget);
     expect(find.text('Phone 0/30'), findsOneWidget);
+    expect(find.text('Review status'), findsNothing);
+    expect(find.text('Collection run'), findsNothing);
   });
 }
 

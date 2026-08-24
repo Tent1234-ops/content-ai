@@ -73,7 +73,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
     _load();
   }
 
-  Future<void> _openEditor([DatasetItem? item]) async {
+  Future<void> _openEditor(DatasetItem item) async {
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => _DatasetEditorDialog(item: item),
@@ -91,11 +91,10 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
       isAdmin: true,
       actions: [
         IconButton(
-          onPressed: () => _openEditor(),
-          icon: const Icon(Icons.add),
-          tooltip: 'Add dataset',
+          onPressed: _load,
+          icon: const Icon(Icons.refresh),
+          tooltip: 'Refresh datasets',
         ),
-        IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
       ],
       child: Column(
         children: [
@@ -103,25 +102,13 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: const InputDecoration(
-                          labelText: 'Search title or transcript',
-                          prefixIcon: Icon(Icons.search),
-                        ),
-                        onSubmitted: (_) => _applyFilters(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    FilledButton.icon(
-                      onPressed: () => _openEditor(),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add'),
-                    ),
-                  ],
+                TextField(
+                  controller: _searchController,
+                  decoration: const InputDecoration(
+                    labelText: 'Search title or transcript',
+                    prefixIcon: Icon(Icons.search),
+                  ),
+                  onSubmitted: (_) => _applyFilters(),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -132,9 +119,12 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                         decoration: const InputDecoration(labelText: 'Source'),
                         items: const [
                           DropdownMenuItem(value: 'all', child: Text('All')),
-                          DropdownMenuItem(value: 'youtube', child: Text('YouTube')),
-                          DropdownMenuItem(value: 'google', child: Text('Google')),
-                          DropdownMenuItem(value: 'tiktok', child: Text('TikTok')),
+                          DropdownMenuItem(
+                              value: 'youtube', child: Text('YouTube')),
+                          DropdownMenuItem(
+                              value: 'google', child: Text('Google')),
+                          DropdownMenuItem(
+                              value: 'tiktok', child: Text('TikTok')),
                         ],
                         onChanged: (value) {
                           if (value == null) return;
@@ -147,9 +137,11 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         initialValue: _category,
-                        decoration: const InputDecoration(labelText: 'Category'),
+                        decoration:
+                            const InputDecoration(labelText: 'Category'),
                         items: _categories
-                            .map((value) => DropdownMenuItem(value: value, child: Text(value)))
+                            .map((value) => DropdownMenuItem(
+                                value: value, child: Text(value)))
                             .toList(),
                         onChanged: (value) {
                           if (value == null) return;
@@ -170,7 +162,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                 : _items.isEmpty
                     ? const EmptyStateView(
                         title: 'No datasets found',
-                        message: 'Add a dataset or adjust filters.',
+                        message: 'No approved datasets match these filters.',
                         icon: Icons.storage_outlined,
                       )
                     : RefreshIndicator(
@@ -187,7 +179,9 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                                 onPrevious: _offset <= 0
                                     ? null
                                     : () {
-                                        setState(() => _offset = (_offset - _limit).clamp(0, _offset));
+                                        setState(() => _offset =
+                                            (_offset - _limit)
+                                                .clamp(0, _offset));
                                         _load();
                                       },
                                 onNext: _offset + _limit >= _total
@@ -230,9 +224,9 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
 }
 
 class _DatasetEditorDialog extends StatefulWidget {
-  const _DatasetEditorDialog({this.item});
+  const _DatasetEditorDialog({required this.item});
 
-  final DatasetItem? item;
+  final DatasetItem item;
 
   @override
   State<_DatasetEditorDialog> createState() => _DatasetEditorDialogState();
@@ -257,16 +251,16 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
   void initState() {
     super.initState();
     final item = widget.item;
-    _title = TextEditingController(text: item?.title ?? '');
-    _url = TextEditingController(text: item?.videoUrl ?? '');
-    _transcript = TextEditingController(text: item?.transcript ?? '');
-    _category = TextEditingController(text: item?.category ?? '');
-    _source = TextEditingController(text: item?.sourcePlatform ?? 'youtube_admin');
-    _views = TextEditingController(text: '${item?.views ?? 0}');
-    _likes = TextEditingController(text: '${item?.likes ?? 0}');
-    _comments = TextEditingController(text: '${item?.comments ?? 0}');
-    _score = TextEditingController(text: '${item?.trendScore ?? 0}');
-    _duration = TextEditingController(text: '${item?.durationSeconds ?? ''}');
+    _title = TextEditingController(text: item.title);
+    _url = TextEditingController(text: item.videoUrl);
+    _transcript = TextEditingController(text: item.transcript);
+    _category = TextEditingController(text: item.category);
+    _source = TextEditingController(text: item.sourcePlatform);
+    _views = TextEditingController(text: '${item.views}');
+    _likes = TextEditingController(text: '${item.likes}');
+    _comments = TextEditingController(text: '${item.comments}');
+    _score = TextEditingController(text: '${item.trendScore}');
+    _duration = TextEditingController(text: '${item.durationSeconds ?? ''}');
   }
 
   @override
@@ -289,14 +283,17 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
     return {
       'title': _title.text.trim(),
       'video_url': _url.text.trim().isEmpty ? null : _url.text.trim(),
-      'transcript': _transcript.text.trim().isEmpty ? null : _transcript.text.trim(),
+      'transcript':
+          _transcript.text.trim().isEmpty ? null : _transcript.text.trim(),
       'category': _category.text.trim().isEmpty ? null : _category.text.trim(),
-      'source_platform': _source.text.trim().isEmpty ? 'youtube_admin' : _source.text.trim(),
+      'source_platform':
+          _source.text.trim().isEmpty ? 'youtube_admin' : _source.text.trim(),
       'views': int.tryParse(_views.text.trim()) ?? 0,
       'likes': int.tryParse(_likes.text.trim()) ?? 0,
       'comments': int.tryParse(_comments.text.trim()) ?? 0,
       'trend_score': double.tryParse(_score.text.trim()) ?? 0,
-      'duration_seconds': durationText.isEmpty ? null : int.tryParse(durationText),
+      'duration_seconds':
+          durationText.isEmpty ? null : int.tryParse(durationText),
     };
   }
 
@@ -310,11 +307,7 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
       _error = null;
     });
     try {
-      if (widget.item == null) {
-        await _repository.createDataset(_payload());
-      } else {
-        await _repository.updateDataset(widget.item!.datasetId, _payload());
-      }
+      await _repository.updateDataset(widget.item.datasetId, _payload());
       if (!mounted) return;
       Navigator.pop(context, true);
     } catch (error) {
@@ -327,9 +320,8 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final isEdit = widget.item != null;
     return AlertDialog(
-      title: Text(isEdit ? 'Edit dataset' : 'Add dataset'),
+      title: const Text('Edit dataset'),
       content: SizedBox(
         width: 640,
         child: SingleChildScrollView(
@@ -339,19 +331,33 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                  child: Text(_error!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error)),
                 ),
-              TextField(controller: _title, decoration: const InputDecoration(labelText: 'Title')),
+              TextField(
+                  controller: _title,
+                  decoration: const InputDecoration(labelText: 'Title')),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: TextField(controller: _source, decoration: const InputDecoration(labelText: 'Source platform'))),
+                  Expanded(
+                      child: TextField(
+                          controller: _source,
+                          decoration: const InputDecoration(
+                              labelText: 'Source platform'))),
                   const SizedBox(width: 10),
-                  Expanded(child: TextField(controller: _category, decoration: const InputDecoration(labelText: 'Category'))),
+                  Expanded(
+                      child: TextField(
+                          controller: _category,
+                          decoration:
+                              const InputDecoration(labelText: 'Category'))),
                 ],
               ),
               const SizedBox(height: 10),
-              TextField(controller: _url, decoration: const InputDecoration(labelText: 'Video URL')),
+              TextField(
+                  controller: _url,
+                  decoration: const InputDecoration(labelText: 'Video URL')),
               const SizedBox(height: 10),
               TextField(
                 controller: _transcript,
@@ -362,19 +368,44 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: TextField(controller: _views, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Views'))),
+                  Expanded(
+                      child: TextField(
+                          controller: _views,
+                          keyboardType: TextInputType.number,
+                          decoration:
+                              const InputDecoration(labelText: 'Views'))),
                   const SizedBox(width: 10),
-                  Expanded(child: TextField(controller: _likes, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Likes'))),
+                  Expanded(
+                      child: TextField(
+                          controller: _likes,
+                          keyboardType: TextInputType.number,
+                          decoration:
+                              const InputDecoration(labelText: 'Likes'))),
                   const SizedBox(width: 10),
-                  Expanded(child: TextField(controller: _comments, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Comments'))),
+                  Expanded(
+                      child: TextField(
+                          controller: _comments,
+                          keyboardType: TextInputType.number,
+                          decoration:
+                              const InputDecoration(labelText: 'Comments'))),
                 ],
               ),
               const SizedBox(height: 10),
               Row(
                 children: [
-                  Expanded(child: TextField(controller: _score, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Trend score'))),
+                  Expanded(
+                      child: TextField(
+                          controller: _score,
+                          keyboardType: TextInputType.number,
+                          decoration:
+                              const InputDecoration(labelText: 'Trend score'))),
                   const SizedBox(width: 10),
-                  Expanded(child: TextField(controller: _duration, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Duration seconds'))),
+                  Expanded(
+                      child: TextField(
+                          controller: _duration,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                              labelText: 'Duration seconds'))),
                 ],
               ),
             ],
@@ -382,11 +413,16 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: _saving ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
+        TextButton(
+            onPressed: _saving ? null : () => Navigator.pop(context, false),
+            child: const Text('Cancel')),
         FilledButton.icon(
           onPressed: _saving ? null : _save,
           icon: _saving
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.save_outlined),
           label: Text(_saving ? 'Saving...' : 'Save'),
         ),

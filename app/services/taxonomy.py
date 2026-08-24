@@ -7,7 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent, TaxonomyNode
-from app.services.dataset_contract import YOUTUBE_CC_DATASET_SOURCE
+from app.services.dataset_contract import YOUTUBE_PUBLIC_DATASET_SOURCE
 
 
 TAXONOMY_VERSION = "content-taxonomy-v1"
@@ -339,7 +339,7 @@ def sync_taxonomy_registry(db: Session) -> Dict[str, int]:
             "is_active": leaf_is_ready if definition.is_trainable else True,
             "is_trainable": definition.is_trainable,
             "minimum_sample_count": definition.minimum_sample_count,
-            "source_dataset": YOUTUBE_CC_DATASET_SOURCE if definition.is_trainable else None,
+            "source_dataset": YOUTUBE_PUBLIC_DATASET_SOURCE if definition.is_trainable else None,
             "source_category": "human_review" if definition.is_trainable else None,
             "source_subcategory": ",".join(definition.collection_queries) or None,
             "mapping_rule": _mapping_rule(definition),
@@ -391,7 +391,7 @@ def taxonomy_coverage(db: Session) -> Dict[str, object]:
                 "category_level_1": path["category_level_1"],
                 "category_level_2": path["category_level_2"],
                 "category_level_3": path["category_level_3"],
-                "source_dataset": YOUTUBE_CC_DATASET_SOURCE,
+                "source_dataset": YOUTUBE_PUBLIC_DATASET_SOURCE,
                 "source_category": "human_review",
                 "source_subcategories": list(definition.collection_queries),
                 "minimum_sample_count": definition.minimum_sample_count,
@@ -402,7 +402,7 @@ def taxonomy_coverage(db: Session) -> Dict[str, object]:
     ready_count = sum(1 for item in leaves if item["ready"])
     return {
         "taxonomy_version": TAXONOMY_VERSION,
-        "source_dataset": YOUTUBE_CC_DATASET_SOURCE,
+        "source_dataset": YOUTUBE_PUBLIC_DATASET_SOURCE,
         "minimum_samples_per_leaf": MIN_VERIFIED_SAMPLES,
         "leaf_count": len(leaves),
         "ready_leaf_count": ready_count,

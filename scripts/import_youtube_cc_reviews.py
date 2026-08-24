@@ -27,7 +27,7 @@ from app.services.youtube_cc_dataset import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Import only human-reviewed YouTube CC transcript candidates."
+        description="Import only human-reviewed public YouTube transcript candidates."
     )
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--reviews", type=Path, required=True)
