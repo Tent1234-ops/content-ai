@@ -2,20 +2,63 @@ import 'common_models.dart';
 
 class DurationRecommendation {
   const DurationRecommendation({
+    required this.recommendedSeconds,
     required this.recommendedRange,
     required this.sampleSize,
     required this.source,
+    required this.evidenceStatus,
+    required this.minimumSampleSize,
+    required this.targetSampleSize,
+    required this.cohort,
+    required this.medianSeconds,
+    required this.percentileLow,
+    required this.percentileHigh,
+    required this.percentileLowSeconds,
+    required this.percentileHighSeconds,
   });
 
+  final int? recommendedSeconds;
   final String recommendedRange;
   final int sampleSize;
   final String source;
+  final String evidenceStatus;
+  final int minimumSampleSize;
+  final int targetSampleSize;
+  final String cohort;
+  final int? medianSeconds;
+  final int percentileLow;
+  final int percentileHigh;
+  final int? percentileLowSeconds;
+  final int? percentileHighSeconds;
+
+  bool get hasSufficientEvidence => evidenceStatus == 'sufficient';
 
   factory DurationRecommendation.fromJson(Map<String, dynamic> json) {
+    final sampleSize = (json['sample_size'] as num?)?.toInt() ?? 0;
+    final minimumSampleSize =
+        (json['minimum_sample_size'] as num?)?.toInt() ?? 10;
+    final recommendedRange =
+        json['recommended_range']?.toString() ?? 'Insufficient evidence';
+    final evidenceStatus = json['evidence_status']?.toString() ??
+        (sampleSize >= minimumSampleSize &&
+                recommendedRange != 'Insufficient evidence'
+            ? 'sufficient'
+            : 'insufficient_evidence');
     return DurationRecommendation(
-      recommendedRange: json['recommended_range']?.toString() ?? '-',
-      sampleSize: (json['sample_size'] as num?)?.toInt() ?? 0,
-      source: json['source']?.toString() ?? '-',
+      recommendedSeconds: (json['recommended_seconds'] as num?)?.toInt(),
+      recommendedRange: recommendedRange,
+      sampleSize: sampleSize,
+      source: json['source']?.toString() ?? 'none',
+      evidenceStatus: evidenceStatus,
+      minimumSampleSize: minimumSampleSize,
+      targetSampleSize: (json['target_sample_size'] as num?)?.toInt() ?? 15,
+      cohort: json['cohort']?.toString() ?? 'upload_compatible_under_5m',
+      medianSeconds: (json['median_seconds'] as num?)?.toInt() ??
+          (json['recommended_seconds'] as num?)?.toInt(),
+      percentileLow: (json['percentile_low'] as num?)?.toInt() ?? 25,
+      percentileHigh: (json['percentile_high'] as num?)?.toInt() ?? 75,
+      percentileLowSeconds: (json['percentile_low_seconds'] as num?)?.toInt(),
+      percentileHighSeconds: (json['percentile_high_seconds'] as num?)?.toInt(),
     );
   }
 }
@@ -133,6 +176,7 @@ class RecommendationResult {
     required this.domain,
     required this.userKeywords,
     required this.contentKeywords,
+    required this.comparableKeywords,
     required this.hookTerms,
     required this.missingKeywords,
     required this.hookKeywords,
@@ -146,6 +190,7 @@ class RecommendationResult {
   final String domain;
   final List<String> userKeywords;
   final List<String> contentKeywords;
+  final List<String> comparableKeywords;
   final List<String> hookTerms;
   final List<KeywordScore> missingKeywords;
   final List<KeywordScore> hookKeywords;
@@ -164,6 +209,10 @@ class RecommendationResult {
       contentKeywords: (json['content_keywords'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
           .toList(),
+      comparableKeywords:
+          (json['comparable_keywords'] as List<dynamic>? ?? const [])
+              .map((item) => item.toString())
+              .toList(),
       hookTerms: (json['hook_terms'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
           .toList(),
@@ -209,6 +258,8 @@ class AnalysisResultViewData {
     required this.fallbackDomain,
     required this.saved,
     required this.raw,
+    this.rawTranscript = '',
+    this.cleanedTranscript = '',
   });
 
   final int? contentId;
@@ -218,20 +269,32 @@ class AnalysisResultViewData {
   final String fallbackDomain;
   final bool saved;
   final Map<String, dynamic> raw;
+  final String rawTranscript;
+  final String cleanedTranscript;
 
   factory AnalysisResultViewData.fromJson(Map<String, dynamic> json) {
     final analysisRoot =
         Map<String, dynamic>.from((json['analysis'] as Map?) ?? const {});
     final analysis = Map<String, dynamic>.from(
         (analysisRoot['analysis'] as Map?) ?? const {});
+    final legacyTranscript = json['transcript']?.toString() ??
+        analysisRoot['transcript']?.toString() ??
+        '';
+    final rawTranscript = json['raw_transcript']?.toString() ??
+        analysisRoot['raw_transcript']?.toString() ??
+        legacyTranscript;
+    final cleanedTranscript = json['cleaned_transcript']?.toString() ??
+        analysisRoot['cleaned_transcript']?.toString() ??
+        legacyTranscript;
     return AnalysisResultViewData(
       contentId: (json['content_id'] as num?)?.toInt(),
       title: json['title']?.toString() ??
           analysis['title']?.toString() ??
           'Result',
-      transcript: json['transcript']?.toString() ??
-          analysisRoot['transcript']?.toString() ??
-          '',
+      transcript:
+          cleanedTranscript.isNotEmpty ? cleanedTranscript : rawTranscript,
+      rawTranscript: rawTranscript,
+      cleanedTranscript: cleanedTranscript,
       recommendation: RecommendationResult.fromJson(
         Map<String, dynamic>.from((json['recommendation'] as Map?) ?? const {}),
       ),
@@ -295,8 +358,16 @@ class RecommendationEvidence {
     required this.licenseName,
     required this.verificationStatus,
     required this.durationSource,
+    required this.durationEvidenceStatus,
     required this.durationSampleSize,
+    required this.durationMinimumSampleSize,
+    required this.durationTargetSampleSize,
+    required this.durationCohort,
     required this.durationSamples,
+    required this.durationDatasetRowIds,
+    required this.durationSourceRecordIds,
+    required this.durationExemplarTitles,
+    required this.durationSelectionRule,
     required this.exemplarTitles,
     required this.keywordScoreExplanation,
     required this.durationExplanation,
@@ -324,8 +395,16 @@ class RecommendationEvidence {
   final String licenseName;
   final String verificationStatus;
   final String durationSource;
+  final String durationEvidenceStatus;
   final int durationSampleSize;
+  final int durationMinimumSampleSize;
+  final int durationTargetSampleSize;
+  final String durationCohort;
   final List<int> durationSamples;
+  final List<int> durationDatasetRowIds;
+  final List<String> durationSourceRecordIds;
+  final List<String> durationExemplarTitles;
+  final String durationSelectionRule;
   final List<String> exemplarTitles;
   final String keywordScoreExplanation;
   final String durationExplanation;
@@ -383,11 +462,34 @@ class RecommendationEvidence {
       licenseName: json['license_name']?.toString() ?? '',
       verificationStatus: json['verification_status']?.toString() ?? '',
       durationSource: json['duration_source']?.toString() ?? '-',
+      durationEvidenceStatus: json['duration_evidence_status']?.toString() ??
+          'insufficient_evidence',
       durationSampleSize: (json['duration_sample_size'] as num?)?.toInt() ?? 0,
+      durationMinimumSampleSize:
+          (json['duration_minimum_sample_size'] as num?)?.toInt() ?? 10,
+      durationTargetSampleSize:
+          (json['duration_target_sample_size'] as num?)?.toInt() ?? 15,
+      durationCohort:
+          json['duration_cohort']?.toString() ?? 'upload_compatible_under_5m',
       durationSamples: (json['duration_samples'] as List<dynamic>? ?? const [])
           .whereType<num>()
           .map((item) => item.toInt())
           .toList(),
+      durationDatasetRowIds:
+          (json['duration_dataset_row_ids'] as List<dynamic>? ?? const [])
+              .whereType<num>()
+              .map((item) => item.toInt())
+              .toList(),
+      durationSourceRecordIds:
+          (json['duration_source_record_ids'] as List<dynamic>? ?? const [])
+              .map((item) => item.toString())
+              .toList(),
+      durationExemplarTitles:
+          (json['duration_exemplar_titles'] as List<dynamic>? ?? const [])
+              .map((item) => item.toString())
+              .toList(),
+      durationSelectionRule:
+          json['duration_selection_rule']?.toString() ?? 'none',
       exemplarTitles: (json['exemplar_titles'] as List<dynamic>? ?? const [])
           .map((item) => item.toString())
           .toList(),

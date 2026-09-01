@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_current_watch_session
@@ -15,6 +15,10 @@ from app.schemas.dashboard import (
 from app.schemas.notifications import NotificationItem
 from app.services.dashboard import build_dashboard_overview, build_dashboard_topic_insights
 from app.services.live_trend_notifications import compare_live_trend_snapshot
+from app.services.live_trend_snapshots import (
+    load_trend_item_detail,
+    load_youtube_category_snapshot,
+)
 from app.services.trending_fetcher import RateLimitedError, trigger_trending_refresh
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -68,7 +72,7 @@ def dashboard_summary(
         trend_limit=trend_limit,
     )
 
-    # Top trends are already limited by requested trend_limit in summary builder.
+    # Compatibility field only. Platform rankings are returned separately below.
     top_trends = summary.get("top_trends", [])
 
     # Recent analyses: latest 3 UserContent entries for user
@@ -136,6 +140,52 @@ def dashboard_live_trends_snapshot(
             for item in result.get("new_notifications", [])
         ],
     }
+
+
+@router.get("/live-trends/youtube/categories")
+def dashboard_youtube_category_snapshots(
+    region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
+    video_category_id: str | None = Query(default=None, max_length=32),
+    trend_limit: int = Query(default=50, ge=1, le=50),
+    _current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return load_youtube_category_snapshot(
+            db,
+            region=region.upper(),
+            category_id=video_category_id,
+            limit=trend_limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/live-trends/items/{trend_key}")
+def dashboard_live_trend_item_detail(
+    trend_key: str = Path(pattern=r"^[0-9a-f]{40}$"),
+    platform: str = Query(pattern="^(youtube|google|tiktok)$"),
+    ranking_scope: str = Query(default="global", min_length=1, max_length=64),
+    category_id: str | None = Query(default=None, max_length=32),
+    history_limit: int = Query(default=12, ge=1, le=24),
+    region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
+    _current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return load_trend_item_detail(
+            db,
+            region=region.upper(),
+            trend_key=trend_key,
+            platform=platform,
+            ranking_scope=ranking_scope,
+            category_id=category_id,
+            history_limit=history_limit,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/refresh", response_model=DashboardRefreshResponse)

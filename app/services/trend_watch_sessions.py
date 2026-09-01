@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.database.models import TrendSnapshotRun, User, UserTrendWatchSession
+from app.services.live_trend_snapshots import GLOBAL_SNAPSHOT_KIND
 
 
 def _latest_baseline_run(db: Session, *, region: str) -> TrendSnapshotRun | None:
@@ -13,6 +14,7 @@ def _latest_baseline_run(db: Session, *, region: str) -> TrendSnapshotRun | None
         db.query(TrendSnapshotRun)
         .filter(
             TrendSnapshotRun.region == region.upper(),
+            TrendSnapshotRun.snapshot_kind == GLOBAL_SNAPSHOT_KIND,
             TrendSnapshotRun.status.in_(("completed", "partial")),
         )
         .order_by(TrendSnapshotRun.run_id.desc())

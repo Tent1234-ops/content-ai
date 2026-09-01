@@ -148,7 +148,6 @@ python -B scripts/collect_youtube_cc_candidates.py `
   --target-per-leaf 50 `
   --performance-per-leaf 15 `
   --min-thai-per-leaf 50 `
-  --max-videos-per-channel-per-leaf 3 `
   --languages th `
   --region TH `
   --max-pages-per-query 1
@@ -157,7 +156,8 @@ python -B scripts/collect_youtube_cc_candidates.py `
 The 50-row target is split into 15 `recommendation_high_performance` candidates
 discovered with `order=viewCount` and 35 `classification_diverse` candidates
 discovered with `order=relevance`. Existing YouTube IDs and transcript hashes in
-both `dataset_contents` and earlier collection artifacts are skipped. Source videos
+both `dataset_contents` and earlier collection artifacts are skipped. Videos from
+the same channel are allowed; collection does not impose a per-channel cap. Sources
 may be longer than 5 minutes; the collector keeps their full duration metadata and
 uses the first 300 transcript seconds for legacy collector candidates. The
 NotebookLM import path below accepts the complete source transcript with no
@@ -224,7 +224,7 @@ rate-limited. Paste a public YouTube URL and the complete source
 transcript displayed by NotebookLM. Do not paste an AI summary or rewritten answer.
 
 The backend verifies current YouTube metadata, public status, recorded license,
-duration, channel diversity, YouTube-ID duplication, and transcript hash duplication
+duration, source channel identity, YouTube-ID duplication, and transcript hash duplication
 before creating a candidate. Public captions are required only for the automatic
 collector, not for a transcript supplied through NotebookLM. The candidate still requires an Admin
 Approve/Reject decision in `/#/admin-dataset-review`; it never enters
@@ -314,6 +314,22 @@ python -B scripts/train_classification_models.py `
   --require-ready
 ```
 
+For a scoped pilot, pass the reviewed leaves explicitly. Training never activates
+a model automatically. After checking the report, activate only a `qualified`
+model. Analyze Clip uses that artifact as its only category decision source and
+returns `Unknown/Other` when no qualified active model is available:
+
+```powershell
+python -B scripts/train_classification_models.py `
+  --leaves phone,camera,laptop `
+  --minimum-samples-per-leaf 30 `
+  --promotion-threshold 0.80 `
+  --model-version three-leaf-pilot-v1 `
+  --require-ready
+
+python -B scripts/activate_classification_model.py --model-id <QUALIFIED_MODEL_ID>
+```
+
 Pipeline เปรียบเทียบ `TF-IDF + Logistic Regression`, `TF-IDF + ComplementNB`
 และ `TF-IDF + SGD Logistic` โดยรายงาน Accuracy, Macro Precision, Macro Recall,
 Macro F1, รายหมวด และ Confusion Matrix แยก validation/test และภาษา
@@ -339,13 +355,60 @@ python -B scripts/train_classification_models.py `
 ตั้ง Active แม้คะแนนเชิงตัวเลขบางค่าจะถึง 0.80 โดย pipeline จะโหลด artifact
 กลับมาทำนายหนึ่งตัวอย่างและบันทึก `reload_classify_passed` เป็นหลักฐานด้วย
 
+## Phase 22 Classification Development
+
+Phase 22 ใช้เป้าหมายขั้นต่ำ 80 ตัวอย่างต่อหมวด เป้าหมายแนะนำ 100 ตัวอย่าง
+และอย่างน้อย 10 ช่องต่อหมวด สำหรับ `phone`, `camera`, และ `laptop` ควรเพิ่ม
+hard cases ที่ใช้ภาษาคล้ายกัน โดยเฉพาะรีวิวกล้องมือถือ, gaming laptop และอุปกรณ์เสริม
+ที่ไม่ใช่โทรศัพท์ พร้อมเก็บ out-of-scope ที่ผ่าน human review 30-50 ตัวอย่าง
+
+การ benchmark เปรียบเทียบ 4 แนวทาง:
+
+1. Word/character TF-IDF + Complement Naive Bayes
+2. Word/character TF-IDF + tuned Logistic Regression
+3. Word/character TF-IDF + calibrated Linear SVM
+4. Multilingual sentence embeddings + Logistic Regression
+
+Logistic Regression ทดลอง `C=0.5,1.0,2.0,4.0` ด้วย Grouped CV และบันทึกคะแนน
+ทุก candidate กับค่าที่เลือกไว้ใน report โดยไม่ใช้ `test` holdout ระหว่าง tuning
+
+ระบบใช้ `StratifiedGroupKFold` กับ development pool (`train` + `validation`) โดยใช้
+Channel เป็น group จึงไม่มีคลิปจากช่องเดียวกันอยู่ทั้งฝั่ง train และ validation ของ fold
+เดียวกัน จากนั้น fit โมเดลสุดท้ายด้วย development pool ทั้งหมดและวัดครั้งสุดท้ายกับ
+`test` holdout ที่ไม่เคยใช้เลือกโมเดล รายงานจะมี Accuracy, Macro Precision/Recall/F1,
+Confusion Matrix, per-class recall, confusion pairs และ hard cases ที่ย้อนกลับถึง Dataset row ได้
+
+Multilingual embedding benchmark จะไม่ดาวน์โหลดโมเดลเงียบ ๆ หาก cache ยังไม่มี ระบบจะ
+รายงาน `skipped_unavailable`; ใช้ `--allow-embedding-download` เมื่อตั้งใจให้ดาวน์โหลดจริง
+เมื่อมี cache แล้วระบบจะโหลดจาก local snapshot โดยไม่เรียก Hub ระหว่าง benchmark และหาก
+โมเดลหนึ่งล้ม ระบบจะเก็บผลของโมเดลอื่นต่อโดยระบุ `failed_during_benchmark`
+
+```powershell
+python -B scripts/train_classification_models.py `
+  --leaves phone,camera,laptop `
+  --minimum-samples-per-leaf 30 `
+  --grouped-cv-folds 5 `
+  --promotion-threshold 0.80 `
+  --model-version phase22-three-leaf-v1
+```
+
+คำสั่งข้างบนสร้าง baseline ได้แม้ยังไม่ถึง 80 ตัวอย่าง แต่ promotion gate จะไม่ให้สถานะ
+`qualified` จนกว่า Phase 22 readiness, grouped-CV/test Accuracy, Macro F1, Recall ต่ำสุด
+ของทุกหมวด และ Unknown recall จะผ่านทั้งหมด ใช้
+`--require-phase22-ready` เมื่อต้องการให้คำสั่งคืน exit code 1 หากข้อมูลยังไม่ครบ และใช้
+`--no-phase22-gate` เฉพาะ diagnostic comparison ที่ไม่ใช่โมเดลพร้อมใช้งานจริง
+
+`Unknown/Other` ไม่ถูก fit เป็นคลาสจากข้อมูลปลอม Admin ต้องอนุมัติคลิปนอกขอบเขตเป็น
+Unknown/Other เพื่อสร้าง evaluation-only rows ระบบจึงวัด Unknown recall และ false accept rate
+ได้จริง แถวเหล่านี้ไม่เข้า Classification training, Keyword Gap หรือ Duration Recommendation
+
 ## Analyze Workflow
 
 1. ผู้ใช้อัปโหลดวิดีโอไม่เกิน 5 นาที
 2. Backend สร้าง `job_id`; Flutter polling `/jobs/{job_id}`
 3. Pipeline แยกเสียงและถอดเสียงไทย/อังกฤษด้วย Faster Whisper
 4. สกัด content keywords และ hook keywords
-5. Classification เปรียบเทียบ transcript กับ centroid ของ train transcripts ที่ผ่าน human review
+5. Classification ใช้ Active Model จำแนกจาก transcript ทั้งคลิปเพียงแหล่งเดียว
 6. หากหมวดไม่พร้อมหรือ confidence ต่ำ ระบบคืน `Unknown/Other`
 7. Recommendation เลือกคลิปผลงานสูงใน leaf เดียวกัน โดยใช้สถิติจริง ณ เวลา collect
 8. คำนวณ keyword gap และ recommended duration จากแถวที่ใช้จริง
@@ -355,9 +418,22 @@ Classification ใช้ตัวอย่างทุกแถวด้วย�
 Recommendation จึงค่อยเลือก top 40% จาก average views/day และ engagement rate
 เพื่อใช้เป็นหลักฐานของคำแนะนำ
 
+## Recommended Duration Evidence
+
+- Duration comes from YouTube `contentDetails.duration` metadata recorded with each human-reviewed dataset row.
+- The current cohort uses same-category videos up to 300 seconds so its recommendation is compatible with the user upload limit.
+- Fewer than 10 eligible samples returns `Insufficient evidence`; 15 samples per category is the collection target.
+- With sufficient evidence, the result reports the median and the P25-P75 range instead of estimating from one clip.
+- A future dataset version should label content format and calculate separate cohorts for Short-form and general review videos.
+- Legacy analysis rows without an auditable cohort are recalculated from the current verified dataset and never receive a synthetic `+/- 20 seconds` range.
+
 ## Dashboard Workflow
 
 - Background scheduler เก็บ live trends เป็น snapshot ทุก 60 วินาที
+- YouTube เก็บ `chart=mostPopular` แยก 12 `videoCategoryId` สูงสุดหมวดละ 50
+  ทุก 15 นาที และ cache รายชื่อหมวด 24 ชั่วโมง
+- อันดับรวมใช้ `ranking_scope=global`; อันดับรายหมวดใช้ `category:<id>`
+  จึงเปรียบเทียบการขยับอันดับกับ snapshot ก่อนหน้าของหมวดเดียวกันเท่านั้น
 - Endpoint dashboard อ่าน snapshot ล่าสุดจาก DB/cache ไม่ออกอินเทอร์เน็ตระหว่าง request
 - Provider ใดล้ม ระบบยังคืน HTTP 200 พร้อมข้อมูลจาก provider ที่สำเร็จ
 - หลัง login snapshot แรกเป็น baseline; snapshot ถัดไปสร้าง `new_live_trend` notification

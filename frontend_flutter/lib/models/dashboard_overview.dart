@@ -74,14 +74,26 @@ class PlatformComparisonItem {
 
 class DashboardTrendItem {
   const DashboardTrendItem({
+    required this.key,
+    required this.platform,
     required this.title,
     required this.sourcePlatform,
+    required this.channelTitle,
+    required this.thumbnailUrl,
+    required this.description,
+    required this.durationSeconds,
+    required this.searchVolume,
     required this.trendScore,
     required this.category,
+    required this.categoryId,
+    required this.rankingScope,
     required this.videoUrl,
     required this.views,
     required this.likes,
     required this.comments,
+    required this.viewsAvailable,
+    required this.likesAvailable,
+    required this.commentsAvailable,
     required this.publishedAt,
     required this.engagementSignal,
     required this.viewMetricVersion,
@@ -101,14 +113,26 @@ class DashboardTrendItem {
     required this.isNew,
   });
 
+  final String key;
+  final String platform;
   final String title;
   final String sourcePlatform;
+  final String channelTitle;
+  final String thumbnailUrl;
+  final String description;
+  final int? durationSeconds;
+  final int? searchVolume;
   final num trendScore;
   final String category;
+  final String categoryId;
+  final String rankingScope;
   final String videoUrl;
   final int views;
   final int likes;
   final int comments;
+  final bool viewsAvailable;
+  final bool likesAvailable;
+  final bool commentsAvailable;
   final String publishedAt;
   final num engagementSignal;
   final String viewMetricVersion;
@@ -128,17 +152,42 @@ class DashboardTrendItem {
   final bool isNew;
 
   factory DashboardTrendItem.fromJson(Map<String, dynamic> json) {
+    final sourcePlatform = json['source_platform']?.toString() ??
+        json['source']?.toString() ??
+        '-';
+    final platform =
+        json['platform']?.toString() ?? _platformFromSource(sourcePlatform);
+    final trendScore = json['trend_score'] as num? ?? 0;
+    final explicitSearchVolume = (json['search_volume'] as num?)?.toInt();
+    final searchVolume =
+        explicitSearchVolume != null && explicitSearchVolume > 0
+            ? explicitSearchVolume
+            : platform == 'google' && trendScore > 100
+                ? trendScore.round()
+                : null;
     return DashboardTrendItem(
+      key: json['key']?.toString() ?? '',
+      platform: platform,
       title: json['title']?.toString() ?? '-',
-      sourcePlatform: json['source_platform']?.toString() ??
-          json['source']?.toString() ??
-          '-',
-      trendScore: json['trend_score'] as num? ?? 0,
+      sourcePlatform: sourcePlatform,
+      channelTitle: json['channel_title']?.toString() ??
+          json['creator']?.toString() ??
+          '',
+      thumbnailUrl: json['thumbnail_url']?.toString() ?? '',
+      description: json['description']?.toString() ?? '',
+      durationSeconds: (json['duration_seconds'] as num?)?.toInt(),
+      searchVolume: searchVolume,
+      trendScore: trendScore,
       category: json['category']?.toString() ?? '',
+      categoryId: json['category_id']?.toString() ?? '',
+      rankingScope: json['ranking_scope']?.toString() ?? 'global',
       videoUrl: json['video_url']?.toString() ?? '',
       views: (json['views'] as num?)?.toInt() ?? 0,
       likes: (json['likes'] as num?)?.toInt() ?? 0,
       comments: (json['comments'] as num?)?.toInt() ?? 0,
+      viewsAvailable: _metricIsAvailable(json, 'views'),
+      likesAvailable: _metricIsAvailable(json, 'likes'),
+      commentsAvailable: _metricIsAvailable(json, 'comments'),
       publishedAt: json['published_at']?.toString() ?? '',
       engagementSignal: (json['engagement_signal'] as num?) ??
           (json['trend_score'] as num?) ??
@@ -162,6 +211,20 @@ class DashboardTrendItem {
       isNew: json['is_new'] == true,
     );
   }
+}
+
+bool _metricIsAvailable(Map<String, dynamic> json, String metric) {
+  final explicit = json['${metric}_available'];
+  if (explicit is bool) return explicit;
+  return (json[metric] as num? ?? 0) > 0;
+}
+
+String _platformFromSource(String source) {
+  final normalized = source.toLowerCase();
+  if (normalized.contains('youtube')) return 'youtube';
+  if (normalized.contains('google')) return 'google';
+  if (normalized.contains('tiktok')) return 'tiktok';
+  return normalized;
 }
 
 String _statusFromScore(Object? rawScore) {
@@ -342,6 +405,91 @@ class LiveTrendSnapshot {
             ? Map<String, dynamic>.from(platforms['tiktok'] as Map)
             : null,
       ),
+    );
+  }
+}
+
+class YouTubeTrendCategory {
+  const YouTubeTrendCategory({
+    required this.categoryId,
+    required this.title,
+    required this.total,
+    required this.providerStatus,
+    required this.rankingScope,
+    required this.items,
+    required this.hasPreviousSnapshot,
+    this.error,
+  });
+
+  final String categoryId;
+  final String title;
+  final int total;
+  final String providerStatus;
+  final String rankingScope;
+  final List<DashboardTrendItem> items;
+  final bool hasPreviousSnapshot;
+  final String? error;
+
+  factory YouTubeTrendCategory.fromJson(Map<String, dynamic> json) {
+    return YouTubeTrendCategory(
+      categoryId: json['category_id']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      total: (json['total'] as num?)?.toInt() ?? 0,
+      providerStatus: json['provider_status']?.toString() ?? 'pending',
+      rankingScope: json['ranking_scope']?.toString() ?? '',
+      items: (json['items'] as List<dynamic>? ?? const [])
+          .map(
+            (item) => DashboardTrendItem.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList(),
+      hasPreviousSnapshot: json['has_previous_snapshot'] == true,
+      error: json['error']?.toString(),
+    );
+  }
+}
+
+class YouTubeCategoryTrendSnapshot {
+  const YouTubeCategoryTrendSnapshot({
+    required this.runId,
+    required this.snapshotStatus,
+    required this.generatedAt,
+    required this.region,
+    required this.refreshIntervalSeconds,
+    required this.categories,
+    required this.selectedCategory,
+  });
+
+  final int? runId;
+  final String snapshotStatus;
+  final String generatedAt;
+  final String region;
+  final int refreshIntervalSeconds;
+  final List<YouTubeTrendCategory> categories;
+  final YouTubeTrendCategory? selectedCategory;
+
+  factory YouTubeCategoryTrendSnapshot.fromJson(Map<String, dynamic> json) {
+    final rawSelected = json['selected_category'];
+    return YouTubeCategoryTrendSnapshot(
+      runId: (json['run_id'] as num?)?.toInt(),
+      snapshotStatus: json['snapshot_status']?.toString() ?? 'pending',
+      generatedAt: json['generated_at']?.toString() ?? '',
+      region: json['region']?.toString() ?? 'TH',
+      refreshIntervalSeconds:
+          (json['refresh_interval_seconds'] as num?)?.toInt() ?? 900,
+      categories: (json['categories'] as List<dynamic>? ?? const [])
+          .map(
+            (item) => YouTubeTrendCategory.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          )
+          .toList(),
+      selectedCategory: rawSelected is Map
+          ? YouTubeTrendCategory.fromJson(
+              Map<String, dynamic>.from(rawSelected),
+            )
+          : null,
     );
   }
 }

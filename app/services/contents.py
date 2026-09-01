@@ -49,7 +49,9 @@ def serialize_content_history_item(content: UserContent) -> dict[str, Any]:
         "title": content.title,
         "created_at": content.created_at,
         "video_url": content.video_url,
-        "transcript_preview": _preview_text(content.transcript),
+        "transcript_preview": _preview_text(
+            content.cleaned_transcript or content.transcript
+        ),
         "domain": recommendation_summary.get("domain")
         or recommendation_payload.get("domain")
         or analysis_summary.get("ai_analysis", {}).get("analysis", {}).get("domain"),
@@ -82,23 +84,16 @@ def get_user_content_detail(db: Session, *, user_id: int, content_id: int) -> di
         return None
 
     analysis_row = _latest_analysis(content)
-    recommendation_row = _latest_recommendation(content)
     analysis_summary = _parse_json_text(analysis_row.summary if analysis_row else None)
     recommendation_payload = analysis_summary.get("recommendation", {})
-    if not recommendation_payload and recommendation_row is not None:
-        recommendation_payload = _parse_json_text(recommendation_row.recommended_keywords)
-        if recommendation_row.recommended_duration is not None:
-            recommendation_payload["recommended_duration"] = {
-                "recommended_seconds": recommendation_row.recommended_duration,
-                "recommended_range": f"{max(15, recommendation_row.recommended_duration - 20)}-{recommendation_row.recommended_duration + 20} sec",
-                "sample_size": 0,
-                "source": "saved",
-            }
     if not recommendation_payload:
+        # Legacy rows only stored one duration integer, without the evidence cohort
+        # needed to justify it. Rebuild from the current verified dataset instead of
+        # manufacturing a precise-looking +/- 20 second range.
         recommendation_payload = build_recommendation_from_text(
             db,
             title=content.title,
-            text=content.transcript or content.title,
+            text=content.cleaned_transcript or content.transcript or content.title,
             source_prefix="youtube",
             profile_limit=150,
         )
@@ -107,7 +102,9 @@ def get_user_content_detail(db: Session, *, user_id: int, content_id: int) -> di
         "title": content.title,
         "created_at": content.created_at,
         "video_url": content.video_url,
-        "transcript": content.transcript,
+        "transcript": content.cleaned_transcript or content.transcript,
+        "raw_transcript": content.raw_transcript or content.transcript,
+        "cleaned_transcript": content.cleaned_transcript or content.transcript,
         "analysis": analysis_summary.get("ai_analysis", {}),
         "nlp_result": analysis_summary.get("nlp_result", {}),
         "recommendation": recommendation_payload,

@@ -29,7 +29,6 @@ from app.services.taxonomy import ACTIVE_LEAF_KEYS, sync_taxonomy_registry
 from app.services.youtube_cc_dataset import (
     DEFAULT_BLOCKED_RESUME_COOLDOWN_HOURS,
     DEFAULT_MAX_TRANSCRIPT_ATTEMPTS_PER_EXECUTION,
-    DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF,
     DEFAULT_RESUME_COOLDOWN_MINUTES,
     DEFAULT_TRANSCRIPT_DELAY_SECONDS,
     DEFAULT_TRANSCRIPT_JITTER_SECONDS,
@@ -80,12 +79,6 @@ def parse_args() -> argparse.Namespace:
             "Minimum Thai transcripts per leaf; defaults to the full target in "
             "Thai-only mode, or 40%% when multiple languages are selected"
         ),
-    )
-    parser.add_argument(
-        "--max-videos-per-channel-per-leaf",
-        type=int,
-        default=DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF,
-        help="Maximum accepted videos from one channel in one leaf (default: 3)",
     )
     parser.add_argument(
         "--performance-per-leaf",
@@ -251,9 +244,6 @@ def main() -> int:
                 performance_target_per_leaf=args.performance_per_leaf,
                 languages=_csv_values(args.languages),
                 min_thai_per_leaf=args.min_thai_per_leaf,
-                max_videos_per_channel_per_leaf=(
-                    args.max_videos_per_channel_per_leaf
-                ),
                 region_code=args.region,
                 max_pages_per_query=args.max_pages_per_query,
                 timeout_seconds=args.timeout,

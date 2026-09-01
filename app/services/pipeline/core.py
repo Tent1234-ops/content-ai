@@ -171,19 +171,20 @@ def remove_asr_noise(text: str) -> str:
     return normalize_space(cleaned)
 
 
-import difflib
-
 # Optional Thai NLP helpers
 try:
     from pythainlp.tokenize import word_tokenize as pythai_word_tokenize
-    from pythainlp.spell import correct as pythai_correct
 except Exception:
     pythai_word_tokenize = None
-    pythai_correct = None
 
 
 def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
-    # Canonicalize common ASR mistakes before feature extraction.
+    """Normalize only explicitly reviewed ASR terminology.
+
+    ``aggressive`` remains in the signature for compatibility with older
+    callers, but Phase 19 intentionally performs no fuzzy or dictionary-wide
+    spelling correction on the transcript.
+    """
     replacements = {
         "เกรมมิ้ง": "เกมมิ่ง",
         "เกรมมิ่ง": "เกมมิ่ง",
@@ -209,6 +210,16 @@ def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
         "บลูทูธ": "bluetooth",
         "ไรสาย": "ไร้สาย",
         "ชารจ": "ชาร์จ",
+        "แบท": "แบต",
+        "แบตเตอร์รี่": "แบตเตอรี่",
+        "แบตตารี่": "แบตเตอรี่",
+        "ชิพ": "ชิป",
+        "สแนปดรากอน": "snapdragon",
+        "สแนปดราก้อน": "snapdragon",
+        "เดมเซตี": "dimensity",
+        "ไดเมนซิตี้": "dimensity",
+        "อะโมเล็ด": "amoled",
+        "อะโมเลด": "amoled",
         "simgott": "simgot",
         "simgod": "simgot",
         "e g": "eg",
@@ -220,97 +231,6 @@ def normalize_asr_terms(text: str, aggressive: bool = False) -> str:
     normalized = text or ""
     for wrong, right in replacements.items():
         normalized = normalized.replace(wrong, right)
-
-    # Build candidate token set from domain hints + base keywords + brand names
-    candidates = set()
-    for k, v in {**SHARED_DOMAIN_HINTS, **SHARED_DOMAIN_BASE}.items():
-        for item in v:
-            if item:
-                for tok in re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", item.lower()):
-                    candidates.add(tok)
-    # include phrases too
-    for k, v in {**SHARED_DOMAIN_HINTS, **SHARED_DOMAIN_BASE}.items():
-        for item in v:
-            candidates.add(item.lower())
-    # include brand tokens
-    try:
-        # Merge in lexicon from data/lexicon.json if present
-        try:
-            from app.services.lexicon import list_brands
-            lex_brands = list_brands()
-        except Exception:
-            lex_brands = []
-        for b in list(set((BRANDS or []) + lex_brands)):
-            for tok in re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", b.lower()):
-                candidates.add(tok)
-            candidates.add(b.lower())
-    except Exception:
-        pass
-
-    # Fuzzy-correct likely mis-heard tokens against candidates
-    try:
-        cutoff = 0.78 if not aggressive else 0.72
-        tokens = re.findall(r"[\u0E00-\u0E7Fa-z0-9]+", normalized)
-        changed = False
-        for tok in tokens:
-            low = tok.lower()
-            if low in candidates:
-                continue
-            match = difflib.get_close_matches(low, list(candidates), n=1, cutoff=cutoff)
-            if match:
-                normalized = re.sub(rf"(?<![\w-]){re.escape(tok)}(?![\w-])", match[0], normalized, flags=re.IGNORECASE)
-                changed = True
-                continue
-            # Try suffix matching
-            for cand in candidates:
-                if len(cand) < 3:
-                    continue
-                suffix = low[-len(cand):]
-                ratio = difflib.SequenceMatcher(None, suffix, cand).ratio()
-                if ratio >= cutoff:
-                    def _replace_suffix(m):
-                        s = m.group(0)
-                        return s[: -len(suffix)] + cand
-                    normalized = re.sub(rf"(?<![\w-]){re.escape(tok)}(?![\w-])", _replace_suffix, normalized, flags=re.IGNORECASE)
-                    changed = True
-                    break
-        if changed:
-            normalized = normalize_space(normalized)
-    except Exception:
-        pass
-
-    # Dictionary correction is expensive on long ASR phrases and can consume
-    # several gigabytes. Keep it opt-in and tightly bounded for weak audio only.
-    try:
-        spell_enabled = os.getenv(
-            "ANALYZE_ENABLE_THAI_SPELL_CORRECTION",
-            "0",
-        ).strip().lower() in {"1", "true", "yes"}
-        if aggressive and spell_enabled and pythai_word_tokenize and pythai_correct:
-            tokens = pythai_word_tokenize(normalized, keep_whitespace=True)
-            rebuilt = []
-            corrections = {}
-            correction_count = 0
-            for t in tokens:
-                can_correct = (
-                    correction_count < 40
-                    and 2 <= len(t) <= 16
-                    and re.fullmatch(r"[\u0E00-\u0E7F]+", t) is not None
-                )
-                if can_correct:
-                    try:
-                        if t not in corrections:
-                            corrections[t] = pythai_correct(t)
-                            correction_count += 1
-                        corrected = corrections[t]
-                    except Exception:
-                        corrected = t
-                    rebuilt.append(corrected)
-                else:
-                    rebuilt.append(t)
-            normalized = normalize_space("".join(rebuilt))
-    except Exception:
-        pass
 
     return normalize_space(normalized)
 
@@ -694,10 +614,25 @@ def extract_features(text: str) -> Dict[str, object]:
     battery = re.search(r"(\d{1,3})\s*(?:hours|hrs|hour|ชั่วโมง|ชม)\b", low)
     if battery:
         features["battery_hours"] = int(battery.group(1))
-    elif "ไม่ต้องชาร์จ" in low or "ไม่ต้องชารจ" in low:
+    elif any(
+        phrase in low
+        for phrase in [
+            "ไม่ต้องชาร์จ",
+            "ไม่ต้องชารจ",
+            "แบตอึด",
+            "แบตเตอรี่อึด",
+            "ความอึด",
+            "ใช้งานได้ทั้งวัน",
+        ]
+    ):
         features["battery_claim_long"] = True
 
-    battery_mah = re.search(r"(\d{3,5})\s*mah\b", low)
+    battery_mah = re.search(r"(\d{3,5})\s*(?:mah\b|มิลลิแอมป์)", low)
+    if battery_mah is None:
+        battery_mah = re.search(
+            r"(?:battery|แบต(?:เตอรี่)?)\s*(\d{3,5})",
+            low,
+        )
     if battery_mah:
         features["battery_mah"] = int(battery_mah.group(1))
 
@@ -826,27 +761,100 @@ def extract_features(text: str) -> Dict[str, object]:
         features["texture_claim"] = True
 
     # Smartphone signals
-    phone_strong = any(k in low for k in ["smartphone", "iphone", "android phone", "???????????", "review phone"])
+    phone_strong = any(
+        keyword in low
+        for keyword in [
+            "smartphone",
+            "iphone",
+            "android phone",
+            "สมาร์ตโฟน",
+            "โทรศัพท์มือถือ",
+            "มือถือ",
+            "review phone",
+        ]
+    )
     phone_generic = bool(
         re.search(r"\bphone\b", low)
-        or ("??????" in low)
-        or ("?????????" in low)
+        or ("โทรศัพท์" in low)
+        or ("มือถือ" in low)
     )
     if phone_strong:
         features["smartphone_product"] = True
     elif phone_generic:
         features["smartphone_mention"] = True
-    if any(k in low for k in ["camera", "?????", "night mode", "portrait"]):
+    if any(
+        keyword in low
+        for keyword in [
+            "camera",
+            "กล้อง",
+            "ถ่ายรูป",
+            "ถ่ายภาพ",
+            "ภาพ",
+            "เลนส์",
+            "เซนเซอร์",
+            "night mode",
+            "portrait",
+        ]
+    ):
         features["camera_focus"] = True
-    if any(k in low for k in ["snapdragon", "dimensity", "chipset", "???"]):
+    if any(
+        keyword in low
+        for keyword in [
+            "snapdragon",
+            "dimensity",
+            "mediatek",
+            "exynos",
+            "chipset",
+            "chip",
+            "ชิป",
+            "ชิปเซ็ต",
+            "ประมวลผล",
+        ]
+    ):
         features["chip_focus"] = True
-    if any(k in low for k in ["display", "oled", "amoled", "screen", "refresh rate", "??????"]):
+    if any(
+        keyword in low
+        for keyword in [
+            "display",
+            "oled",
+            "amoled",
+            "screen",
+            "refresh rate",
+            "จอ",
+            "หน้าจอ",
+            "ความสว่าง",
+            "นิต",
+        ]
+    ):
         features["display_focus"] = True
-    if any(k in low for k in ["fast charge", "watt", "???????", "?????"]) or re.search(r"\b\d{2,3}\s*w\b", low):
+    if any(
+        keyword in low
+        for keyword in [
+            "fast charge",
+            "watt",
+            "ชาร์จไว",
+            "ชาร์จเร็ว",
+            "วัตต์",
+        ]
+    ) or re.search(r"\b\d{2,3}\s*w\b", low):
         features["charging_focus"] = True
-    if any(k in low for k in ["heat", "thermal", "throttle", "????"]):
+    if any(
+        keyword in low
+        for keyword in [
+            "heat",
+            "thermal",
+            "cooling",
+            "cooler",
+            "throttle",
+            "ระบายความร้อน",
+            "ความร้อน",
+            "เครื่องร้อน",
+            "อุณหภูมิ",
+            "พัดลม",
+        ]
+    ):
         features["thermal_focus"] = True
-    if any(k in low for k in ["stabilization", "ois", "???????"]):
+    if any(k in low for k in ["stabilization", "ois", "กันสั่น"]):
         features["stabilization_focus"] = True
     if features.get("smartphone_mention") and any(
         features.get(k) for k in ["camera_focus", "chip_focus", "display_focus", "charging_focus", "thermal_focus", "stabilization_focus"]
@@ -1530,19 +1538,19 @@ def to_comparable_keyword(domain: str, keyword: str) -> Optional[str]:
             return "texture finish"
 
     if domain == "smartphone":
-        if "camera" in kw:
+        if any(term in kw for term in ["camera", "กล้อง", "ถ่ายภาพ", "ถ่ายรูป", "ภาพ", "เลนส์", "เซนเซอร์"]):
             return "camera quality"
-        if "chip" in kw or "snapdragon" in kw or "dimensity" in kw:
+        if any(term in kw for term in ["chip", "snapdragon", "dimensity", "mediatek", "exynos", "ชิป", "ประมวลผล"]):
             return "chip performance"
-        if "battery" in kw:
+        if any(term in kw for term in ["battery", "แบต", "ความอึด", "มิลลิแอมป์"]):
             return "battery life"
-        if "display" in kw or "oled" in kw or "screen" in kw:
+        if any(term in kw for term in ["display", "oled", "amoled", "screen", "จอ", "ความสว่าง", "นิต"]):
             return "display quality"
-        if "charge" in kw or "watt" in kw:
+        if any(term in kw for term in ["charge", "charging", "watt", "ชาร์จ", "วัตต์"]):
             return "charging speed"
-        if "thermal" in kw or "heat" in kw:
+        if any(term in kw for term in ["thermal", "heat", "cooling", "cooler", "ความร้อน", "ร้อน", "พัดลม"]):
             return "thermal control"
-        if "stabilization" in kw or "ois" in kw:
+        if "stabilization" in kw or "ois" in kw or "กันสั่น" in kw:
             return "stabilization"
         if "build" in kw:
             return "build quality"
@@ -1745,7 +1753,7 @@ def build_comparison_profile(domain: str, features: Dict[str, object], ranked_ke
         "dpi": ["dpi", "8k", "8000"],
         "polling rate": ["hz", "polling"],
         "weight": ["gram", "g ", "lightweight"],
-        "battery life": ["battery", "charge", "hours"],
+        "battery life": ["battery", "แบต", "แบตเตอรี่", "ความอึด", "มิลลิแอมป์", "hours"],
         "wireless": ["wireless", "dongle"],
         "ergonomics": ["ergonomic", "shape", "comfort"],
         "tracking stability": ["line collection", "tracking", "stable"],
@@ -1765,12 +1773,12 @@ def build_comparison_profile(domain: str, features: Dict[str, object], ranked_ke
         "irritation risk": ["fragrance", "alcohol", "irritation", "sensitive skin"],
         "skin compatibility": ["sensitive skin", "skin type", "non-comedogenic"],
         "texture finish": ["texture", "finish", "sticky", "absorb"],
-        "camera quality": ["camera", "photo", "video", "portrait", "night mode"],
-        "chip performance": ["chip", "snapdragon", "dimensity", "benchmark"],
-        "display quality": ["display", "screen", "oled", "amoled", "brightness"],
-        "charging speed": ["fast charge", "watt", "charge"],
-        "thermal control": ["thermal", "heat", "throttle"],
-        "stabilization": ["ois", "stabilization", "shake"],
+        "camera quality": ["camera", "photo", "video", "portrait", "night mode", "กล้อง", "ถ่ายภาพ", "ถ่ายรูป", "ภาพ", "เลนส์", "เซนเซอร์"],
+        "chip performance": ["chip", "snapdragon", "dimensity", "mediatek", "exynos", "benchmark", "ชิป", "ประมวลผล"],
+        "display quality": ["display", "screen", "oled", "amoled", "brightness", "จอ", "หน้าจอ", "ความสว่าง", "นิต"],
+        "charging speed": ["fast charge", "watt", "charge", "ชาร์จไว", "ชาร์จเร็ว", "วัตต์"],
+        "thermal control": ["thermal", "heat", "cooling", "cooler", "throttle", "ระบายความร้อน", "ความร้อน", "ร้อน", "พัดลม"],
+        "stabilization": ["ois", "stabilization", "shake", "กันสั่น"],
         "software support": ["software", "update", "ui"],
         "value for money": ["budget", "value", "price"],
         "taste profile": ["taste", "flavor", "sweet", "salty", "spicy"],
@@ -2322,30 +2330,27 @@ def analyze_video(
     else:
         stt["transcript_source"] = "speech_to_text"
 
+    raw_transcript = transcript
     stt_segments = stt.get("segments") or []
-    hook_transcript = transcript_for_time_window(stt_segments, hook_seconds)
+    hook_raw_transcript = transcript_for_time_window(stt_segments, hook_seconds)
 
-    # Decide whether to use aggressive correction based on segment-level confidence
-    avg_no_speech = stt.get("avg_no_speech_prob")
-    max_no_speech = None
-    try:
-        segments = stt.get("segments") or []
-        max_no_speech = max((s.get("no_speech_prob") for s in segments if s.get("no_speech_prob") is not None), default=None)
-    except Exception:
-        max_no_speech = None
-
-    aggressive = False
-    if avg_no_speech is not None and avg_no_speech > 0.35:
-        aggressive = True
-    if max_no_speech is not None and max_no_speech > 0.5:
-        aggressive = True
-
-    raw = normalize_asr_terms(remove_asr_noise(transcript), aggressive=aggressive)
-    clean = clean_text(raw)
+    cleaned_transcript = clean_text(
+        normalize_asr_terms(
+            remove_asr_noise(raw_transcript),
+            aggressive=False,
+        )
+    )
+    hook_cleaned_transcript = clean_text(
+        normalize_asr_terms(
+            remove_asr_noise(hook_raw_transcript),
+            aggressive=False,
+        )
+    )
+    clean = cleaned_transcript
 
     update_current_job(stage="classifying", progress=55, message="Extracting keywords and content signals")
     visual_text, captions = visual_context(video_path)
-    combined_for_domain = f"{raw} {visual_text}".strip()
+    combined_for_domain = f"{cleaned_transcript} {visual_text}".strip()
 
     domain = detect_domain(combined_for_domain, visual_text)
     product = extract_main_product(combined_for_domain)
@@ -2559,7 +2564,9 @@ def analyze_video(
 
     return convert_numpy(
         {
-            "transcript": transcript,
+            "transcript": raw_transcript,
+            "raw_transcript": raw_transcript,
+            "cleaned_transcript": cleaned_transcript,
             "analysis": {
                 "title": summary,
                 "domain": domain,
@@ -2569,7 +2576,9 @@ def analyze_video(
                 "all_keywords": final_keywords,
                 "entity_keywords": entity_keywords[:5],
                 "context_keywords": context_keywords[:10],
-                "hook_transcript": hook_transcript,
+                "hook_transcript": hook_cleaned_transcript,
+                "hook_raw_transcript": hook_raw_transcript,
+                "hook_cleaned_transcript": hook_cleaned_transcript,
                 "comparison_dimensions": comparison_dimensions,
                 "dimension_status": dimension_status,
                 "recommendation_policy": {
@@ -2597,6 +2606,7 @@ def analyze_video(
                         hook_seconds,
                     ),
                     "transcript_scope": "full_clip",
+                    "transcript_normalization": "explicit_terms_only",
                 },
             },
         }

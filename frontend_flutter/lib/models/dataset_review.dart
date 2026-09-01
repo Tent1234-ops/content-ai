@@ -79,7 +79,6 @@ class DatasetCollectionLeafProgress {
     required this.thaiRemaining,
     required this.uniqueChannels,
     required this.minimumUniqueChannelsExpected,
-    required this.maxVideosPerChannel,
     required this.complete,
   });
 
@@ -92,7 +91,6 @@ class DatasetCollectionLeafProgress {
   final int thaiRemaining;
   final int uniqueChannels;
   final int minimumUniqueChannelsExpected;
-  final int maxVideosPerChannel;
   final bool complete;
 
   factory DatasetCollectionLeafProgress.fromJson(Map<String, dynamic> json) {
@@ -109,8 +107,6 @@ class DatasetCollectionLeafProgress {
       uniqueChannels: (json['unique_channels'] as num?)?.toInt() ?? 0,
       minimumUniqueChannelsExpected:
           (json['minimum_unique_channels_expected'] as num?)?.toInt() ?? 0,
-      maxVideosPerChannel:
-          (json['max_videos_per_channel'] as num?)?.toInt() ?? 0,
       complete: json['complete'] as bool? ?? false,
     );
   }
@@ -178,7 +174,9 @@ class DatasetReviewTaxonomyLeaf {
   final int verifiedSampleCount;
   final bool ready;
 
-  String get path => '$level1 > $level2 > $level3';
+  String get path => [level1, level2, level3]
+      .where((value) => value.trim().isNotEmpty)
+      .join(' > ');
 
   factory DatasetReviewTaxonomyLeaf.fromJson(Map<String, dynamic> json) {
     return DatasetReviewTaxonomyLeaf(
@@ -312,6 +310,35 @@ class DatasetReviewCandidate {
       reviewer: json['reviewer']?.toString(),
       reviewedAt: DateTime.tryParse(json['reviewed_at']?.toString() ?? ''),
       reviewNotes: json['review_notes']?.toString(),
+      datasetId: (json['dataset_id'] as num?)?.toInt(),
+    );
+  }
+}
+
+class DatasetReviewDecisionResult {
+  const DatasetReviewDecisionResult({
+    required this.status,
+    required this.decision,
+    required this.youtubeId,
+    required this.collectionRunId,
+    required this.reviewEventId,
+    this.datasetId,
+  });
+
+  final String status;
+  final String decision;
+  final String youtubeId;
+  final int collectionRunId;
+  final int? reviewEventId;
+  final int? datasetId;
+
+  factory DatasetReviewDecisionResult.fromJson(Map<String, dynamic> json) {
+    return DatasetReviewDecisionResult(
+      status: json['status']?.toString() ?? '',
+      decision: json['decision']?.toString() ?? '',
+      youtubeId: json['source_youtube_id']?.toString() ?? '',
+      collectionRunId: (json['collection_run_id'] as num?)?.toInt() ?? 0,
+      reviewEventId: (json['review_event_id'] as num?)?.toInt(),
       datasetId: (json['dataset_id'] as num?)?.toInt(),
     );
   }

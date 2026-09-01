@@ -7,7 +7,10 @@ from typing import Dict, List, Optional, Tuple
 from app.core.config import settings
 from app.database.db import SessionLocal
 from app.services.jobs import enqueue
-from app.services.live_trend_snapshots import refresh_global_live_trends
+from app.services.live_trend_snapshots import (
+    refresh_global_live_trends,
+    refresh_youtube_category_live_trends,
+)
 from app.services.persistence import log_system_event, save_trending_items
 from app.services.simple_cache import get as cache_get, set as cache_set
 from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_trending
@@ -25,6 +28,7 @@ _last_fetch: Dict[str, datetime] = {}
 _lock = threading.Lock()
 _fetch_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
+_last_category_refresh_monotonic: Optional[float] = None
 
 
 class RateLimitedError(Exception):
@@ -175,6 +179,14 @@ def refresh_global_live_trends_job(
     return result
 
 
+def refresh_youtube_category_live_trends_job() -> Dict[str, object]:
+    return refresh_youtube_category_live_trends(
+        region=settings.youtube_region,
+        limit=settings.youtube_category_trend_limit,
+        category_ids=settings.youtube_trend_category_ids,
+    )
+
+
 def trigger_trending_refresh(
     limit: int | None = None,
     mode: str = "auto",
@@ -206,6 +218,7 @@ def trigger_trending_refresh(
 
 
 def _fetch_loop() -> None:
+    global _last_category_refresh_monotonic
     while not _stop_event.is_set():
         loop_started = time.monotonic()
         try:
@@ -226,16 +239,40 @@ def _fetch_loop() -> None:
                 db.commit()
             finally:
                 db.close()
+        now_monotonic = time.monotonic()
+        category_due = (
+            _last_category_refresh_monotonic is None
+            or now_monotonic - _last_category_refresh_monotonic
+            >= settings.youtube_category_trend_refresh_seconds
+        )
+        if category_due and not _stop_event.is_set():
+            _last_category_refresh_monotonic = now_monotonic
+            try:
+                refresh_youtube_category_live_trends_job()
+            except Exception as exc:
+                db = SessionLocal()
+                try:
+                    log_system_event(
+                        db=db,
+                        user_id=None,
+                        action="youtube_category_trend_fetcher_loop",
+                        status="failed",
+                        detail=str(exc),
+                    )
+                    db.commit()
+                finally:
+                    db.close()
         elapsed = time.monotonic() - loop_started
         wait_seconds = max(1.0, settings.live_trend_refresh_seconds - elapsed)
         _stop_event.wait(wait_seconds)
 
 
 def start_trending_fetcher() -> None:
-    global _fetch_thread
+    global _fetch_thread, _last_category_refresh_monotonic
     if _fetch_thread and _fetch_thread.is_alive():
         return
     _stop_event.clear()
+    _last_category_refresh_monotonic = None
     _fetch_thread = threading.Thread(target=_fetch_loop, daemon=True)
     _fetch_thread.start()
 

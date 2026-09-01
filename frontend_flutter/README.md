@@ -1,6 +1,7 @@
-# Content AI Flutter MVP
+# Content AI Web
 
-Frontend MVP for the existing FastAPI backend.
+Flutter Web frontend for the existing FastAPI backend. Native Android, iOS,
+desktop, and mobile-app targets are outside the project scope.
 
 ## Screens
 
@@ -16,16 +17,10 @@ Default base URL in code:
 
 `http://127.0.0.1:8000`
 
-Use:
-
-- `http://127.0.0.1:8000` for Windows desktop Flutter
-- `10.0.2.2:8000` if you switch back to Android emulator testing
-- your LAN IP for real device testing
-
 ## Run
 
-```bash
+```powershell
 cd frontend_flutter
 flutter pub get
-flutter run
+flutter run -d edge --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```

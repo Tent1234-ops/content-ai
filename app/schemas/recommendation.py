@@ -5,9 +5,35 @@ from pydantic import BaseModel, Field
 from app.schemas.classification import ClassificationResponse
 
 
+class RecommendationKeywordExample(BaseModel):
+    dataset_id: int
+    source_record_id: str = ""
+    title: str
+    video_url: str = ""
+    platform: str = "youtube"
+    frequency: int = 0
+    matched_terms: list[str] = Field(default_factory=list)
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    average_views_per_day: float = 0.0
+    engagement_rate: float = 0.0
+    performance_weight: float = 0.0
+
+
 class RecommendationKeywordItem(BaseModel):
     keyword: str
     score: float
+    support_count: int = 0
+    sample_size: int = 0
+    support_ratio: float = 0.0
+    total_frequency: int = 0
+    matched_terms: list[str] = Field(default_factory=list)
+    supporting_dataset_row_ids: list[int] = Field(default_factory=list)
+    supporting_examples: list[RecommendationKeywordExample] = Field(
+        default_factory=list
+    )
+    score_components: dict[str, float] = Field(default_factory=dict)
 
 
 class RecommendationDimensionItem(BaseModel):
@@ -17,10 +43,19 @@ class RecommendationDimensionItem(BaseModel):
 
 
 class DurationRecommendation(BaseModel):
-    recommended_seconds: int
+    recommended_seconds: Optional[int] = None
     recommended_range: str
     sample_size: int
     source: str
+    evidence_status: str = "insufficient_evidence"
+    minimum_sample_size: int = 10
+    target_sample_size: int = 15
+    cohort: str = "upload_compatible_under_5m"
+    median_seconds: Optional[int] = None
+    percentile_low: int = 25
+    percentile_high: int = 75
+    percentile_low_seconds: Optional[int] = None
+    percentile_high_seconds: Optional[int] = None
 
 
 class DatasetProfileResponseItem(BaseModel):
@@ -29,6 +64,7 @@ class DatasetProfileResponseItem(BaseModel):
     eligible_pool_size: int = 0
     view_metric_version: str = ""
     view_metric_cohort_size: int = 0
+    performance_eligible_pool_size: int = 0
     excluded_incompatible_view_metric_rows: int = 0
     selection_rule: str = "none"
     source: str = "youtube"
@@ -37,6 +73,13 @@ class DatasetProfileResponseItem(BaseModel):
     top_dimensions: list[RecommendationKeywordItem]
     hook_keywords: list[RecommendationKeywordItem]
     recommended_duration: DurationRecommendation
+    duration_samples: list[int] = Field(default_factory=list)
+    duration_metadata_coverage_size: int = 0
+    duration_eligible_pool_size: int = 0
+    duration_dataset_row_ids: list[int] = Field(default_factory=list)
+    duration_source_record_ids: list[str] = Field(default_factory=list)
+    duration_exemplar_titles: list[str] = Field(default_factory=list)
+    duration_selection_rule: str = "none"
     exemplar_titles: list[str]
 
 

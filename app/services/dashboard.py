@@ -305,29 +305,6 @@ def _build_summary_trends(
     return "mock", []
 
 
-def _build_top_trends_summary(items: list[Dict[str, object]], limit: int) -> list[Dict[str, object]]:
-    sorted_items = sorted(
-        items,
-        key=lambda item: (
-            -float(item.get("trend_score", 0.0) or 0.0),
-            -int(item.get("views", 0) or 0),
-            str(item.get("title", "")),
-        ),
-    )
-    return [
-        {
-            "title": item.get("title", ""),
-            "source_platform": item.get("source_platform") or item.get("source") or "unknown",
-            "trend_score": float(item.get("trend_score", 0.0) or 0.0),
-            "video_url": item.get("video_url"),
-            "category": item.get("category"),
-            "published_at": item.get("published_at"),
-            "views": int(item.get("views", 0) or 0),
-        }
-        for item in sorted_items[:limit]
-    ]
-
-
 def _build_quick_recommendations(
     db: Session,
     user_id: int,
@@ -505,7 +482,10 @@ def build_dashboard_summary(
     )
 
     combined_items = youtube_items + google_items + tiktok_items
-    top_trends = _build_top_trends_summary(combined_items, trend_limit)
+    # Kept as an empty compatibility field. Current rankings are exposed only
+    # inside youtube_trends, google_trends, and tiktok_trends because provider
+    # ranks and metrics are not comparable across platforms.
+    top_trends: list[Dict[str, object]] = []
     quick_recommendations = _build_quick_recommendations_from_summary(db, current_user.user_id, combined_items, limit=3)
     recommended_duration = _build_recommended_duration(combined_items)
 

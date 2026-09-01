@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from typing import Dict
 
-from sqlalchemy import inspect, text
+from sqlalchemy import bindparam, inspect, text
 from sqlalchemy.engine import Engine
 
+from app.services.dataset_contract import (
+    SPLIT_STRATEGY,
+    SUPPORTED_YOUTUBE_DATASET_SOURCES,
+    channel_dataset_split,
+)
 from app.services.view_metrics import (
     GOOGLE_INTEREST_V1,
     PROVIDER_NATIVE_V1,
@@ -48,6 +53,11 @@ PHASE13_ANALYSIS_COLUMNS = {
 
 PHASE13_MODEL_METRIC_COLUMNS = {
     "taxonomy_leaf_key": "VARCHAR(100) NOT NULL DEFAULT '__overall__'",
+}
+
+PHASE19_USER_CONTENT_COLUMNS = {
+    "raw_transcript": "LONGTEXT NULL",
+    "cleaned_transcript": "LONGTEXT NULL",
 }
 
 YOUTUBE_CC_DATASET_COLUMNS = {
@@ -111,6 +121,27 @@ VIEW_METRIC_COLUMNS = {
             f"VARCHAR(64) NOT NULL DEFAULT '{UNKNOWN_VIEW_METRIC}'"
         ),
     },
+}
+
+TREND_SCOPE_RUN_COLUMNS = {
+    "snapshot_kind": "VARCHAR(32) NOT NULL DEFAULT 'global'",
+}
+
+TREND_SCOPE_ITEM_COLUMNS = {
+    "ranking_scope": "VARCHAR(64) NOT NULL DEFAULT 'global'",
+    "category_id": "VARCHAR(32) NULL",
+    "provider_rank": "INT NOT NULL DEFAULT 0",
+}
+
+TREND_DETAIL_ITEM_COLUMNS = {
+    "channel_title": "VARCHAR(255) NULL",
+    "thumbnail_url": "VARCHAR(1024) NULL",
+    "description": "TEXT NULL",
+    "duration_seconds": "INT NULL",
+    "views_available": "BOOLEAN NULL",
+    "likes_available": "BOOLEAN NULL",
+    "comments_available": "BOOLEAN NULL",
+    "search_volume": "INT NULL",
 }
 
 
@@ -294,16 +325,90 @@ def migrate_phase13_taxonomy_schema(engine: Engine) -> Dict[str, object]:
     }
 
 
+def migrate_phase19_transcript_schema(engine: Engine) -> Dict[str, object]:
+    """Add auditable raw and cleaned transcripts to saved user analyses."""
+    added_columns: list[str] = []
+    backfilled_rows = 0
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "user_contents" not in set(inspector.get_table_names()):
+            return {
+                "added_columns": added_columns,
+                "backfilled_rows": backfilled_rows,
+            }
+
+        existing = {
+            column["name"] for column in inspector.get_columns("user_contents")
+        }
+        for column_name, mysql_type in PHASE19_USER_CONTENT_COLUMNS.items():
+            if column_name in existing:
+                continue
+            column_type = mysql_type if connection.dialect.name == "mysql" else "TEXT NULL"
+            connection.execute(
+                text(
+                    "ALTER TABLE user_contents "
+                    f"ADD COLUMN {column_name} {column_type}"
+                )
+            )
+            added_columns.append(f"user_contents.{column_name}")
+
+        result = connection.execute(
+            text(
+                "UPDATE user_contents SET "
+                "raw_transcript = CASE "
+                "WHEN raw_transcript IS NULL OR TRIM(raw_transcript) = '' "
+                "THEN transcript ELSE raw_transcript END, "
+                "cleaned_transcript = CASE "
+                "WHEN cleaned_transcript IS NULL OR TRIM(cleaned_transcript) = '' "
+                "THEN transcript ELSE cleaned_transcript END "
+                "WHERE transcript IS NOT NULL AND TRIM(transcript) <> '' "
+                "AND (raw_transcript IS NULL OR TRIM(raw_transcript) = '' "
+                "OR cleaned_transcript IS NULL OR TRIM(cleaned_transcript) = '')"
+            )
+        )
+        backfilled_rows = max(int(result.rowcount or 0), 0)
+
+    return {
+        "added_columns": added_columns,
+        "backfilled_rows": backfilled_rows,
+    }
+
+
 def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
     """Add YouTube provenance fields and disable non-production evidence."""
     added_columns: list[str] = []
     added_indexes: list[str] = []
     added_constraints: list[str] = []
+    widened_columns: list[str] = []
     legacy_rows_deactivated = 0
 
     with engine.begin() as connection:
         inspector = inspect(connection)
         tables = set(inspector.get_table_names())
+
+        if connection.dialect.name == "mysql":
+            for table_name in ("user_contents", "dataset_contents"):
+                if table_name not in tables:
+                    continue
+                transcript_column = next(
+                    (
+                        column
+                        for column in inspector.get_columns(table_name)
+                        if column["name"] == "transcript"
+                    ),
+                    None,
+                )
+                if transcript_column is None:
+                    continue
+                if str(transcript_column["type"]).upper() == "LONGTEXT":
+                    continue
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} "
+                        "MODIFY COLUMN transcript LONGTEXT NULL"
+                    )
+                )
+                widened_columns.append(f"{table_name}.transcript")
 
         if "dataset_collection_runs" in tables:
             run_columns = {
@@ -326,6 +431,7 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
                 "added_columns": added_columns,
                 "added_indexes": added_indexes,
                 "added_constraints": added_constraints,
+                "widened_columns": widened_columns,
                 "legacy_rows_deactivated": legacy_rows_deactivated,
             }
 
@@ -450,6 +556,7 @@ def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
         "added_columns": added_columns,
         "added_indexes": added_indexes,
         "added_constraints": added_constraints,
+        "widened_columns": widened_columns,
         "legacy_rows_deactivated": legacy_rows_deactivated,
     }
 
@@ -585,4 +692,209 @@ def migrate_view_metric_schema(engine: Engine) -> Dict[str, object]:
         "added_columns": added_columns,
         "added_indexes": added_indexes,
         "backfilled_rows": backfilled_rows,
+    }
+
+
+def migrate_trend_scope_schema(engine: Engine) -> Dict[str, object]:
+    """Separate global charts from category-scoped YouTube snapshots."""
+    added_columns: list[str] = []
+    added_indexes: list[str] = []
+    constraint_action = "unchanged"
+    search_volume_backfilled_rows = 0
+
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        table_columns = {
+            "trend_snapshot_runs": TREND_SCOPE_RUN_COLUMNS,
+            "trend_snapshot_items": {
+                **TREND_SCOPE_ITEM_COLUMNS,
+                **TREND_DETAIL_ITEM_COLUMNS,
+            },
+        }
+        for table_name, definitions in table_columns.items():
+            if table_name not in tables:
+                continue
+            existing = {
+                column["name"] for column in inspector.get_columns(table_name)
+            }
+            for column_name, sql_type in definitions.items():
+                if column_name in existing:
+                    continue
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} "
+                        f"ADD COLUMN {column_name} {sql_type}"
+                    )
+                )
+                added_columns.append(f"{table_name}.{column_name}")
+
+        if "trend_snapshot_runs" in tables:
+            connection.execute(
+                text(
+                    "UPDATE trend_snapshot_runs SET snapshot_kind = 'global' "
+                    "WHERE snapshot_kind IS NULL OR snapshot_kind = ''"
+                )
+            )
+        if "trend_snapshot_items" in tables:
+            connection.execute(
+                text(
+                    "UPDATE trend_snapshot_items SET ranking_scope = 'global' "
+                    "WHERE ranking_scope IS NULL OR ranking_scope = ''"
+                )
+            )
+            # Legacy Google snapshots stored provider traffic in trend_score.
+            # Missing-traffic rows used only a rank fallback from 1 to 100, so
+            # values above 100 are safe to recover as approximate volume.
+            cast_type = (
+                "SIGNED"
+                if connection.dialect.name in {"mysql", "mariadb"}
+                else "INTEGER"
+            )
+            result = connection.execute(
+                text(
+                    "UPDATE trend_snapshot_items "
+                    f"SET search_volume = CAST(trend_score AS {cast_type}) "
+                    "WHERE platform = 'google' "
+                    "AND search_volume IS NULL "
+                    "AND trend_score > 100"
+                )
+            )
+            search_volume_backfilled_rows = max(int(result.rowcount or 0), 0)
+
+        inspector = inspect(connection)
+
+        def ensure_index(
+            table_name: str,
+            index_name: str,
+            columns: tuple[str, ...],
+        ) -> None:
+            if table_name not in tables:
+                return
+            names = {
+                str(item.get("name"))
+                for item in inspector.get_indexes(table_name)
+            }
+            if index_name in names:
+                return
+            connection.execute(
+                text(
+                    f"CREATE INDEX {index_name} ON {table_name} "
+                    f"({', '.join(columns)})"
+                )
+            )
+            added_indexes.append(index_name)
+
+        ensure_index(
+            "trend_snapshot_runs",
+            "ix_trend_snapshot_run_kind_region",
+            ("snapshot_kind", "region", "status"),
+        )
+        ensure_index(
+            "trend_snapshot_items",
+            "ix_trend_snapshot_scope_category",
+            ("ranking_scope", "category_id", "provider_rank"),
+        )
+
+        if "trend_snapshot_items" in tables:
+            unique_names = {
+                str(item.get("name"))
+                for item in inspector.get_unique_constraints(
+                    "trend_snapshot_items"
+                )
+            }
+            dialect = connection.dialect.name
+            old_name = "uq_trend_snapshot_item_run_platform_key"
+            new_name = "uq_trend_snapshot_item_run_scope_key"
+            if old_name in unique_names and new_name not in unique_names:
+                if dialect in {"mysql", "mariadb"}:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE trend_snapshot_items "
+                            f"DROP INDEX {old_name}"
+                        )
+                    )
+                elif dialect == "postgresql":
+                    connection.execute(
+                        text(
+                            "ALTER TABLE trend_snapshot_items "
+                            f"DROP CONSTRAINT {old_name}"
+                        )
+                    )
+                else:
+                    old_name = ""
+            if new_name not in unique_names and dialect != "sqlite":
+                connection.execute(
+                    text(
+                        "ALTER TABLE trend_snapshot_items "
+                        f"ADD CONSTRAINT {new_name} UNIQUE "
+                        "(run_id, platform, ranking_scope, trend_key)"
+                    )
+                )
+                constraint_action = "replaced" if old_name else "added"
+
+    return {
+        "added_columns": added_columns,
+        "added_indexes": added_indexes,
+        "unique_constraint": constraint_action,
+        "search_volume_backfilled_rows": search_volume_backfilled_rows,
+    }
+
+
+def migrate_classification_split_strategy(engine: Engine) -> Dict[str, object]:
+    """Reassign reviewed YouTube rows to the current channel-grouped split."""
+    updated_rows = 0
+    skipped_rows = 0
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "dataset_contents" not in set(inspector.get_table_names()):
+            return {
+                "split_strategy": SPLIT_STRATEGY,
+                "updated_rows": 0,
+                "skipped_rows": 0,
+            }
+
+        rows = connection.execute(
+            text(
+                "SELECT dataset_id, source_channel_id, data_split, split_strategy, "
+                "creator_group_key FROM dataset_contents "
+                "WHERE dataset_source IN :dataset_sources "
+                "AND source_channel_id IS NOT NULL "
+                "AND TRIM(source_channel_id) <> ''"
+            ).bindparams(bindparam("dataset_sources", expanding=True)),
+            {"dataset_sources": tuple(SUPPORTED_YOUTUBE_DATASET_SOURCES)},
+        ).mappings()
+        for row in rows:
+            try:
+                split, creator_group_key = channel_dataset_split(
+                    str(row["source_channel_id"])
+                )
+            except ValueError:
+                skipped_rows += 1
+                continue
+            if (
+                str(row["data_split"] or "") == split
+                and str(row["split_strategy"] or "") == SPLIT_STRATEGY
+                and str(row["creator_group_key"] or "") == creator_group_key
+            ):
+                continue
+            connection.execute(
+                text(
+                    "UPDATE dataset_contents SET data_split = :data_split, "
+                    "split_strategy = :split_strategy, creator_group_key = :group_key "
+                    "WHERE dataset_id = :dataset_id"
+                ),
+                {
+                    "data_split": split,
+                    "split_strategy": SPLIT_STRATEGY,
+                    "group_key": creator_group_key,
+                    "dataset_id": int(row["dataset_id"]),
+                },
+            )
+            updated_rows += 1
+
+    return {
+        "split_strategy": SPLIT_STRATEGY,
+        "updated_rows": updated_rows,
+        "skipped_rows": skipped_rows,
     }

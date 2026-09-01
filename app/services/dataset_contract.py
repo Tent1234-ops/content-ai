@@ -46,7 +46,8 @@ PRODUCTION_SPLITS = ("train", "validation", "test")
 TRANSCRIPT_WINDOW_SECONDS = 300
 USER_UPLOAD_MAX_DURATION_SECONDS = 300
 RECOMMENDATION_DURATION_MAX_SECONDS = 300
-SPLIT_STRATEGY = "channel_sha256_bucket_v1_70_15_15"
+SPLIT_STRATEGY = "channel_sha256_bucket_v2_70_15_15"
+SPLIT_HASH_SALT = "content-ai-split-v2:1974"
 
 
 def youtube_license_metadata(license_code: str) -> tuple[str, str]:
@@ -65,7 +66,12 @@ def channel_dataset_split(channel_id: str) -> tuple[str, str]:
     if not normalized_channel_id:
         raise ValueError("channel_id is required for channel-grouped dataset splits")
     creator_group_key = hashlib.sha256(normalized_channel_id.encode("utf-8")).hexdigest()
-    bucket = int(creator_group_key[:8], 16) % 100
+    # The versioned salt freezes a balanced pilot split without exposing channel IDs.
+    # Every video from one channel still lands in exactly one split.
+    split_digest = hashlib.sha256(
+        f"{SPLIT_HASH_SALT}:{normalized_channel_id}".encode("utf-8")
+    ).hexdigest()
+    bucket = int(split_digest[:8], 16) % 100
     if bucket < 70:
         split = "train"
     elif bucket < 85:

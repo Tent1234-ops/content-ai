@@ -1,5 +1,5 @@
-name: content_ai_mobile
-description: MVP Flutter client for Content AI backend
+name: content_ai_web
+description: Flutter Web client for the Content AI backend
 publish_to: "none"
 
 version: 0.1.0+1

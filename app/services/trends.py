@@ -12,6 +12,7 @@ import json5
 
 from app.core.config import settings
 from app.schemas.trends import GoogleTrendItem, TikTokTrendItem, YouTubeCategoryItem, YouTubeTrendItem
+from app.services.simple_cache import get as cache_get, set as cache_set
 
 
 def _compute_trend_score(views: int, likes: int, comments: int) -> float:
@@ -226,7 +227,11 @@ def _mock_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
         },
     ]
     return [
-        GoogleTrendItem(**item, source=f"google_trends_mock_{region.lower()}")
+        GoogleTrendItem(
+            **item,
+            search_volume=_parse_google_traffic(item.get("traffic_text")),
+            source=f"google_trends_mock_{region.lower()}",
+        )
         for item in seed_items[:limit]
     ]
 
@@ -397,6 +402,12 @@ def _live_youtube_categories(region: str) -> List[YouTubeCategoryItem]:
     if not settings.youtube_api_key:
         raise ValueError("Missing YOUTUBE_API_KEY")
 
+    region = region.upper()
+    cache_key = f"youtube_video_categories:{region}"
+    cached = cache_get(cache_key)
+    if isinstance(cached, list) and cached:
+        return cached
+
     params = {
         "part": "snippet",
         "regionCode": region,
@@ -416,11 +427,25 @@ def _live_youtube_categories(region: str) -> List[YouTubeCategoryItem]:
                 assignable=bool(snippet.get("assignable", True)),
             )
         )
+    if items:
+        cache_set(
+            cache_key,
+            items,
+            ttl_seconds=settings.youtube_category_cache_seconds,
+        )
     return items
 
 
-def _live_youtube_trending(region: str, limit: int, video_category_id: Optional[str] = None) -> List[YouTubeTrendItem]:
+def _live_youtube_trending(
+    region: str,
+    limit: int,
+    video_category_id: Optional[str] = None,
+    *,
+    allow_web_fallback: bool = True,
+) -> List[YouTubeTrendItem]:
     if not settings.youtube_api_key:
+        if not allow_web_fallback or video_category_id:
+            raise ValueError("Missing YOUTUBE_API_KEY for category-scoped trends")
         return _live_youtube_trending_web_fallback(region, limit, video_category_id)
 
     try:
@@ -447,19 +472,33 @@ def _live_youtube_trending(region: str, limit: int, video_category_id: Optional[
             likes = int(stats.get("likeCount", 0))
             comments = int(stats.get("commentCount", 0))
             duration_seconds = _parse_iso8601_duration((item.get("contentDetails") or {}).get("duration"))
+            thumbnails = snippet.get("thumbnails") or {}
+            thumbnail_url = next(
+                (
+                    details.get("url")
+                    for size in ("maxres", "standard", "high", "medium", "default")
+                    if isinstance((details := thumbnails.get(size)), dict)
+                    and details.get("url")
+                ),
+                None,
+            )
             items.append(
                 YouTubeTrendItem(
                     title=snippet.get("title", ""),
                     channel_title=snippet.get("channelTitle", ""),
+                    description=snippet.get("description") or None,
                     category=category_map.get(str(snippet.get("categoryId", "")), str(snippet.get("categoryId", ""))),
                     published_at=datetime.fromisoformat(snippet["publishedAt"].replace("Z", "+00:00"))
                     if snippet.get("publishedAt")
                     else None,
                     video_url=f"https://www.youtube.com/watch?v={item.get('id', '')}",
-                    thumbnail_url=((snippet.get("thumbnails") or {}).get("high") or {}).get("url"),
+                    thumbnail_url=thumbnail_url,
                     views=views,
                     likes=likes,
                     comments=comments,
+                    views_available="viewCount" in stats,
+                    likes_available="likeCount" in stats,
+                    comments_available="commentCount" in stats,
                     trend_score=_compute_trend_score(views, likes, comments),
                     duration_seconds=duration_seconds,
                     source="youtube_live",
@@ -467,6 +506,8 @@ def _live_youtube_trending(region: str, limit: int, video_category_id: Optional[
             )
         return items
     except (ValueError, URLError, TimeoutError, json.JSONDecodeError):
+        if not allow_web_fallback or video_category_id:
+            raise
         return _live_youtube_trending_web_fallback(region, limit, video_category_id)
 
 
@@ -524,6 +565,9 @@ def _live_youtube_trending_web_fallback(
                 views=views,
                 likes=0,
                 comments=0,
+                views_available=bool(views_text),
+                likes_available=False,
+                comments_available=False,
                 trend_score=_compute_trend_score(views, 0, 0),
                 duration_seconds=duration_seconds,
                 source="youtube_live",
@@ -571,6 +615,7 @@ def _live_google_trending(region: str, limit: int) -> List[GoogleTrendItem]:
                         likes=0,
                         comments=0,
                         trend_score=float(traffic if traffic is not None else max(limit - index, 1)),
+                        search_volume=traffic,
                         source="google_trends_live",
                         traffic_text=str(traffic) if traffic is not None else None,
                     )
@@ -600,15 +645,27 @@ def get_youtube_trending(
     limit: int,
     mode: str,
     video_category_id: Optional[str] = None,
+    *,
+    allow_web_fallback: bool = True,
 ) -> tuple[str, List[YouTubeTrendItem]]:
     if mode == "mock":
         return "mock", _mock_youtube_trending(region, limit, video_category_id)
 
     if mode == "live":
-        return "live", _live_youtube_trending(region, limit, video_category_id)
+        return "live", _live_youtube_trending(
+            region,
+            limit,
+            video_category_id,
+            allow_web_fallback=allow_web_fallback,
+        )
 
     try:
-        items = _live_youtube_trending(region, limit, video_category_id)
+        items = _live_youtube_trending(
+            region,
+            limit,
+            video_category_id,
+            allow_web_fallback=allow_web_fallback,
+        )
         if items:
             return "live", items
     except (ValueError, URLError, TimeoutError):

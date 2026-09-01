@@ -18,12 +18,18 @@ from app.database.models import (
 )
 from app.services.classification_training import (
     UNKNOWN_LEAF_KEY,
+    ClassificationModelSpec,
+    ClassificationTrainingError,
+    _resolve_sentence_transformer_model_path,
+    activate_classification_model,
     classify_with_artifact,
+    default_classification_model_specs,
     load_classification_artifact,
     predict_with_unknown,
     prepare_classification_dataset,
     train_and_evaluate_classification_models,
 )
+from app.services.classification import classify_text_domain
 from app.services.dataset_contract import (
     SPLIT_STRATEGY,
     YOUTUBE_CC_LICENSE_NAME,
@@ -85,6 +91,7 @@ class ClassificationTrainingTests(unittest.TestCase):
         leaf_terms = {
             "phone": "smartphone mobile battery display camera android phone",
             "camera": "mirrorless camera lens photography sensor aperture camera",
+            "unknown": "phone case charger cable tripod accessory protective cover",
         }
         transcript = " ".join([leaf_terms[leaf_key]] * 8) + f" sample {index}"
         youtube_id = f"{leaf_key}{split[:1]}{index:08d}"[:32]
@@ -138,9 +145,9 @@ class ClassificationTrainingTests(unittest.TestCase):
                 license_verified_at=now,
                 raw_metadata_json=json.dumps({"license": "creativeCommon"}),
                 collection_strategy="classification_diverse",
-                is_training_eligible=True,
-                is_keyword_recommendation_eligible=True,
-                is_duration_recommendation_eligible=True,
+                is_training_eligible=leaf_key != UNKNOWN_LEAF_KEY,
+                is_keyword_recommendation_eligible=leaf_key != UNKNOWN_LEAF_KEY,
+                is_duration_recommendation_eligible=leaf_key != UNKNOWN_LEAF_KEY,
                 is_active=True,
                 duration_seconds=180,
                 published_at=now,
@@ -153,6 +160,16 @@ class ClassificationTrainingTests(unittest.TestCase):
             self._add_example(leaf_key, "train", 1, language="th")
             self._add_example(leaf_key, "validation", 2, language="th")
             self._add_example(leaf_key, "test", 3, language="th")
+        self.db.commit()
+
+    def _seed_covered_two_leaf_dataset(self):
+        for leaf_key in ("phone", "camera"):
+            for index in range(21):
+                self._add_example(leaf_key, "train", index, language="th")
+            for index in range(21, 26):
+                self._add_example(leaf_key, "validation", index, language="th")
+            for index in range(26, 30):
+                self._add_example(leaf_key, "test", index, language="th")
         self.db.commit()
 
     def test_prepare_split_artifacts_group_channels_without_leakage(self):
@@ -181,7 +198,7 @@ class ClassificationTrainingTests(unittest.TestCase):
             self.assertTrue(all(len(splits) == 1 for splits in creator_splits.values()))
             self.assertEqual(
                 prepared.report["unknown_support"]["strategy"],
-                "confidence_rejection",
+                "confidence_rejection_with_out_of_scope_evaluation",
             )
             self.assertFalse(
                 prepared.report["unknown_support"]["uses_synthetic_training_rows"]
@@ -195,6 +212,7 @@ class ClassificationTrainingTests(unittest.TestCase):
                 self.db,
                 artifact_root=temp_dir,
                 model_version="not-ready-v1",
+                embedding_model="phase22/test-model-not-cached",
                 required_leaf_keys=("phone", "camera"),
                 minimum_samples_per_leaf=4,
             )
@@ -210,6 +228,7 @@ class ClassificationTrainingTests(unittest.TestCase):
                 self.db,
                 artifact_root=temp_dir,
                 model_version="smoke-v1",
+                embedding_model="phase22/test-model-not-cached",
                 required_leaf_keys=("phone", "camera"),
                 minimum_samples_per_leaf=30,
                 unknown_threshold=0.10,
@@ -224,6 +243,11 @@ class ClassificationTrainingTests(unittest.TestCase):
             prediction = classify_with_artifact(
                 best["artifact_path"],
                 title="Phone review",
+                text="smartphone battery display camera android mobile",
+            )
+            renamed_prediction = classify_with_artifact(
+                best["artifact_path"],
+                title="1-final-copy.mp4",
                 text="smartphone battery display camera android mobile",
             )
 
@@ -245,6 +269,7 @@ class ClassificationTrainingTests(unittest.TestCase):
             )
         )
         self.assertTrue(prediction["smoke_test_only"])
+        self.assertEqual(prediction, renamed_prediction)
         self.assertIn(prediction["taxonomy_leaf_key"], {"phone", "camera", "unknown"})
         reload_metrics = (
             self.db.query(ModelEvaluationMetric)
@@ -261,10 +286,12 @@ class ClassificationTrainingTests(unittest.TestCase):
                 self.db,
                 artifact_root=temp_dir,
                 model_version="benchmark-v1",
+                embedding_model="phase22/test-model-not-cached",
                 required_leaf_keys=("phone", "camera"),
                 minimum_samples_per_leaf=4,
                 unknown_threshold=0.10,
                 promotion_threshold=0.80,
+                enforce_phase22_gate=False,
             )
             models = self.db.query(ClassificationModel).all()
             metrics = self.db.query(ModelEvaluationMetric).all()
@@ -301,6 +328,89 @@ class ClassificationTrainingTests(unittest.TestCase):
             metric for metric in metrics if metric.metric_name == "confusion_matrix"
         )
         self.assertIn("unknown", json.loads(confusion.details)["labels"])
+        self.assertTrue(
+            all(
+                fold["channel_overlap_count"] == 0
+                for model_result in result["models"]
+                for fold in model_result["grouped_cv"]["folds"]
+            )
+        )
+        self.assertIn("grouped_cv", {metric.dataset_split for metric in metrics})
+        self.assertNotIn("validation", {metric.dataset_split for metric in metrics})
+        self.assertEqual(len(result["model_catalog"]), 4)
+        self.assertEqual(len(result["skipped_models"]), 1)
+        self.assertEqual(
+            result["skipped_models"][0]["model_key"],
+            "taxonomy-multilingual-embeddings-logreg",
+        )
+        logistic_result = next(
+            item
+            for item in result["models"]
+            if item["model_key"] == "taxonomy-tfidf-logreg-tuned"
+        )
+        self.assertIn(
+            logistic_result["tuning"]["selected_parameters"]["C"],
+            {0.5, 1.0, 2.0, 4.0},
+        )
+        self.assertEqual(len(logistic_result["tuning"]["candidates"]), 4)
+        self.assertTrue(
+            all(
+                "grouped_cv_minimum_class_recall"
+                in model_result["qualification"]["checks"]
+                for model_result in result["models"]
+            )
+        )
+
+    def test_cached_embedding_model_resolves_to_a_local_snapshot_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            resolved = _resolve_sentence_transformer_model_path(
+                temp_dir,
+                cache_folder=None,
+                local_files_only=True,
+            )
+
+        self.assertEqual(resolved, str(Path(temp_dir).resolve()))
+
+    def test_one_failed_optional_model_does_not_discard_other_results(self):
+        self._seed_ready_two_leaf_dataset()
+
+        def fail_factory():
+            raise RuntimeError("optional model failed")
+
+        baseline_specs = default_classification_model_specs(
+            embedding_model="phase22/test-model-not-cached"
+        )[:2]
+        specs = (
+            *baseline_specs,
+            ClassificationModelSpec(
+                model_key="optional-failing-model",
+                model_type="test_failure",
+                description="Test-only model failure",
+                factory=fail_factory,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = train_and_evaluate_classification_models(
+                self.db,
+                artifact_root=temp_dir,
+                model_version="partial-success-v1",
+                required_leaf_keys=("phone", "camera"),
+                minimum_samples_per_leaf=4,
+                unknown_threshold=0.10,
+                promotion_threshold=0.10,
+                enforce_phase22_gate=False,
+                model_specs=specs,
+            )
+
+        self.assertEqual(result["database_models_created"], 2)
+        self.assertEqual(self.db.query(ClassificationModel).count(), 2)
+        failed = next(
+            item
+            for item in result["skipped_models"]
+            if item["model_key"] == "optional-failing-model"
+        )
+        self.assertEqual(failed["status"], "failed_during_benchmark")
+        self.assertIn("optional model failed", failed["reason"])
 
     def test_low_confidence_prediction_becomes_unknown(self):
         labels, confidences = predict_with_unknown(
@@ -310,6 +420,114 @@ class ClassificationTrainingTests(unittest.TestCase):
         )
         self.assertEqual(labels, [UNKNOWN_LEAF_KEY, "phone"])
         self.assertEqual(confidences, [0.55, 0.95])
+
+    def test_out_of_scope_rows_are_evaluation_only_and_phase22_gate_blocks(self):
+        self._seed_ready_two_leaf_dataset()
+        self._add_example(UNKNOWN_LEAF_KEY, "test", 99)
+        self.db.commit()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prepared = prepare_classification_dataset(
+                self.db,
+                artifact_root=temp_dir,
+                required_leaf_keys=("phone", "camera"),
+                minimum_samples_per_leaf=4,
+            )
+            result = train_and_evaluate_classification_models(
+                self.db,
+                artifact_root=temp_dir,
+                model_version="phase22-gated-v1",
+                embedding_model="phase22/test-model-not-cached",
+                required_leaf_keys=("phone", "camera"),
+                minimum_samples_per_leaf=4,
+                unknown_threshold=0.60,
+                promotion_threshold=0.10,
+            )
+
+        self.assertEqual(len(prepared.examples), 8)
+        self.assertEqual(len(prepared.out_of_scope_examples), 1)
+        self.assertEqual(
+            prepared.out_of_scope_examples[0].leaf_key,
+            UNKNOWN_LEAF_KEY,
+        )
+        self.assertFalse(prepared.report["phase22_ready"])
+        self.assertEqual(
+            prepared.report["phase22"]["out_of_scope"]["sample_count"],
+            1,
+        )
+        self.assertEqual(
+            prepared.report["artifacts"]["out_of_scope"]["sample_count"],
+            1,
+        )
+        self.assertTrue(
+            all(model["out_of_scope"]["sample_size"] == 1 for model in result["models"])
+        )
+        self.assertTrue(
+            all(
+                model["qualification"]["blocked_reason"]
+                == "phase22_collection_not_ready"
+                for model in result["models"]
+            )
+        )
+        self.assertTrue(
+            all(model["status"] == "evaluated_below_threshold" for model in result["models"])
+        )
+        persisted_splits = {
+            metric.dataset_split
+            for metric in self.db.query(ModelEvaluationMetric).all()
+        }
+        self.assertIn("out_of_scope", persisted_splits)
+
+    def test_qualified_model_can_be_activated_and_used_by_runtime(self):
+        self._seed_covered_two_leaf_dataset()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = train_and_evaluate_classification_models(
+                self.db,
+                artifact_root=temp_dir,
+                model_version="runtime-v1",
+                embedding_model="phase22/test-model-not-cached",
+                required_leaf_keys=("phone", "camera"),
+                minimum_samples_per_leaf=30,
+                unknown_threshold=0.10,
+                promotion_threshold=0.50,
+                enforce_phase22_gate=False,
+            )
+            qualified = next(
+                item for item in result["models"] if item["status"] == "qualified"
+            )
+            activation = activate_classification_model(
+                self.db,
+                int(qualified["model_id"]),
+            )
+            prediction = classify_text_domain(
+                self.db,
+                title="Phone review",
+                text="smartphone mobile battery display android phone",
+            )
+
+        self.assertTrue(activation["is_active"])
+        self.assertEqual(prediction["method"], "trained_tfidf_classifier")
+        self.assertEqual(prediction["model_id"], qualified["model_id"])
+        self.assertEqual(prediction["taxonomy_leaf_key"], "phone")
+        self.assertIn("phone", prediction["candidates"][0]["domain"])
+
+    def test_smoke_test_model_cannot_be_activated(self):
+        self._seed_ready_two_leaf_dataset()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = train_and_evaluate_classification_models(
+                self.db,
+                artifact_root=temp_dir,
+                model_version="blocked-smoke-v1",
+                embedding_model="phase22/test-model-not-cached",
+                required_leaf_keys=("phone", "camera"),
+                minimum_samples_per_leaf=30,
+                unknown_threshold=0.10,
+                smoke_test=True,
+            )
+            with self.assertRaises(ClassificationTrainingError):
+                activate_classification_model(
+                    self.db,
+                    int(result["best_model"]["model_id"]),
+                )
 
 
 if __name__ == "__main__":

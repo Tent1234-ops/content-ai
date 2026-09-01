@@ -16,9 +16,13 @@ from app.services.media_validation import (
     MediaValidationError,
     validate_user_upload_duration,
 )
-from app.services.nlp import run_nlp_pipeline
+from app.services.nlp import normalize_text_for_nlp
 from app.services.persistence import save_video_analysis_result
-from app.services.recommendation import build_recommendation_from_analysis_data
+from app.services.recommendation import (
+    build_classified_user_signal_snapshot,
+    build_recommendation_from_analysis_data,
+)
+from app.services.taxonomy import normalize_taxonomy_leaf
 
 router = APIRouter()
 
@@ -44,59 +48,110 @@ def _save_validated_upload(file: UploadFile) -> str:
 
 def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dict]:
     update_current_job(stage="classifying", progress=62, message="Classifying clip type")
-    transcript = str(result.get("transcript") or "")
-    nlp_result = run_nlp_pipeline(transcript or filename, 10)
-    analysis = result.get("analysis", {})
-    hook_transcript = str(analysis.get("hook_transcript") or "")
-    hook_nlp_result = run_nlp_pipeline(hook_transcript, 10) if hook_transcript else {}
-    hook_terms = [
-        item["keyword"] for item in hook_nlp_result.get("top_keywords", [])
-    ]
-    if not hook_terms:
-        hook_terms = list(hook_nlp_result.get("filtered_tokens", []))[:8]
-    classification = classify_text_domain(
-        db,
-        title=filename,
-        text=transcript or filename,
-        source_prefix="youtube",
-        profile_limit=80,
+    raw_transcript = str(
+        result.get("raw_transcript")
+        or result.get("transcript")
+        or ""
     )
+    cleaned_transcript = str(
+        result.get("cleaned_transcript")
+        or normalize_text_for_nlp(raw_transcript)
+    )
+    result["raw_transcript"] = raw_transcript
+    result["cleaned_transcript"] = cleaned_transcript
+    analysis = result.get("analysis", {})
     stt_meta = analysis.get("stt_meta", {})
     filename_fallback = stt_meta.get("transcript_source") == "fallback_filename"
-    if filename_fallback:
-        classification["confidence"] = min(
-            float(classification.get("confidence", 0.0)),
-            0.25,
+    classification_transcript = "" if filename_fallback else cleaned_transcript
+    hook_transcript = (
+        ""
+        if filename_fallback
+        else str(
+            analysis.get("hook_cleaned_transcript")
+            or analysis.get("hook_transcript")
+            or ""
         )
+    )
+    classification = classify_text_domain(
+        db,
+        title=None,
+        text=classification_transcript,
+        source_prefix="youtube",
+        profile_limit=80,
+        require_active_model=True,
+    )
+    if filename_fallback:
         classification["input_source"] = "filename_fallback"
         classification["warning"] = stt_meta.get("warning") or (
-            "Speech-to-text failed; classification is based only on the filename."
+            "Speech-to-text failed; the filename was not used for classification."
         )
-    selected_domain = str(analysis.get("domain") or "general")
-    if classification.get("is_unknown"):
-        selected_domain = "general"
-    elif float(classification.get("confidence", 0.0)) >= 0.45:
-        selected_domain = str(classification["domain"])
+    selected_domain = normalize_taxonomy_leaf(
+        str(classification.get("taxonomy_leaf_key") or classification.get("domain"))
+    )
+    user_signals = build_classified_user_signal_snapshot(
+        text=classification_transcript,
+        hook_text=hook_transcript,
+        taxonomy_leaf_key=selected_domain,
+        max_keywords=10,
+    )
+    nlp_result = user_signals["nlp_result"]
+    user_keywords = list(user_signals["user_keywords"])
+    hook_terms = list(user_signals["hook_terms"])
 
-    user_keywords = [item["keyword"] for item in analysis.get("top_keywords", [])]
-    if not user_keywords:
-        user_keywords = [item["keyword"] for item in nlp_result.get("top_keywords", [])]
+    for legacy_key in (
+        "product",
+        "features",
+        "entity_keywords",
+        "context_keywords",
+        "analysis_quality",
+    ):
+        analysis.pop(legacy_key, None)
+    analysis["domain"] = selected_domain
+    analysis["domain_source"] = str(classification.get("method") or "unknown")
+    analysis["taxonomy_leaf_key"] = selected_domain
+    analysis["category_level_1"] = classification.get("category_level_1")
+    analysis["category_level_2"] = classification.get("category_level_2")
+    analysis["category_level_3"] = classification.get("category_level_3")
+    analysis["classification_confidence"] = float(
+        classification.get("confidence") or 0.0
+    )
+    analysis["top_keywords"] = list(nlp_result.get("top_keywords", []))
+    analysis["all_keywords"] = list(user_signals["content_keywords"])
+    analysis["content_keywords"] = list(user_signals["content_keywords"])
+    analysis["hook_keywords"] = list(user_signals["hook_terms"])
+    analysis["comparable_keywords"] = list(user_signals["comparable_keywords"])
+    analysis["comparable_keyword_evidence"] = list(
+        user_signals["comparable_keyword_evidence"]
+    )
+    analysis["comparison_dimensions"] = list(
+        user_signals["comparison_dimensions"]
+    )
+    analysis["dimension_status"] = list(user_signals["dimension_status"])
 
     update_current_job(stage="recommending", progress=76, message="Comparing with high-engagement dataset")
     recommendation = build_recommendation_from_analysis_data(
         db,
         domain=selected_domain,
         user_keywords=user_keywords,
-        dimension_status=analysis.get("dimension_status", []),
+        dimension_status=list(user_signals["dimension_status"]),
         hook_terms=hook_terms,
         source_prefix="youtube",
         profile_limit=80,
     )
     recommendation["classification"] = classification
-    recommendation["content_keywords"] = [
-        item["keyword"] for item in nlp_result.get("top_keywords", [])
-    ][:12]
+    recommendation["content_keywords"] = list(user_signals["content_keywords"])[:12]
     recommendation["hook_terms"] = hook_terms[:8]
+    recommendation["comparable_keywords"] = list(
+        user_signals["comparable_keywords"]
+    )
+    recommendation["comparable_keyword_evidence"] = list(
+        user_signals["comparable_keyword_evidence"]
+    )
+    recommendation["keyword_sets"] = {
+        "content": recommendation["content_keywords"],
+        "hook": recommendation["hook_terms"],
+        "comparable": recommendation["comparable_keywords"],
+    }
     if isinstance(recommendation.get("evidence"), dict):
         recommendation["evidence"]["transcript_source"] = stt_meta.get("transcript_source") or "unknown"
         recommendation["evidence"]["transcript_scope"] = stt_meta.get("transcript_scope") or "unknown"
@@ -138,6 +193,11 @@ def analyze_and_save_video_job(file_path: str, filename: str, user_id: int) -> d
             hook_duration_seconds=config.hook_analysis_duration,
         )
         transcript = str(result.get("transcript") or "")
+        raw_transcript = str(result.get("raw_transcript") or transcript)
+        cleaned_transcript = str(
+            result.get("cleaned_transcript")
+            or normalize_text_for_nlp(raw_transcript)
+        )
         recommendation, nlp_result = _build_recommendation(db, filename=filename, result=result)
         update_current_job(stage="saving", progress=90, message="Saving analysis to My Ideas")
         saved = save_video_analysis_result(
@@ -146,6 +206,8 @@ def analyze_and_save_video_job(file_path: str, filename: str, user_id: int) -> d
             filename=filename,
             file_path=file_path,
             transcript=transcript,
+            raw_transcript=raw_transcript,
+            cleaned_transcript=cleaned_transcript,
             analysis_payload=result,
             nlp_result=nlp_result,
             recommendation_payload=recommendation,
@@ -154,6 +216,8 @@ def analyze_and_save_video_job(file_path: str, filename: str, user_id: int) -> d
             "content_id": saved["content_id"],
             "title": result.get("analysis", {}).get("title") or os.path.splitext(filename)[0],
             "transcript": transcript,
+            "raw_transcript": raw_transcript,
+            "cleaned_transcript": cleaned_transcript,
             "saved": True,
             "saved_keywords": saved["saved_keywords"],
             "recommended_keywords": saved["recommended_keywords"],

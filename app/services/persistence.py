@@ -336,6 +336,8 @@ def save_video_analysis_result(
     analysis_payload: Dict[str, object],
     nlp_result: Dict[str, object],
     recommendation_payload: Dict[str, object],
+    raw_transcript: str | None = None,
+    cleaned_transcript: str | None = None,
 ) -> Dict[str, object]:
     title = str(
         analysis_payload.get("analysis", {}).get("title")
@@ -345,7 +347,9 @@ def save_video_analysis_result(
         user_id=user.user_id,
         title=title[:255],
         video_url=file_path,
-        transcript=transcript,
+        transcript=cleaned_transcript or transcript,
+        raw_transcript=raw_transcript or transcript,
+        cleaned_transcript=cleaned_transcript or transcript,
     )
     db.add(content)
     db.flush()
@@ -383,16 +387,30 @@ def save_video_analysis_result(
     classification = recommendation_payload.get("classification", {})
     if not isinstance(classification, dict):
         classification = {}
-    active_model = (
-        db.query(ClassificationModel)
-        .filter(ClassificationModel.is_active.is_(True))
-        .order_by(ClassificationModel.trained_at.desc(), ClassificationModel.model_id.desc())
-        .first()
-    )
+    classification_model = None
+    classification_model_id = classification.get("model_id")
+    if classification_model_id is not None:
+        classification_model = (
+            db.query(ClassificationModel)
+            .filter(ClassificationModel.model_id == int(classification_model_id))
+            .first()
+        )
+    if classification_model is None:
+        classification_model = (
+            db.query(ClassificationModel)
+            .filter(ClassificationModel.is_active.is_(True))
+            .order_by(
+                ClassificationModel.trained_at.desc(),
+                ClassificationModel.model_id.desc(),
+            )
+            .first()
+        )
     db.add(
         AnalysisResult(
             content_id=content.content_id,
-            classification_model_id=(active_model.model_id if active_model else None),
+            classification_model_id=(
+                classification_model.model_id if classification_model else None
+            ),
             taxonomy_version=classification.get("taxonomy_version"),
             taxonomy_leaf_key=classification.get("taxonomy_leaf_key"),
             category_level_1=classification.get("category_level_1"),

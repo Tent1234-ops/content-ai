@@ -10,6 +10,7 @@ TrendMode = Literal["auto", "mock", "live"]
 class YouTubeTrendItem(BaseModel):
     title: str
     channel_title: str
+    description: Optional[str] = None
     category: Optional[str] = None
     published_at: Optional[datetime] = None
     video_url: str
@@ -17,6 +18,9 @@ class YouTubeTrendItem(BaseModel):
     views: int = 0
     likes: int = 0
     comments: int = 0
+    views_available: bool = True
+    likes_available: bool = True
+    comments_available: bool = True
     trend_score: float = 0.0
     duration_seconds: Optional[int] = None
     source: str = "youtube"
@@ -52,7 +56,11 @@ class GoogleTrendItem(BaseModel):
     views: int = 0
     likes: int = 0
     comments: int = 0
+    views_available: bool = False
+    likes_available: bool = False
+    comments_available: bool = False
     trend_score: float = 0.0
+    search_volume: Optional[int] = None
     duration_seconds: Optional[int] = None
     source: str = "google_trends"
     traffic_text: Optional[str] = None
@@ -75,6 +83,9 @@ class TikTokTrendItem(BaseModel):
     views: int = 0
     likes: int = 0
     comments: int = 0
+    views_available: bool = True
+    likes_available: bool = True
+    comments_available: bool = True
     trend_score: float = 0.0
     duration_seconds: Optional[int] = None
     source: str = "tiktok"

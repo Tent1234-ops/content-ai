@@ -1,4 +1,4 @@
-import 'package:content_ai_mobile/utils/notebooklm_markdown_parser.dart';
+import 'package:content_ai_web/utils/notebooklm_markdown_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -64,6 +64,63 @@ $longTranscript
       document.sourceUrl,
       'https://youtu.be/nG3ITcW2vTg?si=example',
     );
+  });
+
+  test('uses Title metadata instead of a generic document heading', () {
+    final document = NotebookLmMarkdownParser.parse('''
+# Video Transcript
+**Title:** Actual Laptop Review
+**URL:** https://youtube.com/shorts/Av8HhwCqigU
+
+## Transcript Content
+$longTranscript
+''');
+
+    expect(document.sourceTitle, 'Actual Laptop Review');
+    expect(
+      document.sourceUrl,
+      'https://youtube.com/shorts/Av8HhwCqigU',
+    );
+  });
+
+  test('accepts Direct Link metadata and Transcript Content heading', () {
+    final document = NotebookLmMarkdownParser.parse('''
+# Laptop buying guide
+- **Direct Link**: https://youtu.be/JuwQbcLDASI?si=example
+- **YouTube Video ID**: JuwQbcLDASI
+
+## Transcript Content
+$longTranscript
+''');
+
+    expect(document.sourceUrl, 'https://youtu.be/JuwQbcLDASI?si=example');
+    expect(document.transcript, longTranscript);
+  });
+
+  test('extracts a URL from Markdown link metadata without a heading', () {
+    final document = NotebookLmMarkdownParser.parse('''
+# Laptop review
+**Direct Link:** [https://youtu.be/iD93x8k06J4?si=example](https://youtu.be/iD93x8k06J4?si=example)
+**YouTube Video ID:** `iD93x8k06J4`
+
+$longTranscript
+''');
+
+    expect(document.sourceUrl, 'https://youtu.be/iD93x8k06J4?si=example');
+    expect(document.transcript, longTranscript);
+  });
+
+  test('accepts a descriptive heading ending with Transcript', () {
+    final document = NotebookLmMarkdownParser.parse('''
+# Laptop review
+**Video Link**: https://youtu.be/8aDiCPpMKRc?si=example
+
+## Source transcription (Transcript)
+$longTranscript
+''');
+
+    expect(document.sourceUrl, 'https://youtu.be/8aDiCPpMKRc?si=example');
+    expect(document.transcript, longTranscript);
   });
 
   test('accepts compact Thai metadata followed directly by transcript', () {

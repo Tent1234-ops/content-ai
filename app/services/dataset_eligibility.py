@@ -22,7 +22,11 @@ from app.services.dataset_contract import (
     YOUTUBE_CC_LABEL_SOURCE,
     YOUTUBE_CC_VERIFICATION_STATUS,
 )
-from app.services.taxonomy import ACTIVE_LEAF_KEYS, TAXONOMY_VERSION
+from app.services.taxonomy import (
+    ACTIVE_LEAF_KEYS,
+    TAXONOMY_VERSION,
+    UNKNOWN_LEAF_KEY,
+)
 
 
 def production_transcript_conditions(*, train_only: bool = False):
@@ -94,6 +98,55 @@ def production_transcript_conditions(*, train_only: bool = False):
     else:
         conditions.append(DatasetContent.data_split.in_(PRODUCTION_SPLITS))
     return tuple(conditions)
+
+
+def out_of_scope_evaluation_conditions():
+    """Return auditable human-reviewed rows used only to evaluate rejection."""
+    return (
+        DatasetContent.is_active.is_(True),
+        DatasetContent.is_training_eligible.is_(False),
+        DatasetContent.is_keyword_recommendation_eligible.is_(False),
+        DatasetContent.is_duration_recommendation_eligible.is_(False),
+        DatasetContent.dataset_source.in_(SUPPORTED_YOUTUBE_DATASET_SOURCES),
+        DatasetContent.dataset_version != "legacy-v1",
+        DatasetContent.taxonomy_version == TAXONOMY_VERSION,
+        DatasetContent.taxonomy_leaf_key == UNKNOWN_LEAF_KEY,
+        DatasetContent.verification_status == YOUTUBE_CC_VERIFICATION_STATUS,
+        DatasetContent.label_source == YOUTUBE_CC_LABEL_SOURCE,
+        DatasetContent.language == PRIMARY_CONTENT_LANGUAGE,
+        DatasetContent.source_platform == "youtube",
+        DatasetContent.transcript_source.in_(SUPPORTED_TRANSCRIPT_SOURCES),
+        DatasetContent.transcript_acquisition_method.in_(
+            SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS
+        ),
+        DatasetContent.transcript_scope.in_(SUPPORTED_TRANSCRIPT_SCOPES),
+        DatasetContent.caption_type.in_(SUPPORTED_CAPTION_TYPES),
+        DatasetContent.transcript_quality.in_(ACCEPTED_TRANSCRIPT_QUALITIES),
+        DatasetContent.data_split.in_(PRODUCTION_SPLITS),
+        DatasetContent.collection_run_id.is_not(None),
+        DatasetContent.source_record_id.is_not(None),
+        DatasetContent.source_youtube_id.is_not(None),
+        DatasetContent.source_channel_id.is_not(None),
+        DatasetContent.creator_group_key.is_not(None),
+        DatasetContent.transcript_sha256.is_not(None),
+        DatasetContent.reviewed_by.is_not(None),
+        DatasetContent.reviewed_at.is_not(None),
+        DatasetContent.raw_metadata_json.is_not(None),
+        func.length(func.trim(DatasetContent.transcript)) > 0,
+        func.length(func.trim(DatasetContent.source_youtube_id)) > 0,
+        func.length(func.trim(DatasetContent.source_channel_id)) > 0,
+        func.length(func.trim(DatasetContent.creator_group_key)) == 64,
+        func.length(func.trim(DatasetContent.transcript_sha256)) == 64,
+        func.length(func.trim(DatasetContent.reviewed_by)) > 0,
+        func.length(func.trim(DatasetContent.raw_metadata_json)) > 2,
+        DatasetContent.transcript_end_seconds > 0,
+        DatasetContent.transcript_end_seconds <= DatasetContent.duration_seconds,
+        DatasetContent.duration_seconds > 0,
+    )
+
+
+def out_of_scope_evaluation_query(db: Session) -> Query:
+    return db.query(DatasetContent).filter(*out_of_scope_evaluation_conditions())
 
 
 def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> None:

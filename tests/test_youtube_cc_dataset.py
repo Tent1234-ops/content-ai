@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.dialects import mysql, sqlite
 from sqlalchemy.orm import sessionmaker
 
 from app.database.db import Base
@@ -19,13 +20,16 @@ from app.database.models import (
     DatasetCollectionRun,
     DatasetContent,
     DatasetReviewEvent,
+    UserContent,
 )
 from app.services.dataset_eligibility import (
+    out_of_scope_evaluation_query,
     production_transcript_query,
     validate_training_eligibility_values,
 )
 from app.services.taxonomy import (
     TAXONOMY_VERSION,
+    UNKNOWN_LEAF_KEY,
     collection_queries_for_leaf,
     sync_taxonomy_registry,
 )
@@ -104,6 +108,18 @@ def _transcript(video_id, _languages):
 
 
 class YouTubeCCDatasetTests(unittest.TestCase):
+    def test_transcript_columns_use_longtext_on_mysql(self):
+        for model in (DatasetContent, UserContent):
+            column_type = model.__table__.c.transcript.type
+            self.assertEqual(
+                column_type.compile(dialect=mysql.dialect()).upper(),
+                "LONGTEXT",
+            )
+            self.assertEqual(
+                column_type.compile(dialect=sqlite.dialect()).upper(),
+                "TEXT",
+            )
+
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(self.engine)
@@ -306,6 +322,93 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.assertEqual(dataset.transcript_source, "notebooklm_source_transcript")
         self.assertTrue(dataset.is_training_eligible)
         self.assertEqual(production_transcript_query(self.db).count(), 1)
+
+    def test_notebooklm_rejects_duplicate_transcript_in_same_batch(self):
+        transcript = (
+            "รีวิวโทรศัพท์จาก NotebookLM มีข้อมูลกล้อง แบตเตอรี่ หน้าจอ "
+            "ประสิทธิภาพ ราคา และประสบการณ์ใช้งานจริง " * 8
+        ).strip()
+
+        def youtube_getter(resource, **kwargs):
+            self.assertEqual(resource, "videos")
+            return {"items": [_video(str(kwargs["id"]))]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "raw"
+            first = create_notebooklm_transcript_candidate(
+                self.db,
+                api_key="test-key",
+                video_url="https://www.youtube.com/watch?v=notebook001",
+                transcript=transcript,
+                proposed_leaf_key="phone",
+                transcript_language="th",
+                youtube_getter=youtube_getter,
+                artifact_root=root,
+            )
+
+            with self.assertRaisesRegex(
+                YouTubeCCDatasetError,
+                "transcript duplicates another file in the current import batch",
+            ):
+                create_notebooklm_transcript_candidate(
+                    self.db,
+                    api_key="test-key",
+                    video_url="https://www.youtube.com/watch?v=notebook002",
+                    transcript=transcript,
+                    proposed_leaf_key="phone",
+                    transcript_language="th",
+                    collection_run_id=first["collection_run_id"],
+                    youtube_getter=youtube_getter,
+                    artifact_root=root,
+                )
+
+    def test_notebooklm_allows_more_than_three_videos_from_one_channel(self):
+        def youtube_getter(resource, **kwargs):
+            self.assertEqual(resource, "videos")
+            return {"items": [_video(str(kwargs["id"]), index=0)]}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "raw"
+            run_id = None
+            for index in range(3):
+                created = create_notebooklm_transcript_candidate(
+                    self.db,
+                    api_key="test-key",
+                    video_url=(
+                        "https://www.youtube.com/watch?v="
+                        f"laptop{index:05d}"
+                    ),
+                    transcript=(
+                        f"Laptop review sample {index} covers processor, memory, "
+                        "display, battery, keyboard, cooling, ports and daily use. "
+                    )
+                    * 4,
+                    proposed_leaf_key="laptop",
+                    transcript_language="th",
+                    collection_run_id=run_id,
+                    youtube_getter=youtube_getter,
+                    artifact_root=root,
+                )
+                run_id = created["collection_run_id"]
+
+            fourth = create_notebooklm_transcript_candidate(
+                self.db,
+                api_key="test-key",
+                video_url="https://www.youtube.com/watch?v=laptop00003",
+                transcript=(
+                    "Fourth laptop review covers processor, memory, display, "
+                    "battery, keyboard, cooling, ports and daily use. "
+                )
+                * 4,
+                proposed_leaf_key="laptop",
+                transcript_language="th",
+                collection_run_id=run_id,
+                youtube_getter=youtube_getter,
+                artifact_root=root,
+            )
+
+        self.assertEqual(fourth["candidate_count"], 4)
+        self.assertEqual(fourth["candidate"]["proposed_leaf_key"], "laptop")
 
     def test_phone_and_camera_queries_exclude_common_false_positives(self):
         phone_queries = collection_queries_for_leaf("phone")
@@ -541,7 +644,6 @@ class YouTubeCCDatasetTests(unittest.TestCase):
                 performance_target_per_leaf=0,
                 languages=["th", "en"],
                 min_thai_per_leaf=2,
-                max_videos_per_channel_per_leaf=3,
                 max_pages_per_query=1,
                 transcript_fetcher=transcript_fetcher,
                 youtube_getter=youtube_getter,
@@ -636,7 +738,6 @@ class YouTubeCCDatasetTests(unittest.TestCase):
                 performance_target_per_leaf=0,
                 languages=["th", "en"],
                 min_thai_per_leaf=1,
-                max_videos_per_channel_per_leaf=3,
                 max_pages_per_query=1,
                 transcript_fetcher=english_transcript,
                 youtube_getter=youtube_getter,
@@ -659,7 +760,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         )
         self.assertEqual(leaf_progress["thai_remaining"], 0)
 
-    def test_collection_caps_each_channel_within_a_leaf(self):
+    def test_collection_accepts_multiple_videos_from_the_same_channel(self):
         ids = [f"channelcap{i:02d}" for i in range(5)]
 
         def youtube_getter(resource, **kwargs):
@@ -690,7 +791,6 @@ class YouTubeCCDatasetTests(unittest.TestCase):
                 performance_target_per_leaf=0,
                 languages=["th", "en"],
                 min_thai_per_leaf=0,
-                max_videos_per_channel_per_leaf=2,
                 max_pages_per_query=1,
                 transcript_fetcher=_transcript,
                 youtube_getter=youtube_getter,
@@ -705,13 +805,10 @@ class YouTubeCCDatasetTests(unittest.TestCase):
 
         channels = Counter(row["channel_id"] for row in rows)
         self.assertEqual(result["status"], "collected")
-        self.assertLessEqual(max(channels.values()), 2)
-        self.assertEqual(len(channels), 3)
-        self.assertEqual(
-            result["quality_filters"]["skipped_by_reason"][
-                "channel_cap_reached"
-            ],
-            1,
+        self.assertEqual(channels["repeated-channel"], 3)
+        self.assertNotIn(
+            "channel_cap_reached",
+            result["quality_filters"]["skipped_by_reason"],
         )
 
     def test_quota_exhaustion_checkpoints_as_quota_waiting(self):
@@ -1102,9 +1199,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
             config = json.loads(run.query_config_json)
             for field in (
                 "min_thai_per_leaf",
-                "max_videos_per_channel_per_leaf",
                 "language_balance_policy",
-                "channel_diversity_policy",
                 "queries_by_leaf",
             ):
                 config.pop(field, None)
@@ -1132,9 +1227,10 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.db.refresh(run)
         upgraded_config = json.loads(run.query_config_json)
         self.assertEqual(resumed["status"], "collected")
-        self.assertEqual(upgraded_config["schema_version"], 4)
+        self.assertEqual(upgraded_config["schema_version"], 5)
         self.assertEqual(upgraded_config["min_thai_per_leaf"], 1)
-        self.assertEqual(upgraded_config["max_videos_per_channel_per_leaf"], 3)
+        self.assertNotIn("max_videos_per_channel_per_leaf", upgraded_config)
+        self.assertNotIn("channel_diversity_policy", upgraded_config)
         self.assertIn("-case", " ".join(upgraded_config["queries_by_leaf"]["phone"]))
 
     def test_collection_deduplicates_candidates_across_runs(self):
@@ -1202,7 +1298,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         )
         self.assertEqual(self.db.query(DatasetCollectionRun).count(), 2)
 
-    def test_channel_cap_counts_candidates_from_prior_runs(self):
+    def test_prior_runs_do_not_limit_same_channel_candidates(self):
         first_ids = ["priorchannel1", "priorchannel2"]
         second_ids = ["priorchannel3", "otherchannel1"]
 
@@ -1239,7 +1335,6 @@ class YouTubeCCDatasetTests(unittest.TestCase):
                 performance_target_per_leaf=0,
                 languages=["th", "en"],
                 min_thai_per_leaf=0,
-                max_videos_per_channel_per_leaf=2,
                 max_pages_per_query=1,
                 transcript_fetcher=_transcript,
                 youtube_getter=make_getter(first_ids),
@@ -1256,7 +1351,6 @@ class YouTubeCCDatasetTests(unittest.TestCase):
                 performance_target_per_leaf=0,
                 languages=["th", "en"],
                 min_thai_per_leaf=0,
-                max_videos_per_channel_per_leaf=2,
                 max_pages_per_query=1,
                 transcript_fetcher=_transcript,
                 youtube_getter=make_getter(second_ids),
@@ -1269,12 +1363,13 @@ class YouTubeCCDatasetTests(unittest.TestCase):
                 if line.strip()
             ]
 
-        self.assertEqual([row["source_youtube_id"] for row in rows], ["otherchannel1"])
-        self.assertGreaterEqual(
-            second["quality_filters"]["skipped_by_reason"][
-                "channel_cap_reached"
-            ],
-            1,
+        self.assertEqual(
+            [row["source_youtube_id"] for row in rows],
+            ["priorchannel3"],
+        )
+        self.assertNotIn(
+            "channel_cap_reached",
+            second["quality_filters"]["skipped_by_reason"],
         )
 
     def test_partial_collection_resumes_from_saved_page_token(self):
@@ -1450,6 +1545,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.assertEqual(self.db.query(DatasetReviewEvent).count(), 0)
 
     def test_admin_review_queue_approves_and_rejects_without_editing_csv(self):
+        self.db.autoflush = False
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _result, _candidates, _reviews, _manifest = self._collect(root, count=2)
@@ -1497,6 +1593,34 @@ class YouTubeCCDatasetTests(unittest.TestCase):
             )
             self.assertEqual(approved_queue["total"], 1)
             self.assertEqual(approved_queue["items"][0]["reviewed_leaf_key"], "phone")
+
+    def test_admin_can_approve_out_of_scope_as_evaluation_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._collect(root, count=1)
+            run = self.db.query(DatasetCollectionRun).one()
+            candidate = list_youtube_cc_review_queue(self.db)["items"][0]
+
+            reviewed = review_youtube_cc_candidate(
+                self.db,
+                collection_run_id=run.collection_run_id,
+                source_youtube_id=candidate["source_youtube_id"],
+                decision="approve",
+                reviewer="admin@example.test [user:1]",
+                reviewed_leaf_key=UNKNOWN_LEAF_KEY,
+                transcript_quality="good",
+                notes="Accessory content is outside the supported taxonomy.",
+                review_root=root / "events",
+            )
+
+        row = self.db.query(DatasetContent).one()
+        self.assertEqual(reviewed["decision"], "approve")
+        self.assertEqual(row.taxonomy_leaf_key, UNKNOWN_LEAF_KEY)
+        self.assertFalse(row.is_training_eligible)
+        self.assertFalse(row.is_keyword_recommendation_eligible)
+        self.assertFalse(row.is_duration_recommendation_eligible)
+        self.assertEqual(production_transcript_query(self.db).count(), 0)
+        self.assertEqual(out_of_scope_evaluation_query(self.db).count(), 1)
 
     def test_eligibility_rejects_source_verified_or_unreviewed_rows(self):
         values = {

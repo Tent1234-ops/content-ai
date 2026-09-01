@@ -22,6 +22,21 @@ class DashboardRepository {
     );
   }
 
+  Future<YouTubeCategoryTrendSnapshot> getYouTubeCategoryTrendSnapshot({
+    String? categoryId,
+    int limit = 50,
+  }) async {
+    final categoryQuery = categoryId == null || categoryId.isEmpty
+        ? ''
+        : '&video_category_id=${Uri.encodeQueryComponent(categoryId)}';
+    final response = await _client.get(
+      '/dashboard/live-trends/youtube/categories?trend_limit=$limit$categoryQuery',
+    );
+    return YouTubeCategoryTrendSnapshot.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
+
   Future<List<FollowedTopicItem>> getFollowedTopics() async {
     final response = await _client.get('/follows/topics?limit=100');
     final items = (response['items'] as List<dynamic>? ?? const [])

@@ -7,11 +7,19 @@ from app.services.pipeline.domain_rules import domain_phrase_lexicon
 from app.services.pipeline.core import normalize_asr_terms, normalize_space
 from utils.text_clean import clean_text
 
-USE_PYTHAINLP = os.getenv("NLP_USE_PYTHAINLP", "0").strip().lower() in {"1", "true", "yes", "on"}
+USE_PYTHAINLP = os.getenv("NLP_USE_PYTHAINLP", "1").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+PYTHAINLP_ENGINE = os.getenv("NLP_PYTHAINLP_ENGINE", "newmm").strip() or "newmm"
 
 try:
+    from pythainlp.corpus.common import thai_stopwords
     from pythainlp.tokenize import word_tokenize
 except Exception:
+    thai_stopwords = None
     word_tokenize = None
 
 
@@ -41,6 +49,8 @@ THAI_STOPWORDS = {
     "\u0e0b\u0e36\u0e48\u0e07",
     "\u0e2a\u0e33\u0e2b\u0e23\u0e31\u0e1a",
 }
+if thai_stopwords is not None:
+    THAI_STOPWORDS.update(str(word).strip().lower() for word in thai_stopwords())
 
 EN_STOPWORDS = {
     "a",
@@ -72,6 +82,121 @@ EN_STOPWORDS = {
 
 DOMAIN_PHRASES = domain_phrase_lexicon()
 
+COMPARABLE_SYNONYMS_BY_DOMAIN = {
+    "smartphone": {
+        "camera quality": (
+            "กล้อง",
+            "ภาพ",
+            "เซนเซอร์",
+            "กล้องหน้า",
+            "กล้องหลัง",
+            "ถ่ายรูป",
+            "ถ่ายภาพ",
+            "เลนส์",
+            "camera",
+            "photo",
+            "portrait",
+            "night mode",
+        ),
+        "chip performance": (
+            "ชิป",
+            "snapdragon",
+            "dimensity",
+            "ชิปเซ็ต",
+            "หน่วยประมวลผล",
+            "ประมวลผล",
+            "ประสิทธิภาพ",
+            "chip",
+            "chipset",
+            "processor",
+            "cpu",
+            "mediatek",
+            "exynos",
+            "antutu",
+        ),
+        "battery life": (
+            "แบตเตอรี่",
+            "แบต",
+            "ความอึด",
+            "แบตอึด",
+            "ใช้งานได้ทั้งวัน",
+            "มิลลิแอมป์",
+            "battery life",
+            "battery",
+            "mah",
+        ),
+        "display quality": (
+            "จอ",
+            "หน้าจอ",
+            "amoled",
+            "oled",
+            "ความสว่าง",
+            "ความละเอียด",
+            "นิต",
+            "display",
+            "screen",
+            "brightness",
+            "refresh rate",
+        ),
+        "charging speed": (
+            "fast charge",
+            "fast charging",
+            "charging",
+            "watt",
+            "ชาร์จไว",
+            "ชาร์จเร็ว",
+            "การชาร์จ",
+            "วัตต์",
+        ),
+        "thermal control": (
+            "ระบายความร้อน",
+            "ความร้อน",
+            "เครื่องร้อน",
+            "อุณหภูมิ",
+            "พัดลม",
+            "ห้องไอ",
+            "thermal",
+            "heat",
+            "cooling",
+            "cooler",
+            "vapor chamber",
+            "throttle",
+            "ร้อน",
+        ),
+        "stabilization": (
+            "stabilization",
+            "ois",
+            "กันสั่น",
+            "ระบบกันสั่น",
+        ),
+        "software support": (
+            "software",
+            "update",
+            "android",
+            "ios",
+            "ซอฟต์แวร์",
+            "อัปเดต",
+            "ระบบปฏิบัติการ",
+        ),
+        "value for money": (
+            "value",
+            "budget",
+            "price",
+            "ราคา",
+            "คุ้ม",
+            "คุ้มค่า",
+        ),
+        "build quality": (
+            "build quality",
+            "material",
+            "วัสดุ",
+            "งานประกอบ",
+            "แข็งแรง",
+            "ทนทาน",
+        ),
+    },
+}
+
 
 def normalize_text_for_nlp(text: str) -> str:
     normalized = normalize_asr_terms(text or "")
@@ -81,14 +206,25 @@ def normalize_text_for_nlp(text: str) -> str:
 
 def tokenize_text(text: str) -> List[str]:
     normalized = normalize_text_for_nlp(text)
-    if USE_PYTHAINLP and word_tokenize is not None:
-        raw_tokens: List[str] = []
-        for chunk in normalized.lower().split():
-            if re.search(r"[\u0E00-\u0E7F]", chunk):
-                raw_tokens.extend(word_tokenize(chunk, keep_whitespace=False))
-            else:
-                raw_tokens.extend(re.findall(r"[a-z0-9][a-z0-9\-]*", chunk))
-        return [token for token in raw_tokens if token and not token.isspace()]
+    if (
+        USE_PYTHAINLP
+        and word_tokenize is not None
+        and re.search(r"[\u0E00-\u0E7F]", normalized)
+    ):
+        raw_tokens = word_tokenize(
+            normalized.lower(),
+            engine=PYTHAINLP_ENGINE,
+            keep_whitespace=False,
+        )
+        tokens: List[str] = []
+        for raw_token in raw_tokens:
+            tokens.extend(
+                re.findall(
+                    r"[\u0E00-\u0E7F]+|[a-z0-9][a-z0-9\-]*",
+                    str(raw_token).strip().lower(),
+                )
+            )
+        return tokens
 
     return re.findall(r"[\u0E00-\u0E7Fa-zA-Z0-9][\u0E00-\u0E7Fa-zA-Z0-9\-]*", normalized.lower())
 
@@ -104,6 +240,64 @@ def filter_tokens(tokens: List[str]) -> List[str]:
             continue
         filtered.append(token)
     return filtered
+
+
+def _evidence_count(normalized: str, tokens: List[str], term: str) -> int:
+    normalized_term = normalize_text_for_nlp(term)
+    if not normalized_term:
+        return 0
+    if re.fullmatch(r"[a-z0-9][a-z0-9\s\-]*", normalized_term):
+        return len(
+            re.findall(
+                rf"(?<![a-z0-9]){re.escape(normalized_term)}(?![a-z0-9])",
+                normalized,
+            )
+        )
+    term_tokens = tokenize_text(normalized_term)
+    if len(term_tokens) <= 1:
+        return sum(1 for token in tokens if token == normalized_term)
+    return normalized.count(normalized_term)
+
+
+def extract_comparable_keyword_candidates(
+    text: str,
+    domain: str,
+) -> List[Dict[str, object]]:
+    """Map explicit transcript evidence to canonical comparison dimensions."""
+    normalized = normalize_text_for_nlp(text)
+    tokens = tokenize_text(normalized)
+    domain_lexicon = COMPARABLE_SYNONYMS_BY_DOMAIN.get(domain, {})
+    candidates: List[Dict[str, object]] = []
+
+    for canonical_keyword, synonyms in domain_lexicon.items():
+        matched_terms: List[str] = []
+        frequency = 0
+        for synonym in dict.fromkeys(synonyms):
+            match_count = _evidence_count(normalized, tokens, synonym)
+            if match_count <= 0:
+                continue
+            matched_terms.append(synonym)
+            frequency += match_count
+        if not matched_terms:
+            continue
+        score = min(5.0, 2.6 + (0.35 * frequency) + (0.15 * len(matched_terms)))
+        candidates.append(
+            {
+                "keyword": canonical_keyword,
+                "score": round(score, 3),
+                "frequency": frequency,
+                "matched_terms": matched_terms,
+            }
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            -float(item["score"]),
+            -int(item["frequency"]),
+            str(item["keyword"]),
+        )
+    )
+    return candidates
 
 
 def _dedupe_ranked_keywords(ranked: List[Dict[str, float]]) -> List[Dict[str, float]]:

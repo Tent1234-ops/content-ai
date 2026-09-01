@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter, defaultdict
 from statistics import median
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List
 
 from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent, UserContent
 from app.services.admin_settings import get_admin_config
 from app.services.classification import classify_text_domain
+from app.services.dataset_contract import RECOMMENDATION_DURATION_MAX_SECONDS
 from app.services.dataset_eligibility import production_transcript_query
-from app.services.nlp import filter_tokens, normalize_text_for_nlp, run_nlp_pipeline, tokenize_text
+from app.services.nlp import (
+    extract_comparable_keyword_candidates,
+    extract_keyword_candidates,
+    filter_tokens,
+    normalize_text_for_nlp,
+    run_nlp_pipeline,
+    tokenize_text,
+)
 from app.services.pipeline.core import (
     build_comparison_profile,
     build_dimension_status,
@@ -59,6 +68,12 @@ DEFAULT_DURATION_BY_DOMAIN = {
     "unknown": 60,
 }
 
+DURATION_MINIMUM_SAMPLE_SIZE = 10
+DURATION_TARGET_SAMPLE_SIZE = 15
+DURATION_PERCENTILE_LOW = 25
+DURATION_PERCENTILE_HIGH = 75
+DURATION_COHORT_UPLOAD_COMPATIBLE = "upload_compatible_under_5m"
+
 KEYWORD_DOMAIN_BY_TAXONOMY_LEAF = {
     "phone": "smartphone",
     "camera": "general",
@@ -86,14 +101,55 @@ GENERIC_RECOMMENDATION_BLACKLIST = {
     "watch",
     "new",
     "best",
+    "reviewing",
+    "today",
+    "รีวิว",
+    "คลิป",
+    "วิดีโอ",
+    "วันนี้",
+    "ครับ",
+    "ค่ะ",
+    "นะครับ",
+    "นะคะ",
+    "ช่อง",
+    "ฝาก",
+    "กดไลก์",
+    "กดติดตาม",
+    "มือถือ",
+    "โทรศัพท์",
+    "สมาร์ตโฟน",
 }
+
+KEYWORD_DOCUMENT_WEIGHT = 0.45
+KEYWORD_FREQUENCY_WEIGHT = 0.25
+KEYWORD_ENGAGEMENT_WEIGHT = 0.30
+KEYWORD_EVIDENCE_EXAMPLE_LIMIT = 3
 
 def _keyword_domain(leaf_key: str) -> str:
     return KEYWORD_DOMAIN_BY_TAXONOMY_LEAF.get(leaf_key, "general")
 
 
+def recommendation_domain_for_taxonomy_leaf(leaf_key: str) -> str:
+    """Map the Active Model taxonomy leaf to its downstream rule profile."""
+    canonical_leaf = normalize_taxonomy_leaf(leaf_key)
+    if canonical_leaf == UNKNOWN_LEAF_KEY:
+        return "general"
+    return _keyword_domain(canonical_leaf)
+
+
 def _normalize_keyword(keyword: str) -> str:
-    return (keyword or "").strip().lower()
+    return normalize_text_for_nlp(keyword or "").strip().lower()
+
+
+def _keyword_identity(keyword: str, domain: str) -> str:
+    """Return one canonical identity so surface synonyms cannot create a gap."""
+    normalized = _normalize_keyword(keyword)
+    if not normalized:
+        return ""
+    comparable = extract_comparable_keyword_candidates(normalized, domain)
+    if comparable:
+        return _normalize_keyword(str(comparable[0]["keyword"]))
+    return normalized
 
 
 def _keyword_is_domain_relevant(keyword: str, domain: str) -> bool:
@@ -102,6 +158,12 @@ def _keyword_is_domain_relevant(keyword: str, domain: str) -> bool:
     if domain == "general":
         return True
     lower = _normalize_keyword(keyword)
+    canonical_dimensions = {
+        _normalize_keyword(name)
+        for name in DOMAIN_DIMENSIONS_ORDER.get(domain, [])
+    }
+    if lower in canonical_dimensions:
+        return True
     hints = [*DOMAIN_HINTS.get(domain, []), *DOMAIN_BASE.get(domain, [])]
     hint_words: set[str] = set()
     for hint in hints:
@@ -126,6 +188,184 @@ def _should_recommend_keyword(keyword: str, domain: str) -> bool:
     if domain != "general" and not _keyword_is_domain_relevant(lower, domain):
         return False
     return True
+
+
+def _row_performance_signal(row: DatasetContent) -> float:
+    """Comparable public performance signal captured with the dataset row."""
+    average_views_per_day = max(0.0, float(row.average_views_per_day or 0.0))
+    engagement_rate = max(0.0, float(row.engagement_rate or 0.0))
+    computed = math.log1p(average_views_per_day) * (
+        1.0 + min(engagement_rate * 10.0, 1.0)
+    )
+    return max(computed, float(row.trend_score or 0.0), 0.0)
+
+
+def _dataset_keyword_occurrences(
+    row: DatasetContent,
+    *,
+    domain: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Extract per-document term frequency from spoken transcript evidence only."""
+    transcript = str(row.transcript or "").strip()
+    if not transcript:
+        return {}
+
+    occurrences: Dict[str, Dict[str, Any]] = {}
+    for item in extract_comparable_keyword_candidates(transcript, domain):
+        keyword = str(item["keyword"]).strip()
+        identity = _keyword_identity(keyword, domain)
+        if not identity or not _should_recommend_keyword(keyword, domain):
+            continue
+        occurrences[identity] = {
+            "keyword": keyword,
+            "frequency": max(1, int(item.get("frequency") or 1)),
+            "matched_terms": list(item.get("matched_terms") or []),
+        }
+
+    # Canonical concepts are preferred. Domain-specific surface terms remain useful
+    # for taxonomies that do not yet have a synonym map of their own.
+    for item in extract_keyword_candidates(transcript)[:40]:
+        surface_keyword = str(item.get("keyword") or "").strip()
+        identity = _keyword_identity(surface_keyword, domain)
+        if not identity or identity in occurrences:
+            continue
+        display_keyword = identity if identity != _normalize_keyword(surface_keyword) else surface_keyword
+        if not _should_recommend_keyword(display_keyword, domain):
+            continue
+        occurrences[identity] = {
+            "keyword": display_keyword,
+            "frequency": max(1, int(item.get("frequency") or 1)),
+            "matched_terms": [surface_keyword],
+        }
+    return occurrences
+
+
+def _build_keyword_evidence(
+    rows: List[DatasetContent],
+    *,
+    row_weights: Dict[int, float],
+    domain: str,
+    max_items: int,
+) -> List[Dict[str, Any]]:
+    """Rank terms using document support, per-video frequency, and performance."""
+    if not rows:
+        return []
+
+    aggregates: Dict[str, Dict[str, Any]] = {}
+    total_row_weight = sum(
+        row_weights.get(int(row.dataset_id), 1.0)
+        for row in rows
+    ) or float(len(rows))
+
+    for row in rows:
+        dataset_id = int(row.dataset_id)
+        performance_weight = row_weights.get(dataset_id, 1.0)
+        for identity, occurrence in _dataset_keyword_occurrences(
+            row,
+            domain=domain,
+        ).items():
+            frequency = max(1, int(occurrence["frequency"]))
+            aggregate = aggregates.setdefault(
+                identity,
+                {
+                    "keyword": str(occurrence["keyword"]),
+                    "support_count": 0,
+                    "total_frequency": 0,
+                    "frequency_signal": 0.0,
+                    "engagement_signal": 0.0,
+                    "matched_terms": set(),
+                    "supporting_examples": [],
+                },
+            )
+            aggregate["support_count"] += 1
+            aggregate["total_frequency"] += frequency
+            aggregate["frequency_signal"] += math.log1p(frequency)
+            aggregate["engagement_signal"] += performance_weight
+            aggregate["matched_terms"].update(occurrence["matched_terms"])
+            aggregate["supporting_examples"].append(
+                {
+                    "dataset_id": dataset_id,
+                    "source_record_id": str(row.source_record_id or ""),
+                    "title": str(row.title or "Untitled"),
+                    "video_url": str(row.video_url or row.source_release_url or ""),
+                    "platform": _platform_key(row.source_platform, "youtube"),
+                    "frequency": frequency,
+                    "matched_terms": list(occurrence["matched_terms"]),
+                    "views": max(0, int(row.views or 0)),
+                    "likes": max(0, int(row.likes or 0)),
+                    "comments": max(0, int(row.comments or 0)),
+                    "average_views_per_day": round(
+                        max(0.0, float(row.average_views_per_day or 0.0)),
+                        3,
+                    ),
+                    "engagement_rate": round(
+                        max(0.0, float(row.engagement_rate or 0.0)),
+                        6,
+                    ),
+                    "performance_weight": round(performance_weight, 4),
+                }
+            )
+
+    minimum_support = 1 if len(rows) < 4 else 2
+    supported = [
+        aggregate
+        for aggregate in aggregates.values()
+        if int(aggregate["support_count"]) >= minimum_support
+    ]
+    if not supported:
+        return []
+
+    max_frequency_signal = max(
+        float(aggregate["frequency_signal"]) for aggregate in supported
+    ) or 1.0
+    ranked: List[Dict[str, Any]] = []
+    for aggregate in supported:
+        support_count = int(aggregate["support_count"])
+        document_component = support_count / len(rows)
+        frequency_component = float(aggregate["frequency_signal"]) / max_frequency_signal
+        engagement_component = float(aggregate["engagement_signal"]) / total_row_weight
+        score = (
+            KEYWORD_DOCUMENT_WEIGHT * document_component
+            + KEYWORD_FREQUENCY_WEIGHT * frequency_component
+            + KEYWORD_ENGAGEMENT_WEIGHT * engagement_component
+        )
+        examples = sorted(
+            aggregate["supporting_examples"],
+            key=lambda item: (
+                -float(item["performance_weight"]),
+                -int(item["frequency"]),
+                int(item["dataset_id"]),
+            ),
+        )
+        ranked.append(
+            {
+                "keyword": str(aggregate["keyword"]),
+                "score": round(score, 4),
+                "support_count": support_count,
+                "sample_size": len(rows),
+                "support_ratio": round(document_component, 4),
+                "total_frequency": int(aggregate["total_frequency"]),
+                "matched_terms": sorted(str(term) for term in aggregate["matched_terms"]),
+                "supporting_dataset_row_ids": [
+                    int(item["dataset_id"]) for item in examples
+                ],
+                "supporting_examples": examples[:KEYWORD_EVIDENCE_EXAMPLE_LIMIT],
+                "score_components": {
+                    "document_coverage": round(document_component, 4),
+                    "frequency": round(frequency_component, 4),
+                    "engagement": round(engagement_component, 4),
+                },
+            }
+        )
+
+    ranked.sort(
+        key=lambda item: (
+            -float(item["score"]),
+            -int(item["support_count"]),
+            str(item["keyword"]),
+        )
+    )
+    return ranked[:max_items]
 
 
 def _clean_profile_keywords(items: List[Dict[str, float]], domain: str, max_items: int) -> List[Dict[str, float]]:
@@ -154,9 +394,7 @@ def _weighted_increment(counter: Dict[str, float], key: str, weight: float) -> N
 
 
 def _fast_dataset_tokens(text: str) -> List[str]:
-    normalized = normalize_space(text or "").lower()
-    tokens = re.findall(r"[\u0E00-\u0E7Fa-z0-9][\u0E00-\u0E7Fa-z0-9\-]*", normalized)
-    return filter_tokens(tokens)
+    return filter_tokens(tokenize_text(text or ""))
 
 
 def _fast_keyword_items(text: str, domain: str, max_keywords: int) -> List[Dict[str, float]]:
@@ -173,6 +411,13 @@ def _fast_keyword_items(text: str, domain: str, max_keywords: int) -> List[Dict[
 
     for token, count in token_counts.items():
         scores[token] = max(scores.get(token, 0.0), float(count))
+
+    for item in extract_comparable_keyword_candidates(normalized, domain):
+        canonical_keyword = str(item["keyword"])
+        scores[canonical_keyword] = max(
+            scores.get(canonical_keyword, 0.0),
+            float(item["score"]),
+        )
 
     ranked = [
         {"keyword": keyword, "score": round(score, 3)}
@@ -254,37 +499,230 @@ def analyze_text_snapshot(
     }
 
 
+def build_classified_user_signal_snapshot(
+    *,
+    text: str,
+    hook_text: str,
+    taxonomy_leaf_key: str,
+    max_keywords: int = 10,
+) -> Dict[str, object]:
+    """Build every downstream user signal from the Active Model category."""
+    transcript = normalize_text_for_nlp(str(text or "").strip())
+    canonical_leaf = normalize_taxonomy_leaf(taxonomy_leaf_key)
+    recommendation_domain = recommendation_domain_for_taxonomy_leaf(canonical_leaf)
+
+    nlp_result = run_nlp_pipeline(transcript, max_keywords=max_keywords)
+    ranked_keywords = [
+        {
+            "keyword": str(item.get("keyword") or "").strip(),
+            "score": float(item.get("score") or 0.0),
+        }
+        for item in nlp_result.get("top_keywords", [])
+        if str(item.get("keyword") or "").strip()
+    ]
+    comparable_candidates = extract_comparable_keyword_candidates(
+        transcript,
+        recommendation_domain,
+    )
+    comparable_keywords = [
+        str(item["keyword"])
+        for item in comparable_candidates
+    ]
+    comparison_dimensions = [
+        {
+            "name": str(item["keyword"]),
+            "confidence": min(1.0, float(item["score"]) / 5.0),
+            "value": "mentioned",
+        }
+        for item in comparable_candidates
+    ]
+    dimension_status = build_dimension_status(
+        recommendation_domain,
+        comparison_dimensions,
+    )
+
+    def evidence_first_keywords(
+        candidates: List[Dict[str, object]],
+        ranked: List[Dict[str, object]],
+    ) -> List[str]:
+        selected: List[str] = []
+        seen: set[str] = set()
+
+        for candidate in candidates:
+            matched_terms = [
+                str(term).strip()
+                for term in candidate.get("matched_terms", [])
+                if str(term).strip()
+            ]
+            if not matched_terms:
+                continue
+            surface_term = matched_terms[0]
+            normalized_term = surface_term.lower()
+            if normalized_term in seen:
+                continue
+            seen.add(normalized_term)
+            selected.append(surface_term)
+            if len(selected) >= max_keywords:
+                return selected
+
+        for item in ranked:
+            keyword = str(item.get("keyword") or "").strip()
+            normalized_keyword = keyword.lower()
+            if not normalized_keyword or normalized_keyword in seen:
+                continue
+            if (
+                recommendation_domain != "general"
+                and not _keyword_is_domain_relevant(
+                    normalized_keyword,
+                    recommendation_domain,
+                )
+            ):
+                continue
+            seen.add(normalized_keyword)
+            selected.append(keyword)
+            if len(selected) >= max_keywords:
+                break
+        return selected
+
+    content_keywords = evidence_first_keywords(
+        comparable_candidates,
+        ranked_keywords,
+    )
+
+    user_keywords: List[str] = []
+    seen_keywords: set[str] = set()
+    for keyword in [
+        *content_keywords,
+        *comparable_keywords,
+    ]:
+        normalized_keyword = str(keyword or "").strip().lower()
+        if not normalized_keyword or normalized_keyword in seen_keywords:
+            continue
+        seen_keywords.add(normalized_keyword)
+        user_keywords.append(str(keyword).strip())
+
+    hook_nlp_result = (
+        run_nlp_pipeline(
+            normalize_text_for_nlp(str(hook_text or "").strip()),
+            max_keywords=max_keywords,
+        )
+        if str(hook_text or "").strip()
+        else {}
+    )
+    hook_comparable_candidates = extract_comparable_keyword_candidates(
+        str(hook_text or ""),
+        recommendation_domain,
+    )
+    hook_ranked_keywords = [
+        item
+        for item in hook_nlp_result.get("top_keywords", [])
+        if isinstance(item, dict)
+    ]
+    hook_terms = evidence_first_keywords(
+        hook_comparable_candidates,
+        hook_ranked_keywords,
+    )
+    if not hook_terms:
+        hook_terms = [
+            str(term).strip()
+            for term in hook_nlp_result.get("filtered_tokens", [])
+            if str(term).strip()
+        ][:max_keywords]
+    comparable_keyword_evidence = [
+        {
+            "keyword": str(item["keyword"]),
+            "score": float(item["score"]),
+            "frequency": int(item["frequency"]),
+            "matched_terms": list(item["matched_terms"]),
+        }
+        for item in comparable_candidates
+    ]
+    hook_comparable_keywords = [
+        str(item["keyword"])
+        for item in hook_comparable_candidates
+    ]
+
+    content_ranked_lookup = {
+        str(item["keyword"]).strip().lower(): float(item["score"])
+        for item in ranked_keywords
+    }
+    nlp_result["top_keywords"] = [
+        {
+            "keyword": keyword,
+            "score": content_ranked_lookup.get(keyword.lower(), 1.0),
+        }
+        for keyword in content_keywords
+    ]
+    nlp_result["content_keywords"] = list(content_keywords)
+    nlp_result["comparable_keywords"] = list(comparable_keywords)
+    nlp_result["comparable_keyword_evidence"] = comparable_keyword_evidence
+
+    return {
+        "taxonomy_leaf_key": canonical_leaf,
+        "recommendation_domain": recommendation_domain,
+        "nlp_result": nlp_result,
+        "content_keywords": content_keywords,
+        "user_keywords": user_keywords,
+        "hook_terms": hook_terms,
+        "hook_comparable_keywords": hook_comparable_keywords,
+        "comparable_keywords": comparable_keywords,
+        "comparable_keyword_evidence": comparable_keyword_evidence,
+        "comparison_dimensions": comparison_dimensions,
+        "dimension_status": dimension_status,
+    }
+
+
+def _percentile(values: List[int], percentile: int) -> int:
+    if not values:
+        raise ValueError("Percentile requires at least one value")
+    position = (len(values) - 1) * (percentile / 100.0)
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return int(round(values[lower_index]))
+    fraction = position - lower_index
+    interpolated = values[lower_index] + (
+        (values[upper_index] - values[lower_index]) * fraction
+    )
+    return int(round(interpolated))
+
+
 def _duration_summary(durations: List[int], domain: str) -> Dict[str, object]:
     cleaned = sorted(duration for duration in durations if duration and duration > 0)
-    if not cleaned:
-        recommended = DEFAULT_DURATION_BY_DOMAIN.get(domain, 60)
+    base = {
+        "sample_size": len(cleaned),
+        "minimum_sample_size": DURATION_MINIMUM_SAMPLE_SIZE,
+        "target_sample_size": DURATION_TARGET_SAMPLE_SIZE,
+        "cohort": DURATION_COHORT_UPLOAD_COMPATIBLE,
+        "percentile_low": DURATION_PERCENTILE_LOW,
+        "percentile_high": DURATION_PERCENTILE_HIGH,
+    }
+    if len(cleaned) < DURATION_MINIMUM_SAMPLE_SIZE:
         return {
-            "recommended_seconds": recommended,
-            "recommended_range": f"{max(15, recommended - 20)}-{recommended + 20} sec",
-            "sample_size": 0,
-            "source": "default",
-        }
-
-    if len(cleaned) < 3:
-        default_value = DEFAULT_DURATION_BY_DOMAIN.get(domain, 60)
-        mid = int(round((float(median(cleaned)) + default_value) / 2.0))
-        return {
-            "recommended_seconds": mid,
-            "recommended_range": f"{max(15, mid - 25)}-{mid + 25} sec",
-            "sample_size": len(cleaned),
-            "source": "blended",
+            **base,
+            "recommended_seconds": None,
+            "recommended_range": "Insufficient evidence",
+            "median_seconds": None,
+            "percentile_low_seconds": None,
+            "percentile_high_seconds": None,
+            "source": "youtube_metadata" if cleaned else "none",
+            "evidence_status": "insufficient_evidence",
         }
 
     mid = int(round(float(median(cleaned))))
-    low = max(10, int(round(cleaned[max(0, len(cleaned) // 4 - 1)])))
-    high = int(round(cleaned[min(len(cleaned) - 1, (len(cleaned) * 3) // 4)]))
+    low = _percentile(cleaned, DURATION_PERCENTILE_LOW)
+    high = _percentile(cleaned, DURATION_PERCENTILE_HIGH)
     if high < low:
         high = low
     return {
+        **base,
         "recommended_seconds": mid,
         "recommended_range": f"{low}-{high} sec",
-        "sample_size": len(cleaned),
-        "source": "dataset",
+        "median_seconds": mid,
+        "percentile_low_seconds": low,
+        "percentile_high_seconds": high,
+        "source": "youtube_metadata",
+        "evidence_status": "sufficient",
     }
 
 
@@ -319,7 +757,16 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
     sample_size = int(profile.get("sample_size") or 0)
     eligible_pool_size = int(profile.get("eligible_pool_size") or sample_size)
     duration_sample_size = int(duration.get("sample_size") or 0)
-    duration_source = str(duration.get("source") or "default")
+    duration_source = str(duration.get("source") or "none")
+    duration_status = str(
+        duration.get("evidence_status") or "insufficient_evidence"
+    )
+    duration_minimum = int(
+        duration.get("minimum_sample_size") or DURATION_MINIMUM_SAMPLE_SIZE
+    )
+    duration_target = int(
+        duration.get("target_sample_size") or DURATION_TARGET_SAMPLE_SIZE
+    )
     return {
         "source": profile.get("source") or source_prefix,
         "dataset_sources": profile.get("dataset_sources") or [],
@@ -335,6 +782,9 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
         "view_metric_cohort_size": int(
             profile.get("view_metric_cohort_size") or 0
         ),
+        "performance_eligible_pool_size": int(
+            profile.get("performance_eligible_pool_size") or 0
+        ),
         "excluded_incompatible_view_metric_rows": int(
             profile.get("excluded_incompatible_view_metric_rows") or 0
         ),
@@ -346,24 +796,53 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
         "license_name": profile.get("license_name") or "",
         "verification_status": profile.get("verification_status") or "",
         "duration_source": duration_source,
+        "duration_evidence_status": duration_status,
         "duration_sample_size": duration_sample_size,
+        "duration_minimum_sample_size": duration_minimum,
+        "duration_target_sample_size": duration_target,
+        "duration_cohort": duration.get("cohort")
+        or DURATION_COHORT_UPLOAD_COMPATIBLE,
         "duration_samples": profile.get("duration_samples") or [],
+        "duration_dataset_row_ids": profile.get("duration_dataset_row_ids") or [],
+        "duration_source_record_ids": profile.get("duration_source_record_ids") or [],
+        "duration_exemplar_titles": profile.get("duration_exemplar_titles") or [],
+        "duration_selection_rule": profile.get("duration_selection_rule") or "none",
         "exemplar_titles": profile.get("exemplar_titles") or [],
         "dataset_row_ids": profile.get("dataset_row_ids") or [],
         "source_record_ids": profile.get("source_record_ids") or [],
+        "keyword_evidence_dataset_row_ids": sorted(
+            {
+                int(dataset_id)
+                for item in profile.get("top_keywords") or []
+                for dataset_id in item.get("supporting_dataset_row_ids", [])
+            }
+        ),
+        "keyword_score_weights": {
+            "document_coverage": KEYWORD_DOCUMENT_WEIGHT,
+            "frequency": KEYWORD_FREQUENCY_WEIGHT,
+            "engagement": KEYWORD_ENGAGEMENT_WEIGHT,
+        },
         "keyword_score_explanation": (
-            "Keyword gap uses only human-reviewed public YouTube transcripts "
-            "in the same taxonomy leaf. High-performing examples are selected from real "
-            "YouTube statistics using average views per day and engagement rate captured "
-            "during collection. Rows are ranked only inside one compatible "
-            "public view-count metric version."
+            "Keyword gap uses only human-reviewed public YouTube transcripts in the "
+            "same taxonomy leaf. Each score combines the number of supporting clips "
+            "(45%), term frequency inside each transcript (25%), and the public "
+            "performance weight of those clips (30%). High-performing examples are "
+            "selected by average views per day and engagement rate inside one "
+            "compatible public view-count metric version."
             if sample_size > 0
             else "No eligible same-type transcript samples were available; no dataset keyword evidence was generated."
         ),
         "duration_explanation": (
-            f"Recommended duration uses {duration_sample_size} same-type duration samples from the {source_prefix} dataset."
-            if duration_sample_size > 0
-            else "Recommended duration falls back to the default range for this content type because no same-type duration samples were available."
+            "Recommended duration is the median of "
+            f"{duration_sample_size} human-reviewed, same-category videos; the "
+            f"displayed range is P{DURATION_PERCENTILE_LOW}-P{DURATION_PERCENTILE_HIGH}. "
+            "Durations come from YouTube contentDetails metadata and are limited "
+            "to videos compatible with the current five-minute upload limit."
+            if duration_status == "sufficient"
+            else "Insufficient evidence: "
+            f"{duration_sample_size} of {duration_minimum} required same-category "
+            "YouTube duration samples are available. No duration number is "
+            f"recommended until the minimum is reached; the collection target is {duration_target}."
         ),
     }
 
@@ -406,21 +885,30 @@ def _high_performing_rows(
 ) -> tuple[List[DatasetContent], Dict[int, float]]:
     if not rows:
         return [], {}
+    rankable = [row for row in rows if _row_performance_signal(row) > 0.0]
     ranked = sorted(
-        rows,
+        rankable,
         key=lambda row: (
-            -float(row.trend_score or 0.0),
+            -_row_performance_signal(row),
             -int(row.views or 0),
             int(row.dataset_id),
         ),
     )
+    if not ranked:
+        return [], {}
     selection_size = min(limit, max(10, math.ceil(len(ranked) * 0.4)))
     selected = ranked[:selection_size]
-    denominator = max(len(selected) - 1, 1)
-    weights = {
-        int(row.dataset_id): 1.0 + 2.0 * (1.0 - (index / denominator))
-        for index, row in enumerate(selected)
-    }
+    signals = [_row_performance_signal(row) for row in selected]
+    minimum_signal = min(signals)
+    signal_range = max(signals) - minimum_signal
+    weights = {}
+    for row, signal in zip(selected, signals):
+        normalized_signal = (
+            (signal - minimum_signal) / signal_range
+            if signal_range > 0
+            else 1.0
+        )
+        weights[int(row.dataset_id)] = 1.0 + (2.0 * normalized_signal)
     return selected, weights
 
 
@@ -450,6 +938,40 @@ def _single_view_metric_cohort(
     return selected_rows, selected_version, excluded
 
 
+def _has_youtube_duration_metadata(row: DatasetContent) -> bool:
+    try:
+        metadata = json.loads(str(row.raw_metadata_json or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    content_details = metadata.get("contentDetails")
+    if not isinstance(content_details, dict):
+        nested = metadata.get("raw_metadata")
+        content_details = (
+            nested.get("contentDetails") if isinstance(nested, dict) else None
+        )
+    return bool(
+        isinstance(content_details, dict)
+        and str(content_details.get("duration") or "").strip()
+    )
+
+
+def _duration_evidence_rows(
+    rows: Iterable[DatasetContent],
+) -> List[DatasetContent]:
+    selected = []
+    for row in rows:
+        duration = int(row.duration_seconds or 0)
+        if (
+            row.is_duration_recommendation_eligible
+            and 0 < duration <= RECOMMENDATION_DURATION_MAX_SECONDS
+            and _has_youtube_duration_metadata(row)
+        ):
+            selected.append(row)
+    return sorted(selected, key=lambda row: int(row.dataset_id or 0))
+
+
 def build_dataset_profile_for_domain(
     db: Session,
     *,
@@ -464,7 +986,7 @@ def build_dataset_profile_for_domain(
     eligible_rows: List[DatasetContent] = []
     if canonical_domain in ready_leaf_keys(db):
         eligible_rows = (
-            production_transcript_query(db, train_only=True)
+            production_transcript_query(db, train_only=False)
             .filter(DatasetContent.is_keyword_recommendation_eligible.is_(True))
             .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
             .filter(DatasetContent.taxonomy_leaf_key == canonical_domain)
@@ -475,46 +997,39 @@ def build_dataset_profile_for_domain(
         _single_view_metric_cohort(eligible_rows)
     )
     rows, row_weights = _high_performing_rows(metric_cohort, limit=limit)
+    duration_rows = _duration_evidence_rows(eligible_rows)
+    durations = [int(row.duration_seconds) for row in duration_rows]
+    duration_summary = _duration_summary(durations, canonical_domain)
 
-    keyword_scores: Dict[str, float] = {}
     dimension_scores: Dict[str, float] = {}
     hook_scores: Dict[str, float] = {}
-    durations: List[int] = []
     platform_counts: Counter[str] = Counter()
     transcript_source_counts: Counter[str] = Counter()
     language_counts: Counter[str] = Counter()
     collection_strategy_counts: Counter[str] = Counter()
 
     for row in rows:
-        base_text = " ".join(
-            part
-            for part in [row.title or "", row.transcript or "", row.category or ""]
-            if part
-        ).strip()
+        base_text = str(row.transcript or "").strip()
         weight = row_weights.get(int(row.dataset_id), 1.0)
-        for item in _fast_keyword_items(
+        comparable_items = extract_comparable_keyword_candidates(
             base_text,
             keyword_domain,
-            admin_config.max_keywords_display,
-        ):
-            _weighted_increment(
-                keyword_scores,
-                str(item["keyword"]),
-                weight * float(item["score"]),
-            )
-        for name in DOMAIN_DIMENSIONS_ORDER.get(keyword_domain, [])[:8]:
-            if _keyword_is_domain_relevant(name, keyword_domain):
-                confidence = 1.0 if name.lower() in base_text.lower() else 0.35
-                _weighted_increment(dimension_scores, name, weight * confidence)
+        )
+        if keyword_domain == "smartphone":
+            for item in comparable_items:
+                _weighted_increment(
+                    dimension_scores,
+                    str(item["keyword"]),
+                    weight * float(item["score"]),
+                )
+        else:
+            for name in DOMAIN_DIMENSIONS_ORDER.get(keyword_domain, [])[:8]:
+                if _keyword_is_domain_relevant(name, keyword_domain):
+                    confidence = 1.0 if name.lower() in base_text.lower() else 0.35
+                    _weighted_increment(dimension_scores, name, weight * confidence)
         hook_limit = min(12, max(4, int(admin_config.hook_analysis_duration / 15)))
         for term in _fast_dataset_tokens(base_text)[:hook_limit]:
             _weighted_increment(hook_scores, term, weight)
-        if (
-            row.is_duration_recommendation_eligible
-            and row.duration_seconds
-            and int(row.duration_seconds) > 0
-        ):
-            durations.append(int(row.duration_seconds))
         platform_counts[_platform_key(row.source_platform, source_prefix)] += 1
         transcript_source_counts[str(row.transcript_source or "unknown")] += 1
         language_counts[str(row.language or "und")] += 1
@@ -522,16 +1037,11 @@ def build_dataset_profile_for_domain(
             str(row.collection_strategy or "classification_diverse")
         ] += 1
 
-    raw_top_keywords = [
-        {"keyword": keyword, "score": round(score, 3)}
-        for keyword, score in sorted(
-            keyword_scores.items(), key=lambda item: (-item[1], item[0])
-        )[:20]
-    ]
-    top_keywords = _clean_profile_keywords(
-        raw_top_keywords,
-        keyword_domain,
-        max_items=10,
+    top_keywords = _build_keyword_evidence(
+        rows,
+        row_weights=row_weights,
+        domain=keyword_domain,
+        max_items=max(10, admin_config.max_keywords_display),
     )
     top_dimensions = [
         {"keyword": name, "score": round(score, 3)}
@@ -561,12 +1071,29 @@ def build_dataset_profile_for_domain(
         "eligible_pool_size": len(eligible_rows),
         "view_metric_version": view_metric_version,
         "view_metric_cohort_size": len(metric_cohort),
+        "performance_eligible_pool_size": sum(
+            1 for row in metric_cohort if _row_performance_signal(row) > 0.0
+        ),
         "excluded_incompatible_view_metric_rows": excluded_metric_rows,
         "top_keywords": top_keywords,
         "top_dimensions": top_dimensions,
         "hook_keywords": hook_keywords,
-        "recommended_duration": _duration_summary(durations, canonical_domain),
+        "recommended_duration": duration_summary,
         "duration_samples": sorted(durations),
+        "duration_metadata_coverage_size": sum(
+            1 for row in eligible_rows if _has_youtube_duration_metadata(row)
+        ),
+        "duration_eligible_pool_size": len(duration_rows),
+        "duration_dataset_row_ids": [int(row.dataset_id) for row in duration_rows],
+        "duration_source_record_ids": [
+            str(row.source_record_id) for row in duration_rows
+        ],
+        "duration_exemplar_titles": [str(row.title) for row in duration_rows[:5]],
+        "duration_selection_rule": (
+            "same_category_human_verified_youtube_metadata_under_5_minutes"
+            if duration_rows
+            else "none"
+        ),
         "exemplar_titles": [str(row.title) for row in rows[:5]],
         "dataset_row_ids": [int(row.dataset_id) for row in rows],
         "source_record_ids": [str(row.source_record_id) for row in rows],
@@ -578,7 +1105,7 @@ def build_dataset_profile_for_domain(
         "language_counts": dict(language_counts),
         "collection_strategy_counts": dict(collection_strategy_counts),
         "selection_rule": (
-            "single_view_metric_cohort_then_top_40_percent"
+            "same_category_single_view_metric_top_40_percent_by_performance"
             if rows
             else "none"
         ),
@@ -602,11 +1129,9 @@ def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[st
         "eligible_pool_size": 0,
         "view_metric_version": "",
         "view_metric_cohort_size": 0,
+        "performance_eligible_pool_size": 0,
         "excluded_incompatible_view_metric_rows": 0,
-        "top_keywords": [
-            {"keyword": keyword, "score": 0.0}
-            for keyword in DOMAIN_BASE.get(_keyword_domain(domain), [])[:8]
-        ],
+        "top_keywords": [],
         "top_dimensions": [
             {"keyword": name, "score": 0.0}
             for name in DOMAIN_DIMENSIONS_ORDER.get(_keyword_domain(domain), [])[:8]
@@ -615,6 +1140,12 @@ def _find_profile(profiles: Iterable[Dict[str, object]], domain: str) -> Dict[st
         "recommended_duration": _duration_summary([], domain),
         "exemplar_titles": [],
         "duration_samples": [],
+        "duration_metadata_coverage_size": 0,
+        "duration_eligible_pool_size": 0,
+        "duration_dataset_row_ids": [],
+        "duration_source_record_ids": [],
+        "duration_exemplar_titles": [],
+        "duration_selection_rule": "none",
         "dataset_row_ids": [],
         "source_record_ids": [],
         "source": "none",
@@ -639,30 +1170,27 @@ def build_recommendation_from_text(
     profile_limit: int = 150,
 ) -> Dict[str, object]:
     admin_config = get_admin_config(db)
-    user_snapshot = analyze_text_snapshot(
-        text,
-        title,
-        max_keywords=admin_config.max_keywords_display,
-        hook_duration=admin_config.hook_analysis_duration,
-    )
     classification = classify_text_domain(
         db,
-        title=title,
+        title=None,
         text=text,
         source_prefix=source_prefix,
         profile_limit=profile_limit,
+        require_active_model=True,
     )
-    selected_domain = str(user_snapshot["domain"])
-    if classification.get("is_unknown"):
-        selected_domain = UNKNOWN_LEAF_KEY
-    elif float(classification.get("confidence", 0.0)) >= 0.45:
-        selected_domain = str(classification["domain"])
-    user_keywords = [item["keyword"] for item in user_snapshot["nlp_result"].get("top_keywords", [])]
-    user_keywords.extend(user_snapshot["comparable_keywords"])
+    selected_domain = normalize_taxonomy_leaf(
+        str(classification.get("taxonomy_leaf_key") or classification.get("domain"))
+    )
+    user_snapshot = build_classified_user_signal_snapshot(
+        text=text,
+        hook_text=text,
+        taxonomy_leaf_key=selected_domain,
+        max_keywords=admin_config.max_keywords_display,
+    )
     recommendation = build_recommendation_from_analysis_data(
         db,
         domain=selected_domain,
-        user_keywords=user_keywords,
+        user_keywords=list(user_snapshot["user_keywords"]),
         dimension_status=user_snapshot["dimension_status"],
         hook_terms=user_snapshot["hook_terms"],
         source_prefix=source_prefix,
@@ -691,15 +1219,33 @@ def build_recommendation_from_analysis_data(
         limit=profile_limit,
     )
 
-    normalized_user_keywords = {keyword.lower() for keyword in user_keywords}
+    normalized_user_keywords = {
+        identity
+        for keyword in user_keywords
+        for identity in (
+            _normalize_keyword(keyword),
+            _keyword_identity(keyword, keyword_domain),
+        )
+        if identity
+    }
+    normalized_user_keywords.update(
+        _keyword_identity(str(row.get("name") or ""), keyword_domain)
+        for row in dimension_status
+        if str(row.get("status") or "").lower() == "present"
+    )
     missing_keywords = []
     for item in profile["top_keywords"]:
         keyword = str(item["keyword"]).strip()
         if not keyword:
             continue
-        if keyword.lower() in normalized_user_keywords:
+        if (
+            _normalize_keyword(keyword) in normalized_user_keywords
+            or _keyword_identity(keyword, keyword_domain) in normalized_user_keywords
+        ):
             continue
-        missing_keywords.append({"keyword": keyword, "score": round(float(item["score"]), 3)})
+        missing_item = dict(item)
+        missing_item["score"] = round(float(item["score"]), 4)
+        missing_keywords.append(missing_item)
         if len(missing_keywords) >= 6:
             break
 

@@ -1,12 +1,11 @@
 {
-    "name": "content_ai_mobile",
-    "short_name": "content_ai_mobile",
+    "name": "Content AI",
+    "short_name": "Content AI",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "description": "Web dashboard and clip analysis for Content AI.",
     "prefer_related_applications": false,
     "icons": [
         {

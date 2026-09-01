@@ -15,11 +15,14 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from app.database.db import Base, SessionLocal, engine
 from app.database.migrations import (
+    migrate_classification_split_strategy,
     migrate_phase13_taxonomy_schema,
     migrate_view_metric_schema,
     migrate_youtube_cc_dataset_schema,
 )
 from app.services.classification_training import (
+    DEFAULT_GROUPED_CV_FOLDS,
+    DEFAULT_MULTILINGUAL_EMBEDDING_MODEL,
     MODEL_PROMOTION_THRESHOLD,
     UNKNOWN_CONFIDENCE_THRESHOLD,
     ClassificationTrainingError,
@@ -69,8 +72,46 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=MODEL_PROMOTION_THRESHOLD,
         help=(
-            "Required validation/test accuracy and Macro F1; does not activate the "
-            f"model automatically (default: {MODEL_PROMOTION_THRESHOLD})"
+            "Required grouped-CV/test accuracy, Macro F1, and minimum per-class "
+            "recall; does not activate the model automatically "
+            f"(default: {MODEL_PROMOTION_THRESHOLD})"
+        ),
+    )
+    parser.add_argument(
+        "--grouped-cv-folds",
+        type=int,
+        default=DEFAULT_GROUPED_CV_FOLDS,
+        help=(
+            "Requested Stratified Group K-fold count; automatically reduced when "
+            f"a class has fewer channels (default: {DEFAULT_GROUPED_CV_FOLDS})"
+        ),
+    )
+    parser.add_argument(
+        "--embedding-model",
+        default=DEFAULT_MULTILINGUAL_EMBEDDING_MODEL,
+        help="Sentence Transformers model name or local directory",
+    )
+    parser.add_argument(
+        "--embedding-cache-folder",
+        type=Path,
+        default=ROOT / "models_cache" / "sentence_transformers",
+        help="Local cache used by the multilingual embedding benchmark",
+    )
+    parser.add_argument(
+        "--allow-embedding-download",
+        action="store_true",
+        help=(
+            "Allow downloading the embedding model. Without this flag an uncached "
+            "embedding benchmark is reported as skipped instead of using network."
+        ),
+    )
+    parser.add_argument(
+        "--no-phase22-gate",
+        action="store_true",
+        help=(
+            "Benchmark without enforcing the 80-samples-per-leaf and out-of-scope "
+            "promotion gate. Intended for diagnostics; models can pass only the "
+            "numeric metric gate."
         ),
     )
     parser.add_argument(
@@ -90,6 +131,11 @@ def parse_args() -> argparse.Namespace:
         "--require-ready",
         action="store_true",
         help="Exit 1 when the real reviewed dataset is not ready for training",
+    )
+    parser.add_argument(
+        "--require-phase22-ready",
+        action="store_true",
+        help="Exit 1 unless all Phase 22 collection targets meet their minimums",
     )
     args = parser.parse_args()
     if args.smoke_test and args.prepare_only:
@@ -113,6 +159,7 @@ def main() -> int:
     migrate_phase13_taxonomy_schema(engine)
     migrate_youtube_cc_dataset_schema(engine)
     migrate_view_metric_schema(engine)
+    migrate_classification_split_strategy(engine)
     db = SessionLocal()
     try:
         sync_taxonomy_registry(db)
@@ -126,9 +173,18 @@ def main() -> int:
             promotion_threshold=args.promotion_threshold,
             prepare_only=args.prepare_only,
             smoke_test=args.smoke_test,
+            grouped_cv_folds=args.grouped_cv_folds,
+            embedding_model=args.embedding_model,
+            embedding_cache_folder=args.embedding_cache_folder,
+            allow_embedding_download=args.allow_embedding_download,
+            enforce_phase22_gate=not args.no_phase22_gate,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if args.require_ready and not bool(result["dataset"]["ready"]):
+            return 1
+        if args.require_phase22_ready and not bool(
+            result["dataset"]["phase22_ready"]
+        ):
             return 1
         return 0
     finally:

@@ -27,6 +27,8 @@ class UserContentDetailResponse(BaseModel):
     created_at: datetime
     video_url: Optional[str] = None
     transcript: Optional[str] = None
+    raw_transcript: Optional[str] = None
+    cleaned_transcript: Optional[str] = None
     analysis: dict[str, Any]
     nlp_result: dict[str, Any]
     recommendation: dict[str, Any]

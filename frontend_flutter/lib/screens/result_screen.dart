@@ -103,8 +103,12 @@ class _ResultScreenState extends State<ResultScreen> {
         recommendation?.domain ??
         data?.fallbackDomain ??
         '-';
-    final userKeywords = recommendation?.userKeywords ?? const <String>[];
     final contentKeywords = recommendation?.contentKeywords ?? const <String>[];
+    final comparableKeywords =
+        recommendation?.comparableKeywords ?? const <String>[];
+    final userKeywords = comparableKeywords.isNotEmpty
+        ? comparableKeywords
+        : recommendation?.userKeywords ?? const <String>[];
     final hookTerms = recommendation?.hookTerms ?? const <String>[];
     final missingKeywords =
         recommendation?.missingKeywords ?? const <KeywordScore>[];
@@ -230,23 +234,25 @@ class _ResultScreenState extends State<ResultScreen> {
                       ),
                       const SizedBox(height: 24),
                       const _SectionHeader(
-                        title: 'Keywords Found in Your Clip',
-                        icon: Icons.key_outlined,
+                        title: 'Content Keywords From Full Transcript',
+                        icon: Icons.article_outlined,
                       ),
                       _StringKeywordCard(
-                        keywords: userKeywords,
+                        keywords: contentKeywords.isNotEmpty
+                            ? contentKeywords
+                            : userKeywords,
                         emptyMessage:
                             'No keywords were detected from this clip.',
                       ),
                       const SizedBox(height: 24),
-                      if (contentKeywords.isNotEmpty) ...[
+                      if (comparableKeywords.isNotEmpty) ...[
                         const _SectionHeader(
-                          title: 'Content Keywords',
-                          icon: Icons.article_outlined,
+                          title: 'Comparable Keywords',
+                          icon: Icons.compare_arrows_outlined,
                         ),
                         _StringKeywordCard(
-                          keywords: contentKeywords,
-                          emptyMessage: 'No content keywords were detected.',
+                          keywords: comparableKeywords,
+                          emptyMessage: 'No comparable keywords were detected.',
                         ),
                         const SizedBox(height: 24),
                       ],
@@ -267,7 +273,7 @@ class _ResultScreenState extends State<ResultScreen> {
                           icon: Icons.auto_awesome_outlined,
                         ),
                         Text(
-                          'These terms appear frequently in verified $domain transcripts but were not found in your clip.',
+                          'These topics are supported by high-performing $domain clips but were not found in your transcript or its known synonyms.',
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
@@ -424,12 +430,15 @@ class _EvidenceCard extends StatelessWidget {
       if (evidence.licenseName.isNotEmpty) evidence.licenseName,
     ].join(' · ');
     final selectionText = evidence.selectionRule ==
-            'single_view_metric_cohort_then_top_40_percent'
-        ? 'One compatible view-count cohort, then the top 40% in the same category'
+            'same_category_single_view_metric_top_40_percent_by_performance'
+        ? 'Top 40% in the same category by views per day and engagement rate, within one compatible view-count cohort'
         : evidence.selectionRule ==
-                'top_40_percent_by_average_views_per_day_and_engagement_rate'
-            ? 'Top 40% in the same category by average views/day and engagement rate'
-            : evidence.selectionRule.replaceAll('_', ' ');
+                'single_view_metric_cohort_then_top_40_percent'
+            ? 'One compatible view-count cohort, then the top 40% in the same category'
+            : evidence.selectionRule ==
+                    'top_40_percent_by_average_views_per_day_and_engagement_rate'
+                ? 'Top 40% in the same category by average views/day and engagement rate'
+                : evidence.selectionRule.replaceAll('_', ' ');
     final examples = evidence.exemplarTitles.isNotEmpty
         ? evidence.exemplarTitles.take(3).toList()
         : datasetProfile.exemplarTitles.take(3).toList();
@@ -562,8 +571,11 @@ class _EvidenceCard extends StatelessWidget {
             _SummaryRow(
               icon: Icons.schedule_outlined,
               label: 'Duration source',
-              value:
-                  '${evidence.durationSource}, ${evidence.durationSampleSize} duration samples',
+              value: evidence.durationEvidenceStatus == 'sufficient'
+                  ? '${_durationSourceLabel(evidence.durationSource)}, '
+                      '${evidence.durationSampleSize} duration samples'
+                  : 'Insufficient evidence: ${evidence.durationSampleSize} of '
+                      '${evidence.durationMinimumSampleSize} required samples',
             ),
             if (evidence.durationSamples.isNotEmpty) ...[
               const Divider(height: 20),
@@ -571,8 +583,18 @@ class _EvidenceCard extends StatelessWidget {
                 icon: Icons.timer_outlined,
                 label: 'Duration samples used',
                 value: evidence.durationSamples
-                    .take(12)
+                    .take(15)
                     .map((seconds) => '${seconds}s')
+                    .join(', '),
+              ),
+            ],
+            if (evidence.durationDatasetRowIds.isNotEmpty) ...[
+              const Divider(height: 20),
+              _SummaryRow(
+                icon: Icons.tag_outlined,
+                label: 'Duration evidence rows',
+                value: evidence.durationDatasetRowIds
+                    .map((datasetId) => '#$datasetId')
                     .join(', '),
               ),
             ],
@@ -818,27 +840,83 @@ class _ScoredKeywordCard extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final keyword in keywords)
+            for (var index = 0; index < keywords.length; index++) ...[
+              if (index > 0) const Divider(height: 24),
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        keyword.keyword,
-                        style: Theme.of(context).textTheme.labelMedium,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                keywords[index].keyword,
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              if (keywords[index].hasDatasetEvidence) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${keywords[index].supportCount} of ${keywords[index].sampleSize} high-performing clips support this topic '
+                                  '(${keywords[index].totalFrequency} mentions)',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Chip(
+                          label: Text(
+                            keywords[index].hasDatasetEvidence
+                                ? '${(keywords[index].score.clamp(0.0, 1.0) * 100).toStringAsFixed(0)}% evidence'
+                                : keywords[index].score.toStringAsFixed(2),
+                          ),
+                          side: const BorderSide(color: Color(0xFFE0E0E0)),
+                          backgroundColor: Colors.transparent,
+                        ),
+                      ],
+                    ),
+                    if (keywords[index].supportingExamples.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        'Supporting examples',
+                        style: Theme.of(context).textTheme.labelSmall,
                       ),
-                    ),
-                    Chip(
-                      label: Text(keyword.score.toStringAsFixed(2)),
-                      side: const BorderSide(color: Color(0xFFE0E0E0)),
-                      backgroundColor: Colors.transparent,
-                    ),
+                      const SizedBox(height: 6),
+                      for (final example
+                          in keywords[index].supportingExamples) ...[
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Padding(
+                              padding: EdgeInsets.only(top: 2),
+                              child:
+                                  Icon(Icons.ondemand_video_outlined, size: 16),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${example.title} '
+                                '(Dataset #${example.datasetId}, ${example.frequency} mentions)',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                      ],
+                    ],
                   ],
                 ),
               ),
+            ],
           ],
         ),
       ),
@@ -853,6 +931,16 @@ class _DurationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isSufficient = duration.hasSufficientEvidence;
+    final median = duration.medianSeconds ?? duration.recommendedSeconds;
+    final headline = isSufficient && median != null
+        ? 'Median $median sec'
+        : 'Insufficient evidence';
+    final detail = isSufficient
+        ? 'P${duration.percentileLow}-P${duration.percentileHigh}: '
+            '${duration.recommendedRange}'
+        : '${duration.sampleSize} of ${duration.minimumSampleSize} required '
+            'duration samples are available.';
     return Card(
       color: Theme.of(context).colorScheme.primaryContainer,
       child: Padding(
@@ -860,39 +948,48 @@ class _DurationCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              duration.recommendedRange,
-              style: Theme.of(context).textTheme.headlineSmall,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  isSufficient ? Icons.analytics_outlined : Icons.info_outline,
+                  color: isSufficient
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        headline,
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(detail),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Wrap(
+              spacing: 32,
+              runSpacing: 12,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Source',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                    Text(
-                      duration.source,
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  ],
+                _DurationFact(
+                  label: 'Source',
+                  value: _durationSourceLabel(duration.source),
                 ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      'Sample size',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                    Text(
-                      '${duration.sampleSize} videos',
-                      style: Theme.of(context).textTheme.labelMedium,
-                    ),
-                  ],
+                _DurationFact(
+                  label: 'Evidence',
+                  value: '${duration.sampleSize} videos '
+                      '(target ${duration.targetSampleSize})',
+                ),
+                _DurationFact(
+                  label: 'Cohort',
+                  value: _durationCohortLabel(duration.cohort),
                 ),
               ],
             ),
@@ -901,6 +998,40 @@ class _DurationCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _DurationFact extends StatelessWidget {
+  const _DurationFact({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 150, maxWidth: 280),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+          Text(value, style: Theme.of(context).textTheme.labelMedium),
+        ],
+      ),
+    );
+  }
+}
+
+String _durationSourceLabel(String source) {
+  if (source == 'youtube_metadata') return 'YouTube metadata';
+  if (source == 'none') return 'No verified source';
+  return source.replaceAll('_', ' ');
+}
+
+String _durationCohortLabel(String cohort) {
+  if (cohort == 'upload_compatible_under_5m') {
+    return 'Videos up to 5 minutes';
+  }
+  return cohort.replaceAll('_', ' ');
 }
 
 class _SectionHeader extends StatelessWidget {

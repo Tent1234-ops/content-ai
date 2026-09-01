@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:content_ai_mobile/utils/notebooklm_markdown_parser.dart';
+import 'package:content_ai_web/utils/notebooklm_markdown_parser.dart';
 
 final RegExp _youtubeIdPattern = RegExp(
   r'(?:youtu\.be/|youtube\.com/(?:watch\?(?:[^\s#]*&)?v=|shorts/))'
@@ -39,11 +39,12 @@ void main(List<String> args) {
     try {
       final document = NotebookLmMarkdownParser.parse(file.readAsStringSync());
       final problems = <String>[];
+      final warnings = <String>[];
       if ((document.sourceTitle ?? '').trim().isEmpty) {
         problems.add('missing title');
       }
       if ((document.creatorChannel ?? '').trim().isEmpty) {
-        problems.add('missing channel');
+        warnings.add('channel will be fetched from YouTube during import');
       }
       final sourceUrl = (document.sourceUrl ?? '').trim();
       final idMatch = _youtubeIdPattern.firstMatch(sourceUrl);
@@ -68,7 +69,8 @@ void main(List<String> args) {
       transcripts[document.transcript] = name;
       passed++;
       stdout.writeln(
-        'PASS $name | $videoId | ${document.transcript.length} chars',
+        'PASS $name | $videoId | ${document.transcript.length} chars'
+        '${warnings.isEmpty ? '' : ' | WARN ${warnings.join(', ')}'}',
       );
     } on FormatException catch (error) {
       failed++;

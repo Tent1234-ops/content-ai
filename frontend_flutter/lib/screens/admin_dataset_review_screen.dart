@@ -24,7 +24,8 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
   int _offset = 0;
   final int _limit = 12;
   bool _loading = false;
-  String? _reviewingId;
+  String? _reviewingKey;
+  int _loadRequestId = 0;
   String? _error;
 
   @override
@@ -41,6 +42,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
   }
 
   Future<void> _load() async {
+    final requestId = ++_loadRequestId;
     setState(() {
       _loading = true;
       _error = null;
@@ -53,14 +55,47 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
         leafKey: _leafKey,
         search: _searchController.text,
       );
-      if (!mounted) return;
+      if (!mounted || requestId != _loadRequestId) return;
       setState(() => _queue = result);
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || requestId != _loadRequestId) return;
       setState(() => _error = error.toString());
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && requestId == _loadRequestId) {
+        setState(() => _loading = false);
+      }
     }
+  }
+
+  String _candidateKey(DatasetReviewCandidate candidate) =>
+      '${candidate.collectionRunId}:${candidate.youtubeId}';
+
+  void _removeReviewedCandidate(
+    DatasetReviewCandidate candidate,
+    String decision,
+  ) {
+    final queue = _queue;
+    if (queue == null) return;
+    final key = _candidateKey(candidate);
+    final remaining = queue.items
+        .where((item) => _candidateKey(item) != key)
+        .toList(growable: false);
+    if (remaining.length == queue.items.length) return;
+    final summary = queue.summary;
+    _queue = DatasetReviewQueueResult(
+      total: queue.total > 0 ? queue.total - 1 : 0,
+      limit: queue.limit,
+      offset: queue.offset,
+      summary: DatasetReviewSummary(
+        total: summary.total,
+        pending: summary.pending > 0 ? summary.pending - 1 : 0,
+        approved: summary.approved + (decision == 'approve' ? 1 : 0),
+        rejected: summary.rejected + (decision == 'reject' ? 1 : 0),
+      ),
+      runs: queue.runs,
+      taxonomy: queue.taxonomy,
+      items: remaining,
+    );
   }
 
   void _applyFilters() {
@@ -83,6 +118,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
     DatasetReviewCandidate candidate,
     String decision,
   ) async {
+    if (_reviewingKey != null) return;
     final queue = _queue;
     if (queue == null) return;
     final result = await showDialog<_ReviewDecision>(
@@ -95,12 +131,13 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
     );
     if (result == null || !mounted) return;
 
+    final candidateKey = _candidateKey(candidate);
     setState(() {
-      _reviewingId = candidate.youtubeId;
+      _reviewingKey = candidateKey;
       _error = null;
     });
     try {
-      await _repository.reviewDatasetCandidate(
+      final response = await _repository.reviewDatasetCandidate(
         candidate: candidate,
         decision: result.decision,
         reviewedLeafKey: result.reviewedLeafKey,
@@ -108,12 +145,21 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
         notes: result.notes,
       );
       if (!mounted) return;
+      if (response.reviewEventId == null ||
+          response.collectionRunId != candidate.collectionRunId ||
+          response.youtubeId != candidate.youtubeId ||
+          response.decision != result.decision) {
+        throw StateError(
+          'The server did not confirm the review event. Please try again.',
+        );
+      }
+      setState(() => _removeReviewedCandidate(candidate, result.decision));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             result.decision == 'approve'
-                ? 'Candidate approved and imported into the production dataset'
-                : 'Candidate rejected and recorded in the audit log',
+                ? 'Approved: ${candidate.title}'
+                : 'Rejected: ${candidate.title}',
           ),
         ),
       );
@@ -122,7 +168,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
       if (!mounted) return;
       setState(() => _error = error.toString());
     } finally {
-      if (mounted) setState(() => _reviewingId = null);
+      if (mounted) setState(() => _reviewingKey = null);
     }
   }
 
@@ -164,11 +210,6 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                   if (queue != null) ...[
                     _ReviewSummaryBand(summary: queue.summary),
                     const SizedBox(height: 16),
-                    _CollectionRunProgress(
-                      runs: queue.runs,
-                      taxonomy: queue.taxonomy,
-                    ),
-                    const SizedBox(height: 16),
                     _ReviewFilters(
                       searchController: _searchController,
                       leafKey: _leafKey,
@@ -193,7 +234,8 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                       ...queue.items.map(
                         (candidate) => _CandidateReviewCard(
                           candidate: candidate,
-                          reviewing: _reviewingId == candidate.youtubeId,
+                          reviewing: _reviewingKey == _candidateKey(candidate),
+                          actionsEnabled: _reviewingKey == null,
                           onOpenVideo: () => _openVideo(candidate),
                           onApprove: () => _review(candidate, 'approve'),
                           onReject: () => _review(candidate, 'reject'),
@@ -268,163 +310,6 @@ class _SummaryMetric extends StatelessWidget {
         children: [
           Text('$value', style: Theme.of(context).textTheme.headlineSmall),
           Text(label, style: Theme.of(context).textTheme.bodySmall),
-        ],
-      ),
-    );
-  }
-}
-
-class _CollectionRunProgress extends StatelessWidget {
-  const _CollectionRunProgress({
-    required this.runs,
-    required this.taxonomy,
-  });
-
-  final List<DatasetReviewRun> runs;
-  final List<DatasetReviewTaxonomyLeaf> taxonomy;
-
-  String _leafLabel(String key) {
-    for (final leaf in taxonomy) {
-      if (leaf.leafKey == key) return leaf.level3;
-    }
-    return key;
-  }
-
-  String _statusLabel(String status) {
-    return switch (status) {
-      'quota_waiting' => 'Waiting for YouTube quota',
-      'running' => 'Collecting',
-      'collected' => 'Collection complete',
-      'partial' => 'Partial collection',
-      'review_pending' => 'Waiting for review',
-      'partially_reviewed' => 'Partially reviewed',
-      'reviewed' => 'Review complete',
-      'failed' => 'Collection failed',
-      _ => status.replaceAll('_', ' '),
-    };
-  }
-
-  IconData _statusIcon(String status) {
-    return switch (status) {
-      'quota_waiting' => Icons.schedule_outlined,
-      'running' => Icons.sync,
-      'collected' || 'reviewed' => Icons.check_circle_outline,
-      'failed' => Icons.error_outline,
-      _ => Icons.data_usage_outlined,
-    };
-  }
-
-  Color? _statusColor(BuildContext context, String status) {
-    return switch (status) {
-      'quota_waiting' => Colors.orange.shade800,
-      'running' => Theme.of(context).colorScheme.primary,
-      'collected' || 'reviewed' => Colors.green.shade700,
-      'failed' => Theme.of(context).colorScheme.error,
-      _ => null,
-    };
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (runs.isEmpty) return const SizedBox.shrink();
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-            child: Text(
-              'Collection progress',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ),
-          ...runs.map((run) {
-            final progress = run.progress;
-            final languageCounts = progress.languageCounts;
-            final statusColor = _statusColor(context, run.status);
-            return ExpansionTile(
-              initiallyExpanded:
-                  run.status == 'running' || run.status == 'quota_waiting',
-              leading: Icon(
-                _statusIcon(run.status),
-                color: statusColor,
-              ),
-              title: Text(
-                'Run ${run.collectionRunId} · ${_statusLabel(run.status)}',
-              ),
-              subtitle: Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${progress.acceptedTotal}/${progress.targetTotal} candidates'
-                      ' · TH ${languageCounts['th'] ?? 0}'
-                      ' · EN ${languageCounts['en'] ?? 0}'
-                      ' · ${progress.uniqueChannels} channels',
-                    ),
-                    const SizedBox(height: 6),
-                    LinearProgressIndicator(
-                      value: progress.targetTotal <= 0
-                          ? 0
-                          : (progress.percent / 100).clamp(0, 1),
-                    ),
-                  ],
-                ),
-              ),
-              children: [
-                if (run.status == 'quota_waiting')
-                  const ListTile(
-                    dense: true,
-                    leading: Icon(Icons.info_outline),
-                    title: Text(
-                      'Checkpoint saved. Resume this run after the YouTube quota resets.',
-                    ),
-                  ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                  child: Wrap(
-                    spacing: 24,
-                    runSpacing: 16,
-                    children: progress.byLeaf.map((leaf) {
-                      final thai = leaf.languageCounts['th'] ?? 0;
-                      final english = leaf.languageCounts['en'] ?? 0;
-                      return SizedBox(
-                        width: 270,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${_leafLabel(leaf.leafKey)} '
-                              '${leaf.accepted}/${leaf.target}',
-                              style: Theme.of(context).textTheme.labelLarge,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'TH $thai/${leaf.thaiMinimum} · EN $english · '
-                              '${leaf.uniqueChannels} channels · '
-                              'max ${leaf.maxVideosPerChannel}/channel',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            const SizedBox(height: 6),
-                            LinearProgressIndicator(
-                              value: leaf.target <= 0
-                                  ? 0
-                                  : (leaf.percent / 100).clamp(0, 1),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ],
-            );
-          }),
         ],
       ),
     );
@@ -536,6 +421,7 @@ class _CandidateReviewCard extends StatelessWidget {
   const _CandidateReviewCard({
     required this.candidate,
     required this.reviewing,
+    required this.actionsEnabled,
     required this.onOpenVideo,
     required this.onApprove,
     required this.onReject,
@@ -543,6 +429,7 @@ class _CandidateReviewCard extends StatelessWidget {
 
   final DatasetReviewCandidate candidate;
   final bool reviewing;
+  final bool actionsEnabled;
   final VoidCallback onOpenVideo;
   final VoidCallback onApprove;
   final VoidCallback onReject;
@@ -682,12 +569,12 @@ class _CandidateReviewCard extends StatelessWidget {
                 runSpacing: 8,
                 children: [
                   FilledButton.icon(
-                    onPressed: onApprove,
+                    onPressed: actionsEnabled ? onApprove : null,
                     icon: const Icon(Icons.check),
                     label: const Text('Approve'),
                   ),
                   OutlinedButton.icon(
-                    onPressed: onReject,
+                    onPressed: actionsEnabled ? onReject : null,
                     icon: const Icon(Icons.close),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Theme.of(context).colorScheme.error,

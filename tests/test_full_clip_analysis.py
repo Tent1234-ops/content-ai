@@ -100,8 +100,14 @@ class FullClipAnalysisTests(unittest.TestCase):
         )
 
         self.assertIn("conclusion", result["transcript"])
+        self.assertEqual(result["raw_transcript"], result["transcript"])
+        self.assertTrue(result["cleaned_transcript"])
         self.assertEqual(
             result["analysis"]["hook_transcript"],
+            "opening phone review camera battery",
+        )
+        self.assertEqual(
+            result["analysis"]["hook_raw_transcript"],
             "opening phone review camera battery",
         )
         self.assertEqual(

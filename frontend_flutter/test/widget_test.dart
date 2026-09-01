@@ -1,10 +1,10 @@
-import 'package:content_ai_mobile/models/recommendation_result.dart';
-import 'package:content_ai_mobile/models/dataset_review.dart';
-import 'package:content_ai_mobile/repositories/admin_repository.dart';
-import 'package:content_ai_mobile/screens/admin_dataset_review_screen.dart';
-import 'package:content_ai_mobile/screens/login_screen.dart';
-import 'package:content_ai_mobile/state/auth_controller.dart';
-import 'package:content_ai_mobile/state/auth_scope.dart';
+import 'package:content_ai_web/models/recommendation_result.dart';
+import 'package:content_ai_web/models/dataset_review.dart';
+import 'package:content_ai_web/repositories/admin_repository.dart';
+import 'package:content_ai_web/screens/admin_dataset_review_screen.dart';
+import 'package:content_ai_web/screens/login_screen.dart';
+import 'package:content_ai_web/state/auth_controller.dart';
+import 'package:content_ai_web/state/auth_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -46,8 +46,7 @@ void main() {
       'dataset_sources': ['youtube_public_research'],
       'dataset_versions': ['youtube-public-research-th-v1'],
       'source_record_ids': ['video000001', 'video000002'],
-      'data_source_label':
-          'Human-reviewed public YouTube transcripts',
+      'data_source_label': 'Human-reviewed public YouTube transcripts',
       'dataset_sample_size': 2,
       'eligible_pool_size': 5,
       'source_platform_counts': {'youtube': 2},
@@ -133,10 +132,36 @@ void main() {
     expect(find.text('Phone 0/30'), findsOneWidget);
     expect(find.text('Review status'), findsNothing);
     expect(find.text('Collection run'), findsNothing);
+    expect(find.text('Collection progress'), findsNothing);
+  });
+
+  testWidgets('approved dataset candidate leaves the pending queue',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = _FakeAdminRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AdminDatasetReviewScreen(repository: repository),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Approve'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirm approval'));
+    await tester.pumpAndSettle();
+
+    expect(repository.reviewCalls, 1);
+    expect(find.text('Galaxy Z Flip 6 Review'), findsNothing);
+    expect(find.text('No candidates waiting for review'), findsOneWidget);
   });
 }
 
 class _FakeAdminRepository extends AdminRepository {
+  bool _pending = true;
+  int reviewCalls = 0;
+
   @override
   Future<DatasetReviewQueueResult> listDatasetReviewQueue({
     required int limit,
@@ -147,10 +172,15 @@ class _FakeAdminRepository extends AdminRepository {
     String search = '',
   }) async {
     return DatasetReviewQueueResult.fromJson({
-      'total': 1,
+      'total': _pending ? 1 : 0,
       'limit': limit,
       'offset': offset,
-      'summary': {'total': 1, 'pending': 1, 'approved': 0, 'rejected': 0},
+      'summary': {
+        'total': 1,
+        'pending': _pending ? 1 : 0,
+        'approved': _pending ? 0 : 1,
+        'rejected': 0,
+      },
       'runs': [
         {
           'collection_run_id': 1,
@@ -174,32 +204,54 @@ class _FakeAdminRepository extends AdminRepository {
           'ready': false,
         }
       ],
-      'items': [
-        {
-          'collection_run_id': 1,
-          'dataset_version': 'youtube-cc-th-v1',
-          'source_youtube_id': 'ikPAwWtj2qQ',
-          'title': 'Galaxy Z Flip 6 Review',
-          'video_url': 'https://www.youtube.com/watch?v=ikPAwWtj2qQ',
-          'channel_title': 'Tech Maniac',
-          'proposed_leaf_key': 'phone',
-          'transcript_language': 'en',
-          'caption_type': 'manual',
-          'duration_seconds': 58,
-          'transcript': 'Galaxy Z Flip phone review transcript',
-          'transcript_preview': 'Galaxy Z Flip phone review transcript',
-          'evidence_terms': ['phone'],
-          'automated_checks': {
-            'creative_commons': true,
-            'within_five_minutes': true,
-            'public_transcript': true,
-          },
-          'views': 11,
-          'likes': 0,
-          'comments': 0,
-          'review_status': 'pending',
-        }
-      ],
+      'items': _pending
+          ? [
+              {
+                'collection_run_id': 1,
+                'dataset_version': 'youtube-cc-th-v1',
+                'source_youtube_id': 'ikPAwWtj2qQ',
+                'title': 'Galaxy Z Flip 6 Review',
+                'video_url': 'https://www.youtube.com/watch?v=ikPAwWtj2qQ',
+                'channel_title': 'Tech Maniac',
+                'proposed_leaf_key': 'phone',
+                'transcript_language': 'en',
+                'caption_type': 'manual',
+                'duration_seconds': 58,
+                'transcript': 'Galaxy Z Flip phone review transcript',
+                'transcript_preview': 'Galaxy Z Flip phone review transcript',
+                'evidence_terms': ['phone'],
+                'automated_checks': {
+                  'creative_commons': true,
+                  'within_five_minutes': true,
+                  'public_transcript': true,
+                },
+                'views': 11,
+                'likes': 0,
+                'comments': 0,
+                'review_status': 'pending',
+              }
+            ]
+          : [],
     });
+  }
+
+  @override
+  Future<DatasetReviewDecisionResult> reviewDatasetCandidate({
+    required DatasetReviewCandidate candidate,
+    required String decision,
+    String? reviewedLeafKey,
+    String? transcriptQuality,
+    String notes = '',
+  }) async {
+    reviewCalls++;
+    _pending = false;
+    return DatasetReviewDecisionResult(
+      status: 'success',
+      decision: decision,
+      youtubeId: candidate.youtubeId,
+      collectionRunId: candidate.collectionRunId,
+      reviewEventId: 1,
+      datasetId: 1,
+    );
   }
 }

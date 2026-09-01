@@ -50,7 +50,10 @@ from app.services.dataset_contract import (
     channel_dataset_split,
     youtube_license_metadata,
 )
-from app.services.dataset_eligibility import validate_training_eligibility_values
+from app.services.dataset_eligibility import (
+    out_of_scope_evaluation_query,
+    validate_training_eligibility_values,
+)
 from app.services.taxonomy import (
     ACTIVE_LEAF_KEYS,
     TAXONOMY_VERSION,
@@ -71,9 +74,11 @@ COLLECTION_STRATEGIES = (
     CLASSIFICATION_DIVERSE_STRATEGY,
     RECOMMENDATION_HIGH_PERFORMANCE_STRATEGY,
 )
-COLLECTION_SCHEMA_VERSION = 4
+EXPLICIT_UNKNOWN_LABELS = frozenset(
+    {"unknown", "other", "unknown_other", "unknown/other"}
+)
+COLLECTION_SCHEMA_VERSION = 5
 DEFAULT_THAI_TARGET_RATIO = 0.40
-DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF = 3
 DEFAULT_TRANSCRIPT_DELAY_SECONDS = 60.0
 DEFAULT_TRANSCRIPT_JITTER_SECONDS = 30.0
 DEFAULT_MAX_TRANSCRIPT_ATTEMPTS_PER_EXECUTION = 3
@@ -98,6 +103,14 @@ REVIEW_FIELDS = (
     "reviewed_at",
     "review_notes",
 )
+
+
+def _is_supported_review_leaf(value: object) -> bool:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = normalize_taxonomy_leaf(str(value or ""))
+    return normalized in ACTIVE_LEAF_KEYS or raw in EXPLICIT_UNKNOWN_LABELS
+
+
 OPTIONAL_REVIEW_FIELDS = {"view_metric_version"}
 
 
@@ -596,8 +609,7 @@ def _quality_collection_settings(
     target_per_leaf: int,
     languages: Sequence[str],
     min_thai_per_leaf: int | None,
-    max_videos_per_channel_per_leaf: int,
-) -> tuple[int, int]:
+) -> int:
     if min_thai_per_leaf is None:
         normalized_languages = {
             str(language).lower() for language in languages
@@ -618,11 +630,7 @@ def _quality_collection_settings(
         raise YouTubeCCDatasetError(
             "min_thai_per_leaf requires 'th' in the selected languages"
         )
-    if max_videos_per_channel_per_leaf < 1:
-        raise YouTubeCCDatasetError(
-            "max_videos_per_channel_per_leaf must be at least 1"
-        )
-    return min_thai_per_leaf, max_videos_per_channel_per_leaf
+    return min_thai_per_leaf
 
 
 def _query_language(query: str) -> str:
@@ -650,38 +658,38 @@ def _upgrade_empty_run_quality_config(
 ) -> dict[str, Any]:
     if (
         "min_thai_per_leaf" in run_config
-        and "max_videos_per_channel_per_leaf" in run_config
         and "queries_by_leaf" in run_config
     ):
-        return run_config
+        upgraded = dict(run_config)
+        upgraded.pop("max_videos_per_channel_per_leaf", None)
+        upgraded.pop("channel_diversity_policy", None)
+        upgraded["schema_version"] = COLLECTION_SCHEMA_VERSION
+        return upgraded
     if int(collection_run.transcripts_collected or 0) > 0:
         raise YouTubeCCDatasetError(
-            "This run started before language/channel quality controls and already "
+            "This run started before language quality controls and already "
             "contains candidates; start a new run to keep collection reproducible"
         )
 
     upgraded = dict(run_config)
+    upgraded.pop("max_videos_per_channel_per_leaf", None)
+    upgraded.pop("channel_diversity_policy", None)
     target_per_leaf = int(upgraded["target_per_leaf"])
     languages = tuple(upgraded["languages"])
-    min_thai, channel_cap = _quality_collection_settings(
+    min_thai = _quality_collection_settings(
         target_per_leaf=target_per_leaf,
         languages=languages,
         min_thai_per_leaf=None,
-        max_videos_per_channel_per_leaf=(
-            DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
-        ),
     )
     upgraded.update(
         {
             "schema_version": COLLECTION_SCHEMA_VERSION,
             "min_thai_per_leaf": min_thai,
-            "max_videos_per_channel_per_leaf": channel_cap,
             "language_balance_policy": (
                 "thai_only_v1"
                 if set(languages) == {"th"}
                 else "reserve_minimum_thai_v1"
             ),
-            "channel_diversity_policy": "max_per_channel_per_leaf_v1",
             "queries_by_leaf": _queries_by_leaf(
                 upgraded["leaf_keys"],
                 languages,
@@ -1094,7 +1102,7 @@ def _quality_values_for_progress(
     run_config: dict[str, Any],
     *,
     candidate_count: int,
-) -> tuple[int, int]:
+) -> int:
     target = max(1, int(run_config.get("target_per_leaf") or 1))
     languages = tuple(run_config.get("languages") or ())
     if "min_thai_per_leaf" in run_config:
@@ -1112,17 +1120,7 @@ def _quality_values_for_progress(
             min_thai = 0
     else:
         min_thai = 0
-    channel_cap = int(
-        run_config.get("max_videos_per_channel_per_leaf")
-        or (
-            DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
-            if not candidate_count
-            and run_config.get("source_video_duration_policy")
-            == "unrestricted_positive_duration"
-            else target
-        )
-    )
-    return min_thai, max(1, channel_cap)
+    return min_thai
 
 
 def _collection_progress(
@@ -1155,7 +1153,7 @@ def _collection_progress(
     )
     target_per_leaf = max(1, int(run_config.get("target_per_leaf") or 1))
     sampling_plan = list(run_config.get("sampling_plan") or [])
-    min_thai, channel_cap = _quality_values_for_progress(
+    min_thai = _quality_values_for_progress(
         run_config,
         candidate_count=len(candidates),
     )
@@ -1205,10 +1203,6 @@ def _collection_progress(
                 "thai_minimum": min_thai,
                 "thai_remaining": max(0, min_thai - thai_count),
                 "unique_channels": len(channels_by_leaf[leaf_key]),
-                "minimum_unique_channels_expected": math.ceil(
-                    target_per_leaf / channel_cap
-                ),
-                "max_videos_per_channel": channel_cap,
                 "strategy_counts": {
                     strategy: int(counts[leaf_key])
                     for strategy, counts in accepted_by_strategy.items()
@@ -1465,12 +1459,7 @@ def _execute_collection(
     sampling_plan = list(run_config["sampling_plan"])
     accepted_by_strategy = _accepted_counts(candidates)
     accepted_by_language = _language_counts_by_leaf(candidates)
-    current_channel_counts, _current_channels = _channel_counts_by_leaf(candidates)
     min_thai_per_leaf = int(run_config.get("min_thai_per_leaf") or 0)
-    max_videos_per_channel = int(
-        run_config.get("max_videos_per_channel_per_leaf")
-        or run_config["target_per_leaf"]
-    )
     candidate_video_ids = {
         str(item.get("source_youtube_id") or "").strip()
         for item in candidates
@@ -1493,7 +1482,7 @@ def _execute_collection(
     (
         catalog_video_ids,
         catalog_transcript_hashes,
-        catalog_channel_counts,
+        _catalog_channel_counts,
         catalog_summary,
     ) = _dedup_catalog(
         db,
@@ -1699,13 +1688,6 @@ def _execute_collection(
                                 if not channel_id:
                                     rejected_reasons["missing_channel_id"] += 1
                                     continue
-                                if (
-                                    catalog_channel_counts[(leaf_key, channel_id)]
-                                    + current_channel_counts[(leaf_key, channel_id)]
-                                    >= max_videos_per_channel
-                                ):
-                                    quality_skip_reasons["channel_cap_reached"] += 1
-                                    continue
                                 try:
                                     delay_seconds = transcript_delay_seconds
                                     if transcript_jitter_seconds:
@@ -1789,7 +1771,6 @@ def _execute_collection(
                                 candidate_transcript_hashes.add(transcript_hash)
                                 accepted_by_strategy[strategy][leaf_key] += 1
                                 accepted_by_language[leaf_key][transcript_language] += 1
-                                current_channel_counts[(leaf_key, channel_id)] += 1
                                 if target_met(strategy, leaf_key, strategy_target):
                                     break
 
@@ -1928,9 +1909,6 @@ def collect_youtube_cc_candidates(
     performance_target_per_leaf: int | None = None,
     languages: Sequence[str] = DEFAULT_COLLECTION_LANGUAGES,
     min_thai_per_leaf: int | None = None,
-    max_videos_per_channel_per_leaf: int = (
-        DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
-    ),
     region_code: str = "TH",
     max_pages_per_query: int = 2,
     timeout_seconds: float = 10.0,
@@ -1960,11 +1938,10 @@ def collect_youtube_cc_candidates(
         max_pages_per_query=max_pages_per_query,
     )
     sampling_plan = _sampling_plan(target_per_leaf, performance_target_per_leaf)
-    normalized_min_thai, normalized_channel_cap = _quality_collection_settings(
+    normalized_min_thai = _quality_collection_settings(
         target_per_leaf=target_per_leaf,
         languages=normalized_languages,
         min_thai_per_leaf=min_thai_per_leaf,
-        max_videos_per_channel_per_leaf=max_videos_per_channel_per_leaf,
     )
     started_at = _utc_now()
     candidate_file = _resolve_project_path(candidate_path)
@@ -1995,13 +1972,11 @@ def collect_youtube_cc_candidates(
         ),
         "sampling_plan": sampling_plan,
         "min_thai_per_leaf": normalized_min_thai,
-        "max_videos_per_channel_per_leaf": normalized_channel_cap,
         "language_balance_policy": (
             "thai_only_v1"
             if set(normalized_languages) == {"th"}
             else "reserve_minimum_thai_v1"
         ),
-        "channel_diversity_policy": "max_per_channel_per_leaf_v1",
         "queries_by_leaf": _queries_by_leaf(
             normalized_leaves,
             normalized_languages,
@@ -2139,9 +2114,6 @@ def resume_youtube_cc_collection(
         target_per_leaf=int(run_config["target_per_leaf"]),
         languages=run_config["languages"],
         min_thai_per_leaf=int(run_config["min_thai_per_leaf"]),
-        max_videos_per_channel_per_leaf=int(
-            run_config["max_videos_per_channel_per_leaf"]
-        ),
     )
     _normalize_collection_inputs(
         leaf_keys=run_config["leaf_keys"],
@@ -2668,7 +2640,7 @@ def import_reviewed_youtube_cc_dataset(
         notes = str(review.get("review_notes") or "").strip() or None
 
         if decision == "approve":
-            if reviewed_leaf not in ACTIVE_LEAF_KEYS:
+            if not _is_supported_review_leaf(review.get("reviewed_leaf_key")):
                 errors.append(f"row {row_number}: reviewed_leaf_key is required")
                 continue
             if quality not in ACCEPTED_TRANSCRIPT_QUALITIES:
@@ -2788,6 +2760,11 @@ def import_reviewed_youtube_cc_dataset(
             "version": view_metric_version,
             "statistics_captured_at": candidate.get("statistics_captured_at"),
         }
+        is_out_of_scope = reviewed_leaf == UNKNOWN_LEAF_KEY
+        raw_metadata["classification_evaluation"] = {
+            "role": "out_of_scope" if is_out_of_scope else "in_scope",
+            "human_reviewed": True,
+        }
         values = {
             "title": str(candidate.get("title") or video_id)[:255],
             "video_url": str(candidate.get("video_url") or ""),
@@ -2864,10 +2841,11 @@ def import_reviewed_youtube_cc_dataset(
             ),
             "average_views_per_day": performance_metrics["average_views_per_day"],
             "engagement_rate": performance_metrics["engagement_rate"],
-            "is_training_eligible": True,
-            "is_keyword_recommendation_eligible": True,
+            "is_training_eligible": not is_out_of_scope,
+            "is_keyword_recommendation_eligible": not is_out_of_scope,
             "is_duration_recommendation_eligible": (
-                0
+                not is_out_of_scope
+                and 0
                 < int(candidate.get("duration_seconds") or 0)
                 <= RECOMMENDATION_DURATION_MAX_SECONDS
             ),
@@ -2907,6 +2885,7 @@ def import_reviewed_youtube_cc_dataset(
                 reviewed_at=reviewed_at,
             )
         )
+        db.flush()
         stats["approved"] += 1
 
     if errors:
@@ -2915,6 +2894,7 @@ def import_reviewed_youtube_cc_dataset(
             "Review import failed; no rows were committed:\n- " + "\n- ".join(errors)
         )
 
+    db.flush()
     reviewed_video_ids = {
         str(video_id)
         for (video_id,) in (
@@ -3034,7 +3014,7 @@ def create_notebooklm_transcript_candidate(
     video_id = extract_youtube_video_id(video_url)
     clean_transcript = _normalize_notebooklm_transcript(transcript)
     leaf_key = normalize_taxonomy_leaf(proposed_leaf_key)
-    if leaf_key not in ACTIVE_LEAF_KEYS:
+    if not _is_supported_review_leaf(proposed_leaf_key):
         raise YouTubeCCDatasetError("A valid taxonomy category is required")
     language = str(transcript_language or "").lower().split("-", 1)[0]
     if language not in SUPPORTED_TRANSCRIPT_LANGUAGES:
@@ -3129,7 +3109,7 @@ def create_notebooklm_transcript_candidate(
     (
         catalog_video_ids,
         catalog_transcript_hashes,
-        catalog_channel_counts,
+        _catalog_channel_counts,
         catalog_summary,
     ) = _dedup_catalog(
         db,
@@ -3143,27 +3123,48 @@ def create_notebooklm_transcript_candidate(
     current_transcript_hashes = {
         str(candidate.get("transcript_sha256") or "") for candidate in candidates
     }
-    if video_id in catalog_video_ids or video_id in current_video_ids:
-        raise YouTubeCCDatasetError("This YouTube video already exists as a candidate")
-    if (
-        transcript_hash in catalog_transcript_hashes
-        or transcript_hash in current_transcript_hashes
-    ):
-        raise YouTubeCCDatasetError("This transcript duplicates an existing candidate")
-    current_channel_count = sum(
-        1
-        for candidate in candidates
-        if normalize_taxonomy_leaf(candidate.get("proposed_leaf_key")) == leaf_key
-        and str(candidate.get("channel_id") or "") == channel_id
-    )
-    if (
-        catalog_channel_counts[(leaf_key, channel_id)] + current_channel_count
-        >= DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
-    ):
+    if video_id in current_video_ids:
         raise YouTubeCCDatasetError(
-            "This channel already reached the three-video limit for this category"
+            "This YouTube video already exists in the current import batch"
         )
-
+    if video_id in catalog_video_ids:
+        existing_dataset = (
+            db.query(DatasetContent)
+            .filter(DatasetContent.source_youtube_id == video_id)
+            .first()
+        )
+        if existing_dataset is not None:
+            existing_leaf = normalize_taxonomy_leaf(
+                existing_dataset.taxonomy_leaf_key or existing_dataset.category
+            )
+            raise YouTubeCCDatasetError(
+                "This YouTube video already exists in the production dataset "
+                f"as category '{existing_leaf}'"
+            )
+        raise YouTubeCCDatasetError(
+            "This YouTube video already exists in the review queue"
+        )
+    if transcript_hash in current_transcript_hashes:
+        raise YouTubeCCDatasetError(
+            "This transcript duplicates another file in the current import batch"
+        )
+    if transcript_hash in catalog_transcript_hashes:
+        existing_dataset = (
+            db.query(DatasetContent)
+            .filter(DatasetContent.transcript_sha256 == transcript_hash)
+            .first()
+        )
+        if existing_dataset is not None:
+            existing_leaf = normalize_taxonomy_leaf(
+                existing_dataset.taxonomy_leaf_key or existing_dataset.category
+            )
+            raise YouTubeCCDatasetError(
+                "This transcript duplicates content in the production dataset "
+                f"under category '{existing_leaf}'"
+            )
+        raise YouTubeCCDatasetError(
+            "This transcript duplicates content already waiting in the review queue"
+        )
     collected_at = _utc_now()
     if collection_run is None:
         run_key = _sha256_text(
@@ -3180,9 +3181,6 @@ def create_notebooklm_transcript_candidate(
             "languages": [language],
             "target_per_leaf": 50,
             "min_thai_per_leaf": 30,
-            "max_videos_per_channel_per_leaf": (
-                DEFAULT_MAX_VIDEOS_PER_CHANNEL_PER_LEAF
-            ),
             "sampling_plan": [],
             "queries_by_leaf": {leaf_key: [NOTEBOOKLM_COLLECTION_METHOD]},
         }
@@ -3372,6 +3370,8 @@ def _serialize_review_candidate(
 ) -> dict[str, Any]:
     transcript = str(candidate.get("transcript") or "").strip()
     duration_seconds = int(candidate.get("duration_seconds") or 0)
+    proposed_leaf = normalize_taxonomy_leaf(candidate.get("proposed_leaf_key"))
+    is_out_of_scope = proposed_leaf == UNKNOWN_LEAF_KEY
     return {
         "collection_run_id": collection_run.collection_run_id,
         "dataset_version": collection_run.dataset_version,
@@ -3439,10 +3439,12 @@ def _serialize_review_candidate(
             "transcript_present": bool(transcript),
         },
         "dataset_usage": {
-            "classification": True,
-            "keyword_recommendation": True,
+            "classification": not is_out_of_scope,
+            "unknown_evaluation": is_out_of_scope,
+            "keyword_recommendation": not is_out_of_scope,
             "duration_recommendation": (
-                0 < duration_seconds <= RECOMMENDATION_DURATION_MAX_SECONDS
+                not is_out_of_scope
+                and 0 < duration_seconds <= RECOMMENDATION_DURATION_MAX_SECONDS
             ),
         },
         "views": max(0, int(candidate.get("views") or 0)),
@@ -3561,7 +3563,9 @@ def list_youtube_cc_review_queue(
                 event.reviewed_leaf_key if event else None
             )
             effective_leaf = (
-                reviewed_leaf if reviewed_leaf in ACTIVE_LEAF_KEYS else proposed_leaf
+                reviewed_leaf
+                if reviewed_leaf in (*ACTIVE_LEAF_KEYS, UNKNOWN_LEAF_KEY)
+                else proposed_leaf
             )
             if normalized_leaf and effective_leaf != normalized_leaf:
                 continue
@@ -3604,6 +3608,23 @@ def list_youtube_cc_review_queue(
         )
 
     coverage = taxonomy_coverage(db)
+    unknown_path = taxonomy_path(UNKNOWN_LEAF_KEY)
+    unknown_count = out_of_scope_evaluation_query(db).count()
+    review_taxonomy = [
+        *coverage["leaves"],
+        {
+            "leaf_key": UNKNOWN_LEAF_KEY,
+            "category_level_1": unknown_path["category_level_1"],
+            "category_level_2": unknown_path["category_level_2"],
+            "category_level_3": unknown_path["category_level_3"],
+            "source_dataset": YOUTUBE_PUBLIC_DATASET_SOURCE,
+            "source_category": "human_review_evaluation_only",
+            "source_subcategories": [],
+            "minimum_sample_count": 30,
+            "verified_sample_count": unknown_count,
+            "ready": unknown_count >= 30,
+        },
+    ]
     return {
         "total": len(all_items),
         "limit": limit,
@@ -3615,7 +3636,7 @@ def list_youtube_cc_review_queue(
             "rejected": int(summary["rejected"]),
         },
         "runs": run_items,
-        "taxonomy": coverage["leaves"],
+        "taxonomy": review_taxonomy,
         "items": all_items[offset : offset + limit],
     }
 
@@ -3690,7 +3711,9 @@ def review_youtube_cc_candidate(
     )
     quality = str(transcript_quality or "").strip().lower()
     if normalized_decision == "approve":
-        if normalized_leaf not in ACTIVE_LEAF_KEYS:
+        if not _is_supported_review_leaf(
+            reviewed_leaf_key or candidate.get("proposed_leaf_key")
+        ):
             raise YouTubeCCDatasetError("A valid reviewed_leaf_key is required")
         if quality not in ACCEPTED_TRANSCRIPT_QUALITIES:
             raise YouTubeCCDatasetError(

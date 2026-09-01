@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:content_ai_mobile/utils/notebooklm_markdown_parser.dart';
+import 'package:content_ai_web/utils/notebooklm_markdown_parser.dart';
 
 void main(List<String> arguments) {
   if (arguments.length != 1) {

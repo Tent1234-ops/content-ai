@@ -11,7 +11,10 @@ from app.core.config import settings
 from app.database.db import Base, DB_BOOTSTRAP_ERROR, SessionLocal, engine
 from app.database.migrations import (
     archive_phase10_notification_tables,
+    migrate_classification_split_strategy,
     migrate_phase13_taxonomy_schema,
+    migrate_phase19_transcript_schema,
+    migrate_trend_scope_schema,
     migrate_view_metric_schema,
     migrate_youtube_cc_dataset_schema,
 )
@@ -66,7 +69,7 @@ async def shutdown_event():
     stop_trending_fetcher()
 
 
-# Configure CORS for Flutter Web & Mobile
+# Configure CORS for the Flutter Web client.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -89,6 +92,9 @@ phase11_migration_status = {}
 phase13_migration_status = {}
 youtube_cc_migration_status = {}
 view_metric_migration_status = {}
+trend_scope_migration_status = {}
+classification_split_migration_status = {}
+phase19_transcript_migration_status = {}
 taxonomy_seed_status = {}
 youtube_quota_repair_status = {}
 try:
@@ -97,6 +103,11 @@ try:
     phase13_migration_status = migrate_phase13_taxonomy_schema(engine)
     youtube_cc_migration_status = migrate_youtube_cc_dataset_schema(engine)
     view_metric_migration_status = migrate_view_metric_schema(engine)
+    trend_scope_migration_status = migrate_trend_scope_schema(engine)
+    classification_split_migration_status = migrate_classification_split_strategy(
+        engine
+    )
+    phase19_transcript_migration_status = migrate_phase19_transcript_schema(engine)
     taxonomy_db = SessionLocal()
     try:
         taxonomy_seed_status = sync_taxonomy_registry(taxonomy_db)
@@ -139,6 +150,8 @@ def root():
         "db_init": db_init_status,
         "youtube_cc_schema": youtube_cc_migration_status,
         "view_metric_schema": view_metric_migration_status,
+        "trend_scope_schema": trend_scope_migration_status,
+        "phase19_transcript_schema": phase19_transcript_migration_status,
         "taxonomy": taxonomy_seed_status,
     }
 
@@ -153,6 +166,8 @@ def health():
         "phase13_schema": phase13_migration_status,
         "youtube_cc_schema": youtube_cc_migration_status,
         "view_metric_schema": view_metric_migration_status,
+        "trend_scope_schema": trend_scope_migration_status,
+        "phase19_transcript_schema": phase19_transcript_migration_status,
         "taxonomy": taxonomy_seed_status,
     }
     live_trends = {

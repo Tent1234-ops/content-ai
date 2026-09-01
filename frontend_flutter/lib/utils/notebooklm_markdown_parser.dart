@@ -17,7 +17,7 @@ class NotebookLmMarkdownParser {
   static const maxTranscriptCharacters = 2000000;
 
   static final RegExp _transcriptHeading = RegExp(
-    r'^(#{1,6})\s*(cleaned transcription text|cleaned transcript|full source transcript|full transcript|transcription text|transcript|ข้อความถอดเสียง|บทถอดเสียง|ทรานสคริปต์)\s*$',
+    r'^(#{1,6})\s*(cleaned transcription text|cleaned transcript|full source transcript|full transcript|transcription text|transcript|transcript content|transcript segments|[^#]*\(\s*transcript\s*\)|ข้อความถอดเสียง|บทถอดเสียง|ทรานสคริปต์)\s*$',
     caseSensitive: false,
   );
   static final RegExp _anyHeading = RegExp(r'^(#{1,6})\s+\S');
@@ -30,7 +30,7 @@ class NotebookLmMarkdownParser {
     caseSensitive: false,
   );
   static final RegExp _standaloneBoldMetadata = RegExp(
-    r'^\s*\*\*([^*]+?):\*\*\s*(.*?)\s*$',
+    r'^\s*(?:[-*]\s+)?\*\*([^*:]+?)\s*:?\*\*\s*:?\s*(.*?)\s*$',
     caseSensitive: false,
   );
   static final RegExp _documentTitle = RegExp(r'^#\s+(.+?)\s*$');
@@ -48,19 +48,24 @@ class NotebookLmMarkdownParser {
     final metadata = _readMetadata(lines);
     final sourceTitle = metadata['source video'] ??
         metadata['video title'] ??
+        metadata['source title'] ??
+        metadata['title'] ??
         metadata['ชื่อวิดีโอ'] ??
         _readDocumentTitle(lines);
     final creatorChannel = metadata['creator channel'] ??
         metadata['channel title'] ??
         metadata['ช่อง'] ??
         metadata['ชื่อช่อง'];
-    final sourceUrl = metadata['source url'] ??
+    final sourceUrlValue = metadata['source url'] ??
         metadata['video url'] ??
         metadata['video link'] ??
+        metadata['direct video link'] ??
+        metadata['direct link'] ??
         metadata['youtube url'] ??
         metadata['ลิงก์วิดีโอ'] ??
         metadata['ลิงก์ยูทูบ'] ??
-        _urlFrom(metadata['source video']);
+        metadata['source video'];
+    final sourceUrl = _urlFrom(sourceUrlValue) ?? _urlFromLines(lines);
     var headingIndex = -1;
     var headingLevel = 0;
     for (var index = 0; index < lines.length; index++) {
@@ -167,8 +172,19 @@ class NotebookLmMarkdownParser {
 
   static String? _urlFrom(String? value) {
     if (value == null) return null;
-    final match = RegExp(r'https?://[^\s)>]+').firstMatch(value);
+    final match = RegExp(r'https?://[^\s\])}>]+').firstMatch(value);
     return match?.group(0);
+  }
+
+  static String? _urlFromLines(List<String> lines) {
+    for (final line in lines) {
+      final url = _urlFrom(line);
+      if (url != null &&
+          (url.contains('youtube.com/') || url.contains('youtu.be/'))) {
+        return url;
+      }
+    }
+    return null;
   }
 
   static void _trimBlankAndRuleLines(List<String> lines) {

@@ -1,9 +1,13 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import relationship
 
 from .db import Base
+
+
+TranscriptText = Text().with_variant(LONGTEXT(), "mysql")
 
 
 class User(Base):
@@ -37,7 +41,9 @@ class UserContent(Base):
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     title = Column(String(255), nullable=False)
     video_url = Column(String(1024))
-    transcript = Column(Text)
+    transcript = Column(TranscriptText)
+    raw_transcript = Column(TranscriptText)
+    cleaned_transcript = Column(TranscriptText)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     owner = relationship("User", back_populates="contents")
@@ -169,7 +175,7 @@ class DatasetContent(Base):
     dataset_id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False)
     video_url = Column(String(1024))
-    transcript = Column(Text)
+    transcript = Column(TranscriptText)
     category = Column(String(100))
     source_platform = Column(String(50), nullable=False, default="youtube")
     dataset_source = Column(String(100), nullable=False, default="legacy")
@@ -552,6 +558,7 @@ class TrendSnapshotRun(Base):
 
     run_id = Column(Integer, primary_key=True)
     region = Column(String(10), nullable=False, default="TH", index=True)
+    snapshot_kind = Column(String(32), nullable=False, default="global", index=True)
     status = Column(String(20), nullable=False, default="running", index=True)
     provider_status = Column(Text, nullable=False, default="{}")
     total_items = Column(Integer, nullable=False, default=0)
@@ -571,8 +578,9 @@ class TrendSnapshotItem(Base):
         UniqueConstraint(
             "run_id",
             "platform",
+            "ranking_scope",
             "trend_key",
-            name="uq_trend_snapshot_item_run_platform_key",
+            name="uq_trend_snapshot_item_run_scope_key",
         ),
         Index(
             "ix_trend_snapshot_platform_metric",
@@ -584,14 +592,25 @@ class TrendSnapshotItem(Base):
     item_id = Column(Integer, primary_key=True)
     run_id = Column(Integer, ForeignKey("trend_snapshot_runs.run_id"), nullable=False, index=True)
     platform = Column(String(50), nullable=False, index=True)
+    ranking_scope = Column(String(64), nullable=False, default="global", index=True)
+    category_id = Column(String(32), index=True)
+    provider_rank = Column(Integer, nullable=False, default=0)
     trend_key = Column(String(40), nullable=False)
     title = Column(String(500), nullable=False)
     category = Column(String(100), nullable=False, default="general")
     source_platform = Column(String(100), nullable=False)
     video_url = Column(String(1024))
+    channel_title = Column(String(255))
+    thumbnail_url = Column(String(1024))
+    description = Column(Text)
+    duration_seconds = Column(Integer)
     views = Column(Integer, nullable=False, default=0)
     likes = Column(Integer, nullable=False, default=0)
     comments = Column(Integer, nullable=False, default=0)
+    views_available = Column(Boolean)
+    likes_available = Column(Boolean)
+    comments_available = Column(Boolean)
+    search_volume = Column(Integer)
     trend_score = Column(Float, nullable=False, default=0.0)
     engagement_signal = Column(Float, nullable=False, default=0.0)
     view_metric_version = Column(

@@ -244,21 +244,44 @@ review จาก `dataset_contents` และตรวจ split จาก Channe
 
 Dataset artifacts ประกอบด้วย `train.jsonl`, `validation.jsonl`, `test.jsonl`,
 SHA-256 และ manifest ที่ระบุ Dataset version, taxonomy version, ภาษา, จำนวนช่อง
-และจำนวนตัวอย่างรายหมวด โมเดลที่ benchmark มีสามแบบ:
+และจำนวนตัวอย่างรายหมวด Phase 22 benchmark โมเดลสี่แบบ:
 
-1. Word/character TF-IDF + balanced Logistic Regression
-2. Word/character TF-IDF + Complement Naive Bayes
-3. Word/character TF-IDF + balanced SGD Logistic Regression
+1. Word/character TF-IDF + Complement Naive Bayes
+2. Word/character TF-IDF + tuned balanced Logistic Regression
+3. Word/character TF-IDF + calibrated balanced Linear SVM
+4. Multilingual sentence embeddings + balanced Logistic Regression
+
+Logistic Regression ทดลองค่า `C` เท่ากับ `0.5`, `1.0`, `2.0`, และ `4.0`
+ด้วย grouped CV แล้วเลือกจาก Macro F1, Accuracy และ Recall ต่ำสุดรายหมวดตามลำดับ
+ก่อน fit ตัวสุดท้าย โดยไม่ใช้ `test` holdout ระหว่าง tuning
+
+Development pool รวมแถว `train` และ `validation` ที่บันทึกไว้ แล้วประเมินด้วย
+stratified grouped cross-validation โดยใช้ Channel ID เป็น group ทุกแถวจึงได้
+out-of-fold prediction หนึ่งครั้ง และไม่มีช่องเดียวกันอยู่ทั้งฝั่ง train/validation
+ของ fold เดียวกัน จากนั้น fit candidate สุดท้ายด้วย development pool ทั้งหมดและวัด
+เพียงครั้งเดียวกับ `test` holdout ที่ไม่เคยใช้เลือกโมเดล รายงานระบุ hard-case Dataset
+IDs, confusion pairs และ Recall รายหมวด
+
+Phase 22 readiness requires 80-100 reviewed samples and at least 10 channels per leaf.
+Human-reviewed `Unknown/Other` rows are evaluation-only: they are never fitted and are
+used to measure Unknown recall and false acceptance. At least 30 such rows are required,
+with 50 as the target. Numeric metrics alone cannot promote a model while this collection
+gate is incomplete.
 
 ระบบคำนวณ Accuracy, Macro Precision, Macro Recall, Macro F1, per-class metrics
 และ Confusion Matrix สำหรับ validation/test พร้อมมุมมองแยกภาษาไทย/อังกฤษ
 `Unknown/Other` ใช้ confidence rejection (`0.60` โดยค่าเริ่มต้น) จึงไม่เพิ่มข้อมูล
 สังเคราะห์หรือ label ปลอมเข้า training set
 
-Promotion gate กำหนดให้ validation/test Accuracy และ Macro F1 ต้องผ่าน `0.80`
-ทุกค่า โมเดลที่ผ่านถูกบันทึกสถานะ `qualified`; โมเดลที่ไม่ผ่านเป็น
+Promotion gate กำหนดให้ grouped-CV/test Accuracy, Macro F1 และ Recall ต่ำสุดของ
+แต่ละหมวดต้องผ่าน `0.80` ทุกค่า โมเดลที่ผ่านถูกบันทึกสถานะ `qualified`; โมเดลที่ไม่ผ่านเป็น
 `evaluated_below_threshold` ทั้งสองสถานะยังมี `is_active=false` จนกว่าจะเชื่อม
 artifact เข้ากับ runtime และ promote อย่างชัดเจน
+
+Embedding model ถูก resolve เป็น local Hugging Face snapshot ก่อนโหลด เพื่อให้ benchmark
+ทำงานแบบ offline ได้ หาก candidate model หนึ่งล้มระหว่าง benchmark ระบบบันทึก
+`failed_during_benchmark` ให้โมเดลนั้นและเก็บผลโมเดลอื่นต่อ โดยต้องมีอย่างน้อยสองโมเดล
+ที่รันสำเร็จจึงถือว่ารอบ benchmark ใช้งานได้
 
 ก่อน Dataset พร้อม ใช้ `--smoke-test` เพื่อตรวจเส้นทาง train, metric persistence,
 artifact reload และ prediction ได้ โหมดนี้ใช้เฉพาะข้อมูล human-reviewed จริงที่มี

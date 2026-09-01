@@ -11,7 +11,13 @@ import '../widgets/state_widgets.dart';
 
 enum _TranscriptInputMode { files, manual }
 
-enum _MarkdownImportStatus { ready, importing, imported, failed }
+enum _MarkdownImportStatus {
+  ready,
+  importing,
+  imported,
+  alreadyPresent,
+  failed,
+}
 
 class _MarkdownImportItem {
   _MarkdownImportItem({
@@ -81,19 +87,30 @@ class _AdminTranscriptImportScreenState
       if (!mounted) return;
       setState(() {
         _taxonomy = queue.taxonomy;
-        _leafKey = _leafKey ??
-            (queue.taxonomy.isEmpty ? null : queue.taxonomy.first.leafKey);
+        if (_leafKey != null &&
+            !queue.taxonomy.any((leaf) => leaf.leafKey == _leafKey)) {
+          _leafKey = null;
+        }
       });
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(
+          () => _error = _friendlyImportMessage(_importErrorMessage(error)),
+        );
+      }
     } finally {
       if (mounted) setState(() => _loadingTaxonomy = false);
     }
   }
 
   Future<void> _submit() async {
-    if (_leafKey == null) return;
+    if (_leafKey == null) {
+      setState(() => _error = 'Select the correct category before importing.');
+      return;
+    }
     if (_inputMode == _TranscriptInputMode.files) {
+      final confirmed = await _confirmFileImportCategory();
+      if (!confirmed || !mounted) return;
       await _submitMarkdownFiles();
       return;
     }
@@ -128,7 +145,11 @@ class _AdminTranscriptImportScreenState
             content: Text('Candidate validated and added to review')),
       );
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted) {
+        setState(
+          () => _error = _friendlyImportMessage(_importErrorMessage(error)),
+        );
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -136,13 +157,17 @@ class _AdminTranscriptImportScreenState
 
   Future<void> _submitMarkdownFiles() async {
     final importable = _markdownFiles
-        .where((item) => item.status != _MarkdownImportStatus.imported)
+        .where(
+          (item) =>
+              item.status == _MarkdownImportStatus.ready ||
+              item.status == _MarkdownImportStatus.failed,
+        )
         .toList();
     if (importable.isEmpty) {
       setState(() {
         _error = _markdownFiles.isEmpty
             ? 'Select one or more Markdown files first.'
-            : 'All selected files are already imported.';
+            : 'All selected files are already accounted for.';
       });
       return;
     }
@@ -152,6 +177,7 @@ class _AdminTranscriptImportScreenState
       _error = null;
     });
     var imported = 0;
+    var alreadyPresent = 0;
     var failed = 0;
     for (final item in importable) {
       if (!mounted) break;
@@ -179,11 +205,19 @@ class _AdminTranscriptImportScreenState
         imported++;
       } catch (error) {
         if (!mounted) break;
+        final message = _importErrorMessage(error);
+        final exists = _isAlreadyPresent(message);
         setState(() {
-          item.status = _MarkdownImportStatus.failed;
-          item.error = error.toString();
+          item.status = exists
+              ? _MarkdownImportStatus.alreadyPresent
+              : _MarkdownImportStatus.failed;
+          item.error = _friendlyImportMessage(message);
         });
-        failed++;
+        if (exists) {
+          alreadyPresent++;
+        } else {
+          failed++;
+        }
       }
     }
     if (!mounted) return;
@@ -198,6 +232,7 @@ class _AdminTranscriptImportScreenState
       SnackBar(
         content: Text(
           'Imported $imported file${imported == 1 ? '' : 's'}'
+          '${alreadyPresent == 0 ? '' : '; $alreadyPresent already in system'}'
           '${failed == 0 ? '' : '; $failed failed'}',
         ),
       ),
@@ -228,6 +263,74 @@ class _AdminTranscriptImportScreenState
     return normalizedUrl.toLowerCase();
   }
 
+  String _normalizedDuplicateText(String value) {
+    return value.replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+  }
+
+  String _importErrorMessage(Object error) {
+    return error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '').trim();
+  }
+
+  bool _isAlreadyPresent(String message) {
+    final normalized = message.toLowerCase();
+    return normalized.contains('already exists') ||
+        normalized.contains('transcript duplicates') ||
+        normalized.contains('duplicates an existing');
+  }
+
+  String _friendlyImportMessage(String message) {
+    final normalized = message.toLowerCase();
+    if (normalized.contains('transcript') && normalized.contains('duplicate')) {
+      return 'Already in system: identical transcript content exists.';
+    }
+    if (normalized.contains('already exists')) {
+      return message;
+    }
+    return message;
+  }
+
+  Future<bool> _confirmFileImportCategory() async {
+    final leafKey = _leafKey;
+    if (leafKey == null) return false;
+    DatasetReviewTaxonomyLeaf? leaf;
+    for (final item in _taxonomy) {
+      if (item.leafKey == leafKey) {
+        leaf = item;
+        break;
+      }
+    }
+    final fileCount = _markdownFiles
+        .where(
+          (item) =>
+              item.status == _MarkdownImportStatus.ready ||
+              item.status == _MarkdownImportStatus.failed,
+        )
+        .length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm import category'),
+        content: Text(
+          'Import $fileCount transcript file${fileCount == 1 ? '' : 's'} as '
+          '${leaf?.path ?? leafKey}?\n\n'
+          'The selected category is applied to every file in this batch.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.file_upload_outlined),
+            label: const Text('Import files'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
   Future<void> _pickMarkdownTranscript() async {
     setState(() {
       _readingMarkdown = true;
@@ -245,9 +348,21 @@ class _AdminTranscriptImportScreenState
       final existingUrls = _markdownFiles
           .map((item) => _sourceIdentity(item.document.sourceUrl!))
           .toSet();
+      final existingFileNames = _markdownFiles
+          .map((item) => _normalizedDuplicateText(item.fileName))
+          .toSet();
+      final existingTranscripts = _markdownFiles
+          .map((item) => _normalizedDuplicateText(item.document.transcript))
+          .toSet();
       final parsedFiles = <_MarkdownImportItem>[];
       final errors = <String>[];
+      final duplicateSkips = <String>[];
       for (final file in result.files) {
+        final fileNameIdentity = _normalizedDuplicateText(file.name);
+        if (existingFileNames.contains(fileNameIdentity)) {
+          duplicateSkips.add('${file.name}: duplicate file name');
+          continue;
+        }
         try {
           final bytes = file.bytes;
           if (bytes == null) {
@@ -265,11 +380,21 @@ class _AdminTranscriptImportScreenState
             );
           }
           final sourceIdentity = _sourceIdentity(sourceUrl);
-          if (!existingUrls.add(sourceIdentity)) {
-            throw const FormatException(
-              'Another selected file uses the same source URL.',
-            );
+          final transcriptIdentity =
+              _normalizedDuplicateText(document.transcript);
+          String? duplicateReason;
+          if (existingUrls.contains(sourceIdentity)) {
+            duplicateReason = 'same YouTube video';
+          } else if (existingTranscripts.contains(transcriptIdentity)) {
+            duplicateReason = 'identical transcript content';
           }
+          if (duplicateReason != null) {
+            duplicateSkips.add('${file.name}: $duplicateReason');
+            continue;
+          }
+          existingFileNames.add(fileNameIdentity);
+          existingUrls.add(sourceIdentity);
+          existingTranscripts.add(transcriptIdentity);
           parsedFiles.add(
             _MarkdownImportItem(fileName: file.name, document: document),
           );
@@ -289,7 +414,8 @@ class _AdminTranscriptImportScreenState
         SnackBar(
           content: Text(
             'Loaded ${parsedFiles.length} file${parsedFiles.length == 1 ? '' : 's'}'
-            '${errors.isEmpty ? '' : '; ${errors.length} skipped'}',
+            '${duplicateSkips.isEmpty ? '' : '; ${duplicateSkips.length} duplicates ignored'}'
+            '${errors.isEmpty ? '' : '; ${errors.length} invalid'}',
           ),
         ),
       );
@@ -313,7 +439,9 @@ class _AdminTranscriptImportScreenState
 
   Future<void> _startNewBatch() async {
     final hasUnsavedInput = _markdownFiles.any(
-          (item) => item.status != _MarkdownImportStatus.imported,
+          (item) =>
+              item.status != _MarkdownImportStatus.imported &&
+              item.status != _MarkdownImportStatus.alreadyPresent,
         ) ||
         _videoUrlController.text.trim().isNotEmpty ||
         _transcriptController.text.trim().isNotEmpty;
@@ -342,6 +470,7 @@ class _AdminTranscriptImportScreenState
     setState(() {
       _batchRunId = null;
       _lastResult = null;
+      _leafKey = null;
       _error = null;
       _markdownFiles.clear();
       _videoUrlController.clear();
@@ -352,7 +481,14 @@ class _AdminTranscriptImportScreenState
   @override
   Widget build(BuildContext context) {
     final importableFileCount = _markdownFiles
-        .where((item) => item.status != _MarkdownImportStatus.imported)
+        .where(
+          (item) =>
+              item.status == _MarkdownImportStatus.ready ||
+              item.status == _MarkdownImportStatus.failed,
+        )
+        .length;
+    final alreadyPresentFileCount = _markdownFiles
+        .where((item) => item.status == _MarkdownImportStatus.alreadyPresent)
         .length;
     return AppShell(
       title: 'Transcript Import',
@@ -466,10 +602,14 @@ class _AdminTranscriptImportScreenState
                                       SizedBox(
                                         width: width,
                                         child: DropdownButtonFormField<String>(
+                                          key: ValueKey(
+                                            'category-${_leafKey ?? 'none'}',
+                                          ),
                                           initialValue: _leafKey,
                                           isExpanded: true,
                                           decoration: const InputDecoration(
                                             labelText: 'Proposed category',
+                                            hintText: 'Select category',
                                           ),
                                           items: _taxonomy
                                               .map(
@@ -483,8 +623,12 @@ class _AdminTranscriptImportScreenState
                                                 ),
                                               )
                                               .toList(),
-                                          onChanged: (value) =>
-                                              setState(() => _leafKey = value),
+                                          onChanged: _submitting
+                                              ? null
+                                              : (value) => setState(() {
+                                                    _leafKey = value;
+                                                    _error = null;
+                                                  }),
                                         ),
                                       ),
                                       SizedBox(
@@ -593,6 +737,7 @@ class _AdminTranscriptImportScreenState
                               const SizedBox(height: 16),
                               FilledButton.icon(
                                 onPressed: _submitting ||
+                                        _leafKey == null ||
                                         (_inputMode ==
                                                 _TranscriptInputMode.files &&
                                             importableFileCount == 0)
@@ -609,13 +754,19 @@ class _AdminTranscriptImportScreenState
                                 label: Text(
                                   _submitting
                                       ? 'Importing candidates'
-                                      : _inputMode == _TranscriptInputMode.files
-                                          ? importableFileCount == 0
-                                              ? _markdownFiles.isEmpty
-                                                  ? 'Select files to import'
-                                                  : 'All selected files imported'
-                                              : 'Validate and import $importableFileCount file${importableFileCount == 1 ? '' : 's'}'
-                                          : 'Validate and add candidate',
+                                      : _leafKey == null
+                                          ? 'Select category first'
+                                          : _inputMode ==
+                                                  _TranscriptInputMode.files
+                                              ? importableFileCount == 0
+                                                  ? _markdownFiles.isEmpty
+                                                      ? 'Select files to import'
+                                                      : alreadyPresentFileCount >
+                                                              0
+                                                          ? 'Import complete ($alreadyPresentFileCount already in system)'
+                                                          : 'All selected files imported'
+                                                  : 'Validate and import $importableFileCount file${importableFileCount == 1 ? '' : 's'}'
+                                              : 'Validate and add candidate',
                                 ),
                               ),
                               if (_inputMode == _TranscriptInputMode.manual &&
@@ -748,12 +899,14 @@ class _MarkdownFileRow extends StatelessWidget {
       _MarkdownImportStatus.ready => 'Ready',
       _MarkdownImportStatus.importing => 'Importing',
       _MarkdownImportStatus.imported => 'Imported',
+      _MarkdownImportStatus.alreadyPresent => 'Already in system',
       _MarkdownImportStatus.failed => 'Failed',
     };
     final statusColor = switch (item.status) {
       _MarkdownImportStatus.ready => theme.colorScheme.onSurfaceVariant,
       _MarkdownImportStatus.importing => theme.colorScheme.primary,
       _MarkdownImportStatus.imported => Colors.green.shade700,
+      _MarkdownImportStatus.alreadyPresent => Colors.blue.shade700,
       _MarkdownImportStatus.failed => theme.colorScheme.error,
     };
     final title = item.document.sourceTitle?.trim();
@@ -823,7 +976,9 @@ class _MarkdownFileRow extends StatelessWidget {
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.error,
+                      color: item.status == _MarkdownImportStatus.alreadyPresent
+                          ? Colors.blue.shade700
+                          : theme.colorScheme.error,
                     ),
                   ),
                 ],

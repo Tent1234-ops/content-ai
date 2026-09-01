@@ -16,7 +16,12 @@ from app.database.models import (
     User,
     UserTrendWatchSession,
 )
-from app.services.live_trend_snapshots import PLATFORMS, load_latest_live_snapshot
+from app.services.live_trend_snapshots import (
+    GLOBAL_RANKING_SCOPE,
+    GLOBAL_SNAPSHOT_KIND,
+    PLATFORMS,
+    load_latest_live_snapshot,
+)
 from app.services.notifications import create_live_trend_notification
 from app.services.view_metrics import view_metrics_are_comparable
 
@@ -42,8 +47,15 @@ def _items_by_platform(db: Session, *, run_id: int) -> Dict[str, List[TrendSnaps
     grouped: Dict[str, List[TrendSnapshotItem]] = defaultdict(list)
     rows = (
         db.query(TrendSnapshotItem)
-        .filter(TrendSnapshotItem.run_id == run_id)
-        .order_by(TrendSnapshotItem.platform, TrendSnapshotItem.item_id)
+        .filter(
+            TrendSnapshotItem.run_id == run_id,
+            TrendSnapshotItem.ranking_scope == GLOBAL_RANKING_SCOPE,
+        )
+        .order_by(
+            TrendSnapshotItem.platform,
+            TrendSnapshotItem.provider_rank,
+            TrendSnapshotItem.item_id,
+        )
         .all()
     )
     for row in rows:
@@ -62,6 +74,7 @@ def _latest_successful_items_before(
         db.query(TrendSnapshotRun)
         .filter(
             TrendSnapshotRun.region == region,
+            TrendSnapshotRun.snapshot_kind == GLOBAL_SNAPSHOT_KIND,
             TrendSnapshotRun.run_id <= run_id,
             TrendSnapshotRun.status.in_(("completed", "partial")),
         )
@@ -77,8 +90,12 @@ def _latest_successful_items_before(
             .filter(
                 TrendSnapshotItem.run_id == run.run_id,
                 TrendSnapshotItem.platform == platform,
+                TrendSnapshotItem.ranking_scope == GLOBAL_RANKING_SCOPE,
             )
-            .order_by(TrendSnapshotItem.item_id)
+            .order_by(
+                TrendSnapshotItem.provider_rank,
+                TrendSnapshotItem.item_id,
+            )
             .all()
         )
     return None
@@ -96,6 +113,7 @@ def _latest_successful_run_and_items_before(
         db.query(TrendSnapshotRun)
         .filter(
             TrendSnapshotRun.region == region,
+            TrendSnapshotRun.snapshot_kind == GLOBAL_SNAPSHOT_KIND,
             TrendSnapshotRun.run_id <= run_id,
             TrendSnapshotRun.status.in_(("completed", "partial")),
         )
@@ -114,8 +132,12 @@ def _latest_successful_run_and_items_before(
             .filter(
                 TrendSnapshotItem.run_id == run.run_id,
                 TrendSnapshotItem.platform == platform,
+                TrendSnapshotItem.ranking_scope == GLOBAL_RANKING_SCOPE,
             )
-            .order_by(TrendSnapshotItem.item_id)
+            .order_by(
+                TrendSnapshotItem.provider_rank,
+                TrendSnapshotItem.item_id,
+            )
             .all()
         )
         return run, rows
@@ -143,18 +165,20 @@ def _apply_session_and_engagement_status(
             .all()
         )
     }
-    run_id = snapshot.get("run_id")
-    if not isinstance(run_id, int):
-        return
-
-    current_run = db.get(TrendSnapshotRun, run_id)
-    if current_run is None:
+    default_run_id = snapshot.get("run_id")
+    if not isinstance(default_run_id, int):
         return
 
     region = str(snapshot.get("region") or "TH")
     for platform in PLATFORMS:
         platform_payload = snapshot.get("platforms", {}).get(platform, {})
         items = platform_payload.get("items", [])
+        data_run_id = platform_payload.get("data_run_id")
+        if not isinstance(data_run_id, int):
+            data_run_id = default_run_id
+        current_run = db.get(TrendSnapshotRun, data_run_id)
+        if current_run is None:
+            continue
         current_timestamp = current_run.completed_at or current_run.started_at
         comparison_cutoff = current_timestamp - timedelta(
             seconds=settings.live_trend_momentum_window_seconds
@@ -163,13 +187,14 @@ def _apply_session_and_engagement_status(
             db,
             region=region,
             platform=platform,
-            run_id=run_id - 1,
+            run_id=data_run_id - 1,
             completed_before=comparison_cutoff,
         )
         previous_run, previous_rows = previous_snapshot or (None, [])
         previous_by_key = {row.trend_key: row for row in previous_rows}
         previous_ranks = {
-            row.trend_key: index + 1 for index, row in enumerate(previous_rows)
+            row.trend_key: row.provider_rank or index
+            for index, row in enumerate(previous_rows, start=1)
         }
         previous_timestamp = (
             previous_run.completed_at or previous_run.started_at
@@ -362,6 +387,7 @@ def compare_live_trend_snapshot(
         db.query(TrendSnapshotRun)
         .filter(
             TrendSnapshotRun.region == region,
+            TrendSnapshotRun.snapshot_kind == GLOBAL_SNAPSHOT_KIND,
             TrendSnapshotRun.status.in_(("completed", "partial")),
         )
         .order_by(TrendSnapshotRun.run_id.desc())
@@ -409,6 +435,7 @@ def compare_live_trend_snapshot(
             db.query(TrendSnapshotRun)
             .filter(
                 TrendSnapshotRun.region == region,
+                TrendSnapshotRun.snapshot_kind == GLOBAL_SNAPSHOT_KIND,
                 TrendSnapshotRun.run_id > last_seen_run_id,
                 TrendSnapshotRun.run_id <= latest_run.run_id,
                 TrendSnapshotRun.status.in_(("completed", "partial")),

@@ -77,23 +77,26 @@ class AdminRepository {
     return DatasetReviewQueueResult.fromJson(response);
   }
 
-  Future<void> reviewDatasetCandidate({
+  Future<DatasetReviewDecisionResult> reviewDatasetCandidate({
     required DatasetReviewCandidate candidate,
     required String decision,
     String? reviewedLeafKey,
     String? transcriptQuality,
     String notes = '',
   }) async {
-    await _client.post(
-      '/admin/dataset-review/runs/${candidate.collectionRunId}'
-      '/candidates/${Uri.encodeComponent(candidate.youtubeId)}',
-      {
-        'decision': decision,
-        'reviewed_leaf_key': reviewedLeafKey,
-        'transcript_quality': transcriptQuality,
-        'notes': notes.trim().isEmpty ? null : notes.trim(),
-      },
+    final response = Map<String, dynamic>.from(
+      await _client.post(
+        '/admin/dataset-review/runs/${candidate.collectionRunId}'
+        '/candidates/${Uri.encodeComponent(candidate.youtubeId)}',
+        {
+          'decision': decision,
+          'reviewed_leaf_key': reviewedLeafKey,
+          'transcript_quality': transcriptQuality,
+          'notes': notes.trim().isEmpty ? null : notes.trim(),
+        },
+      ) as Map,
     );
+    return DatasetReviewDecisionResult.fromJson(response);
   }
 
   Future<NotebookLMImportResult> createNotebookLMCandidate({

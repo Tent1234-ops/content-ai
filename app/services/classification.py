@@ -7,7 +7,11 @@ from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
-from app.database.models import DatasetContent
+from app.database.models import ClassificationModel, DatasetContent
+from app.services.classification_training import (
+    ClassificationTrainingError,
+    classify_with_artifact,
+)
 from app.services.dataset_eligibility import production_transcript_query
 from app.services.nlp import filter_tokens
 from app.services.pipeline.core import normalize_space
@@ -195,6 +199,96 @@ def _apply_taxonomy_contract(db: Session, result: Dict[str, object]) -> Dict[str
     return result
 
 
+def _classify_with_active_model(
+    db: Session,
+    *,
+    text: str,
+    title: str | None,
+) -> Dict[str, object] | None:
+    model = (
+        db.query(ClassificationModel)
+        .filter(
+            ClassificationModel.is_active.is_(True),
+            ClassificationModel.status == "qualified",
+        )
+        .order_by(
+            ClassificationModel.trained_at.desc(),
+            ClassificationModel.model_id.desc(),
+        )
+        .first()
+    )
+    if model is None or not str(model.artifact_path or "").strip():
+        return None
+
+    try:
+        prediction = classify_with_artifact(
+            str(model.artifact_path),
+            title=title,
+            text=text,
+        )
+    except (ClassificationTrainingError, OSError, ValueError):
+        return None
+
+    raw_leaf_key = normalize_taxonomy_leaf(
+        str(prediction.get("raw_taxonomy_leaf_key") or "")
+    )
+    predicted_leaf_key = normalize_taxonomy_leaf(
+        str(prediction.get("taxonomy_leaf_key") or "")
+    )
+    ready_leaves = ready_leaf_keys(db)
+    warning: str | None = None
+    if predicted_leaf_key == UNKNOWN_LEAF_KEY:
+        warning = (
+            "The trained model confidence is below its Unknown/Other threshold."
+        )
+    elif predicted_leaf_key not in ready_leaves:
+        predicted_leaf_key = UNKNOWN_LEAF_KEY
+        warning = "The predicted category no longer meets the dataset coverage gate."
+
+    path = taxonomy_path(predicted_leaf_key)
+    probabilities = dict(prediction.get("probabilities") or {})
+    candidates = []
+    for leaf_key, probability in sorted(
+        probabilities.items(),
+        key=lambda item: (-float(item[1]), str(item[0])),
+    ):
+        normalized_leaf = normalize_taxonomy_leaf(leaf_key)
+        if normalized_leaf == UNKNOWN_LEAF_KEY:
+            continue
+        candidates.append(
+            {
+                "domain": normalized_leaf,
+                "taxonomy_leaf_key": normalized_leaf,
+                "score": float(probability),
+                "similarity": float(probability),
+                "sample_size": int(model.training_sample_count or 0),
+                "matched_terms": [],
+            }
+        )
+
+    model_type = str(prediction.get("model_type") or model.model_type or "")
+    return {
+        "domain": predicted_leaf_key,
+        "legacy_domain": raw_leaf_key,
+        "confidence": float(prediction["confidence"]),
+        "method": (
+            "trained_sentence_embedding_classifier"
+            if model_type.startswith("multilingual_sentence_embeddings")
+            else "trained_tfidf_classifier"
+        ),
+        "rule_domain": detect_domain(str(text or "").strip()),
+        "source": str(model.training_dataset_source or "reviewed_dataset"),
+        "profile_limit": int(model.training_sample_count or 0),
+        "candidates": candidates,
+        **path,
+        "taxonomy_ready": bool(taxonomy_coverage(db)["ready"]),
+        "warning": warning,
+        "model_id": int(model.model_id),
+        "model_key": str(model.model_key),
+        "model_version": str(model.model_version),
+    }
+
+
 def classify_text_domain(
     db: Session,
     *,
@@ -203,8 +297,51 @@ def classify_text_domain(
     source_prefix: str = "youtube",
     profile_limit: int = 200,
     top_k: int = 5,
+    require_active_model: bool = False,
 ) -> Dict[str, object]:
-    merged_text = " ".join(part for part in [title or "", text or ""] if part).strip()
+    transcript_text = str(text or "").strip()
+    if not transcript_text:
+        return {
+            "domain": UNKNOWN_LEAF_KEY,
+            "legacy_domain": UNKNOWN_LEAF_KEY,
+            "confidence": 0.0,
+            "method": "no_transcript",
+            "rule_domain": "general",
+            "source": source_prefix,
+            "profile_limit": profile_limit,
+            "candidates": [],
+            **taxonomy_path(UNKNOWN_LEAF_KEY),
+            "taxonomy_ready": bool(taxonomy_coverage(db)["ready"]),
+            "warning": "No speech transcript is available for classification.",
+        }
+
+    trained_result = _classify_with_active_model(
+        db,
+        title=None,
+        text=transcript_text,
+    )
+    if trained_result is not None:
+        return trained_result
+
+    if require_active_model:
+        return {
+            "domain": UNKNOWN_LEAF_KEY,
+            "legacy_domain": UNKNOWN_LEAF_KEY,
+            "confidence": 0.0,
+            "method": "active_model_unavailable",
+            "rule_domain": "general",
+            "source": source_prefix,
+            "profile_limit": profile_limit,
+            "candidates": [],
+            **taxonomy_path(UNKNOWN_LEAF_KEY),
+            "taxonomy_ready": bool(taxonomy_coverage(db)["ready"]),
+            "warning": (
+                "No qualified Active Model is available; returning "
+                "Unknown/Other instead of using a legacy classifier."
+            ),
+        }
+
+    merged_text = transcript_text
     rule_domain = detect_domain(merged_text)
     input_terms = _token_counter(merged_text)
     profiles = build_domain_classifier_profiles(db, source_prefix=source_prefix, limit=profile_limit)

@@ -114,15 +114,9 @@ class Phase12AiEvidenceTests(unittest.TestCase):
         self.assertEqual(result["language_probability"], 0.94)
 
     def test_thai_spell_correction_is_disabled_by_default(self):
-        with (
-            patch(
-                "app.services.pipeline.core.pythai_correct",
-                side_effect=AssertionError("unbounded spell correction must not run"),
-            ),
-            patch.dict(os.environ, {"ANALYZE_ENABLE_THAI_SPELL_CORRECTION": "0"}),
-        ):
+        with patch.dict(os.environ, {"ANALYZE_ENABLE_THAI_SPELL_CORRECTION": "1"}):
             result = normalize_asr_terms("ทดสอบเสียงจากหูฟัง", aggressive=True)
-        self.assertTrue(result)
+        self.assertEqual(result, "ทดสอบเสียงจากหูฟัง")
 
     def test_model_readiness_checks_required_local_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:

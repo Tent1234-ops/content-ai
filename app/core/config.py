@@ -55,6 +55,30 @@ class Settings:
         120,
         int(os.getenv("LIVE_TREND_MOMENTUM_WINDOW_SECONDS", "300")),
     )
+    youtube_category_trend_refresh_seconds: int = max(
+        300,
+        int(os.getenv("YOUTUBE_CATEGORY_TREND_REFRESH_SECONDS", "900")),
+    )
+    youtube_category_trend_limit: int = min(
+        50,
+        max(1, int(os.getenv("YOUTUBE_CATEGORY_TREND_LIMIT", "50"))),
+    )
+    youtube_category_cache_seconds: int = max(
+        3600,
+        int(os.getenv("YOUTUBE_CATEGORY_CACHE_SECONDS", "86400")),
+    )
+    youtube_category_snapshot_timeout_seconds: float = max(
+        15.0,
+        float(os.getenv("YOUTUBE_CATEGORY_SNAPSHOT_TIMEOUT_SECONDS", "60")),
+    )
+    youtube_trend_category_ids: tuple[str, ...] = tuple(
+        item.strip()
+        for item in os.getenv(
+            "YOUTUBE_TREND_CATEGORY_IDS",
+            "1,2,10,15,17,20,22,23,24,25,26,28",
+        ).split(",")
+        if item.strip()
+    )[:12]
 
 
 settings = Settings()
