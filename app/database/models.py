@@ -8,6 +8,7 @@ from .db import Base
 
 
 TranscriptText = Text().with_variant(LONGTEXT(), "mysql")
+AnalysisPayloadText = Text().with_variant(LONGTEXT(), "mysql")
 
 
 class User(Base):
@@ -389,7 +390,7 @@ class AnalysisResult(Base):
     category_level_3 = Column(String(150))
     classification_confidence = Column(Float)
     classification_is_unknown = Column(Boolean, nullable=False, default=False)
-    summary = Column(Text)
+    summary = Column(AnalysisPayloadText)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     content = relationship("UserContent", back_populates="analysis_results")

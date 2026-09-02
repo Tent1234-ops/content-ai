@@ -374,6 +374,38 @@ def migrate_phase19_transcript_schema(engine: Engine) -> Dict[str, object]:
     }
 
 
+def migrate_analysis_payload_schema(engine: Engine) -> Dict[str, object]:
+    """Allow saved analysis JSON to exceed MySQL TEXT's 64 KiB limit."""
+    widened_columns: list[str] = []
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "analysis_results" not in set(inspector.get_table_names()):
+            return {"widened_columns": widened_columns}
+
+        summary_column = next(
+            (
+                column
+                for column in inspector.get_columns("analysis_results")
+                if column["name"] == "summary"
+            ),
+            None,
+        )
+        if (
+            connection.dialect.name == "mysql"
+            and summary_column is not None
+            and not str(summary_column["type"]).upper().startswith("LONGTEXT")
+        ):
+            connection.execute(
+                text(
+                    "ALTER TABLE analysis_results "
+                    "MODIFY COLUMN summary LONGTEXT NULL"
+                )
+            )
+            widened_columns.append("analysis_results.summary")
+
+    return {"widened_columns": widened_columns}
+
+
 def migrate_youtube_cc_dataset_schema(engine: Engine) -> Dict[str, object]:
     """Add YouTube provenance fields and disable non-production evidence."""
     added_columns: list[str] = []

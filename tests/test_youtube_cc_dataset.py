@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database.db import Base
 from app.database.migrations import migrate_youtube_cc_dataset_schema
 from app.database.models import (
+    AnalysisResult,
     DatasetCollectionRun,
     DatasetContent,
     DatasetReviewEvent,
@@ -108,7 +109,7 @@ def _transcript(video_id, _languages):
 
 
 class YouTubeCCDatasetTests(unittest.TestCase):
-    def test_transcript_columns_use_longtext_on_mysql(self):
+    def test_large_text_columns_use_longtext_on_mysql(self):
         for model in (DatasetContent, UserContent):
             column_type = model.__table__.c.transcript.type
             self.assertEqual(
@@ -119,6 +120,16 @@ class YouTubeCCDatasetTests(unittest.TestCase):
                 column_type.compile(dialect=sqlite.dialect()).upper(),
                 "TEXT",
             )
+
+        summary_type = AnalysisResult.__table__.c.summary.type
+        self.assertEqual(
+            summary_type.compile(dialect=mysql.dialect()).upper(),
+            "LONGTEXT",
+        )
+        self.assertEqual(
+            summary_type.compile(dialect=sqlite.dialect()).upper(),
+            "TEXT",
+        )
 
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")

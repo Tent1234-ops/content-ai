@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.database.db import Base, DB_BOOTSTRAP_ERROR, SessionLocal, engine
 from app.database.migrations import (
     archive_phase10_notification_tables,
+    migrate_analysis_payload_schema,
     migrate_classification_split_strategy,
     migrate_phase13_taxonomy_schema,
     migrate_phase19_transcript_schema,
@@ -95,6 +96,7 @@ view_metric_migration_status = {}
 trend_scope_migration_status = {}
 classification_split_migration_status = {}
 phase19_transcript_migration_status = {}
+analysis_payload_migration_status = {}
 taxonomy_seed_status = {}
 youtube_quota_repair_status = {}
 try:
@@ -108,6 +110,7 @@ try:
         engine
     )
     phase19_transcript_migration_status = migrate_phase19_transcript_schema(engine)
+    analysis_payload_migration_status = migrate_analysis_payload_schema(engine)
     taxonomy_db = SessionLocal()
     try:
         taxonomy_seed_status = sync_taxonomy_registry(taxonomy_db)
@@ -152,6 +155,7 @@ def root():
         "view_metric_schema": view_metric_migration_status,
         "trend_scope_schema": trend_scope_migration_status,
         "phase19_transcript_schema": phase19_transcript_migration_status,
+        "analysis_payload_schema": analysis_payload_migration_status,
         "taxonomy": taxonomy_seed_status,
     }
 
@@ -168,6 +172,7 @@ def health():
         "view_metric_schema": view_metric_migration_status,
         "trend_scope_schema": trend_scope_migration_status,
         "phase19_transcript_schema": phase19_transcript_migration_status,
+        "analysis_payload_schema": analysis_payload_migration_status,
         "taxonomy": taxonomy_seed_status,
     }
     live_trends = {
@@ -187,6 +192,7 @@ def health():
             "phase13_schema": phase13_migration_status,
             "youtube_cc_schema": youtube_cc_migration_status,
             "view_metric_schema": view_metric_migration_status,
+            "analysis_payload_schema": analysis_payload_migration_status,
             "taxonomy": taxonomy_seed_status,
             "error": f"{exc.__class__.__name__}: {exc}",
         }
