@@ -477,7 +477,7 @@ class YouTubeCategoryTrendSnapshot {
       generatedAt: json['generated_at']?.toString() ?? '',
       region: json['region']?.toString() ?? 'TH',
       refreshIntervalSeconds:
-          (json['refresh_interval_seconds'] as num?)?.toInt() ?? 900,
+          (json['refresh_interval_seconds'] as num?)?.toInt() ?? 60,
       categories: (json['categories'] as List<dynamic>? ?? const [])
           .map(
             (item) => YouTubeTrendCategory.fromJson(

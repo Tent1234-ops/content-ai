@@ -279,12 +279,12 @@ class _RankSummary extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 88,
+            width: 150,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'อันดับปัจจุบัน',
+                  _rankScopeLabel(item),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 const SizedBox(height: 4),
@@ -301,18 +301,14 @@ class _RankSummary extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  item.rankingScope == 'global'
-                      ? 'อันดับรวมบน ${_platformName(item.platform)}'
-                      : 'อันดับภายในหมวดเดียวกัน',
+                  'การเปลี่ยนแปลงจากรอบก่อน',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  movement,
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
-                if (movement != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    movement,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
               ],
             ),
           ),
@@ -465,11 +461,13 @@ class _MetricsGrid extends StatelessWidget {
   }
 }
 
-String? _rankMovementText(DashboardTrendItem item) {
-  if (item.changeKind == 'new' || item.isNew) {
+String _rankMovementText(DashboardTrendItem item) {
+  if (item.changeKind == 'new') {
     return 'เพิ่งเข้ามาในอันดับรอบล่าสุด';
   }
-  if (!item.hasPreviousSnapshot || item.rank <= 0) return null;
+  if (!item.hasPreviousSnapshot || item.rank <= 0) {
+    return 'ยังไม่มีรอบก่อนสำหรับเปรียบเทียบ';
+  }
   final previousRank = item.rank + item.rankChange;
   if (item.rankChange > 0) {
     return 'ขยับขึ้น ${item.rankChange} อันดับ จาก #$previousRank เป็น #${item.rank}';
@@ -477,7 +475,20 @@ String? _rankMovementText(DashboardTrendItem item) {
   if (item.rankChange < 0) {
     return 'ลดลง ${item.rankChange.abs()} อันดับ จาก #$previousRank เป็น #${item.rank}';
   }
-  return null;
+  return 'อันดับคงเดิม';
+}
+
+String _rankScopeLabel(DashboardTrendItem item) {
+  if (item.rankingScope != 'global') {
+    final category = _categoryName(item.category).trim();
+    return category.isEmpty
+        ? 'อันดับภายในหมวดเดียวกัน'
+        : 'อันดับในหมวด$category';
+  }
+  if (item.platform.toLowerCase() == 'google') {
+    return 'อันดับคำค้นบน Google';
+  }
+  return 'อันดับรวมบน ${_platformName(item.platform)}';
 }
 
 String _sourceButtonLabel(String platform) {

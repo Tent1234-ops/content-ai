@@ -56,8 +56,8 @@ class Settings:
         int(os.getenv("LIVE_TREND_MOMENTUM_WINDOW_SECONDS", "300")),
     )
     youtube_category_trend_refresh_seconds: int = max(
-        300,
-        int(os.getenv("YOUTUBE_CATEGORY_TREND_REFRESH_SECONDS", "900")),
+        60,
+        int(os.getenv("YOUTUBE_CATEGORY_TREND_REFRESH_SECONDS", "60")),
     )
     youtube_category_trend_limit: int = min(
         50,

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../screens/auth_gate.dart';
-import '../screens/admin_console_screen.dart';
 import '../screens/admin_dataset_review_screen.dart';
 import '../screens/admin_datasets_screen.dart';
 import '../screens/admin_logs_screen.dart';
@@ -21,7 +20,6 @@ class AppRouter {
 
   static const Set<String> _publicRoutes = {'/', '/login', '/register'};
   static const Set<String> _adminRoutes = {
-    '/admin-console',
     '/admin-dataset-review',
     '/admin-datasets',
     '/admin-logs',
@@ -56,8 +54,6 @@ class AppRouter {
         return _page(const HistoryScreen(), settings);
       case '/result':
         return _page(const ResultScreen(), settings);
-      case '/admin-console':
-        return _page(const AdminConsoleScreen(), settings);
       case '/admin-dataset-review':
         return _page(const AdminDatasetReviewScreen(), settings);
       case '/admin-datasets':

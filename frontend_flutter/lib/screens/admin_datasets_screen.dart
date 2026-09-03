@@ -17,11 +17,9 @@ class AdminDatasetsScreen extends StatefulWidget {
 
 class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
   late final AdminRepository _repository;
-  final _searchController = TextEditingController();
   List<DatasetItem> _items = [];
   List<String> _categories = ['all'];
   List<DatasetReviewTaxonomyLeaf> _taxonomyLeaves = [];
-  String _source = 'all';
   String _category = 'all';
   String? _error;
   bool _loading = false;
@@ -36,12 +34,6 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
     _load();
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -54,9 +46,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
       final response = await _repository.listDatasets(
         limit: _limit,
         offset: _offset,
-        source: _source,
         category: _category,
-        search: _searchController.text,
       );
       if (!mounted) return;
       final discoveredCategories = <String>{
@@ -137,66 +127,26 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                TextField(
-                  controller: _searchController,
-                  decoration: const InputDecoration(
-                    labelText: 'Search title or transcript',
-                    prefixIcon: Icon(Icons.search),
-                  ),
-                  onSubmitted: (_) => _applyFilters(),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _source,
-                        decoration: const InputDecoration(labelText: 'Source'),
-                        items: const [
-                          DropdownMenuItem(value: 'all', child: Text('All')),
-                          DropdownMenuItem(
-                              value: 'youtube', child: Text('YouTube')),
-                          DropdownMenuItem(
-                              value: 'google', child: Text('Google')),
-                          DropdownMenuItem(
-                              value: 'tiktok', child: Text('TikTok')),
-                        ],
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() => _source = value);
-                          _applyFilters();
-                        },
+            child: DropdownButtonFormField<String>(
+              key: const ValueKey('dataset-category-filter'),
+              initialValue: _category,
+              decoration: const InputDecoration(labelText: 'Category'),
+              items: _categories
+                  .map(
+                    (value) => DropdownMenuItem(
+                      value: value,
+                      child: Text(
+                        _categoryLabel(value),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _category,
-                        decoration:
-                            const InputDecoration(labelText: 'Category'),
-                        items: _categories
-                            .map(
-                              (value) => DropdownMenuItem(
-                                value: value,
-                                child: Text(
-                                  _categoryLabel(value),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() => _category = value);
-                          _applyFilters();
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _category = value);
+                _applyFilters();
+              },
             ),
           ),
           if (_loading) const LinearProgressIndicator(),
@@ -250,13 +200,6 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                                   'duration ${item.durationSeconds ?? 0}s',
                                 ),
                                 isThreeLine: true,
-                                trailing: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Text('score'),
-                                    Text(item.trendScore.toStringAsFixed(1)),
-                                  ],
-                                ),
                                 onTap: () => _openEditor(item),
                               ),
                             );

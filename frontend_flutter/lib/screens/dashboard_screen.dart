@@ -34,7 +34,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   Timer? _pollTimer;
   String? _error;
   Map<String, String> _sectionErrors = const {};
-  String _searchText = '';
   String _selectedPlatform = 'youtube';
   String _categoryFilter = 'All';
   bool _loading = false;
@@ -384,7 +383,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   List<DashboardTrendItem> _filteredTrends(DashboardOverview data) {
-    final query = _searchText.trim().toLowerCase();
     final sourceItems =
         _selectedPlatform == 'youtube' && _categoryFilter != 'All'
             ? _selectedYoutubeCategory?.items ?? const <DashboardTrendItem>[]
@@ -399,9 +397,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       final categoryOk = _selectedPlatform == 'youtube'
           ? _categoryFilter == 'All' || item.categoryId == _categoryFilter
           : _categoryFilter == 'All' || category == _categoryFilter;
-      final text = '${item.title} $category'.toLowerCase();
-      final searchOk = query.isEmpty || text.contains(query);
-      return platformOk && categoryOk && searchOk;
+      return platformOk && categoryOk;
     }).toList()
       ..sort((a, b) {
         final leftRank = a.rank > 0 ? a.rank : 1 << 30;
@@ -527,8 +523,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                         platformTabController: _platformTabController,
                         category: _categoryFilter,
                         categories: _categories(data),
-                        onSearchChanged: (value) =>
-                            setState(() => _searchText = value),
                         onPlatformChanged: _changePlatform,
                         onCategoryChanged: (value) {
                           _changeCategory(value);
@@ -562,24 +556,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                         _MetricsGrid(metrics: data.metrics),
                         const SizedBox(height: 16),
                       ],
-                      if (auth.isAdmin && data.sourceDistribution.isNotEmpty)
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'จำนวนข้อมูลตามแหล่งที่มา',
-                                  style:
-                                      Theme.of(context).textTheme.titleMedium,
-                                ),
-                                const SizedBox(height: 12),
-                                SimpleBarChart(items: data.sourceDistribution),
-                              ],
-                            ),
-                          ),
-                        ),
                     ],
                   ),
                 ),
@@ -694,7 +670,6 @@ class _TrendFilters extends StatelessWidget {
     required this.platformTabController,
     required this.category,
     required this.categories,
-    required this.onSearchChanged,
     required this.onPlatformChanged,
     required this.onCategoryChanged,
   });
@@ -702,7 +677,6 @@ class _TrendFilters extends StatelessWidget {
   final TabController platformTabController;
   final String category;
   final List<_CategoryOption> categories;
-  final ValueChanged<String> onSearchChanged;
   final ValueChanged<String> onPlatformChanged;
   final ValueChanged<String> onCategoryChanged;
 
@@ -714,12 +688,9 @@ class _TrendFilters extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final stacked = constraints.maxWidth < 760;
-            final searchWidth = stacked
+            final controlsWidth = stacked
                 ? constraints.maxWidth
-                : math.min(420.0, constraints.maxWidth * 0.58);
-            final dropdownWidth = stacked
-                ? constraints.maxWidth
-                : math.min(320.0, constraints.maxWidth - searchWidth - 12);
+                : math.min(560.0, constraints.maxWidth);
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -729,9 +700,7 @@ class _TrendFilters extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
-                  width: stacked
-                      ? constraints.maxWidth
-                      : math.min(560.0, constraints.maxWidth),
+                  width: controlsWidth,
                   child: TabBar(
                     controller: platformTabController,
                     onTap: (index) {
@@ -750,30 +719,12 @@ class _TrendFilters extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: searchWidth,
-                      child: TextField(
-                        decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.search),
-                          labelText: 'ค้นหาชื่อหรือหมวดหมู่',
-                          border: OutlineInputBorder(),
-                        ),
-                        onChanged: onSearchChanged,
-                      ),
-                    ),
-                    _FilterDropdown(
-                      width: dropdownWidth,
-                      label: 'หมวดหมู่',
-                      value: category,
-                      values: categories,
-                      onChanged: onCategoryChanged,
-                    ),
-                  ],
+                _FilterDropdown(
+                  width: controlsWidth,
+                  label: 'หมวดหมู่',
+                  value: category,
+                  values: categories,
+                  onChanged: onCategoryChanged,
                 ),
               ],
             );
@@ -879,13 +830,10 @@ class _TrendDashboardSections extends StatelessWidget {
       );
     }
     final trendingNow = trends.take(50).toList();
-    final hasComparableRound = trends.any(
-      (item) =>
-          item.hasPreviousSnapshot || item.changeKind == 'new' || item.isNew,
-    );
     final rankMovers = trends.where(_isRankMovement).toList()
       ..sort(_compareRankMovers);
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _TrendListSection(
           title: _topTrendsTitle(platform, categoryLabel),
@@ -904,29 +852,197 @@ class _TrendDashboardSections extends StatelessWidget {
           onOpenSource: onOpenSource,
         ),
         const SizedBox(height: 16),
-        _TrendListSection(
-          title: 'อันดับขยับขึ้นล่าสุด',
+        _RankMovementSection(
           subtitle: _rankMovementSubtitle(
             platform,
             categoryLabel,
             generatedAt,
             trends,
           ),
-          trends: rankMovers.take(10).toList(),
-          emptyMessage: trends.isNotEmpty && !hasComparableRound
-              ? 'ยังไม่มี Snapshot รอบก่อนสำหรับเปรียบเทียบอันดับ'
-              : _noRankMoversMessage(platform),
-          detailedMovement: true,
+          allTrends: trends,
+          rankMovers: rankMovers.take(10).toList(),
+          platform: platform,
           isFollowing: isFollowing,
           onToggleFollow: onToggleFollow,
           onOpenDetails: onOpenDetails,
           onOpenSource: onOpenSource,
         ),
-        if (categoryLabel == null) ...[
+        if (categoryLabel == null &&
+            _platformFamily(platform) == 'youtube') ...[
           const SizedBox(height: 16),
-          _CategoryOverview(trends: trends),
+          _CategoryOverview(platform: platform, trends: trends),
         ],
       ],
+    );
+  }
+}
+
+class _RankMovementSection extends StatelessWidget {
+  const _RankMovementSection({
+    required this.subtitle,
+    required this.allTrends,
+    required this.rankMovers,
+    required this.platform,
+    required this.isFollowing,
+    required this.onToggleFollow,
+    required this.onOpenDetails,
+    required this.onOpenSource,
+  });
+
+  final String subtitle;
+  final List<DashboardTrendItem> allTrends;
+  final List<DashboardTrendItem> rankMovers;
+  final String platform;
+  final bool Function(DashboardTrendItem item) isFollowing;
+  final Future<void> Function(DashboardTrendItem item) onToggleFollow;
+  final Future<void> Function(DashboardTrendItem item) onOpenDetails;
+  final Future<void> Function(DashboardTrendItem item) onOpenSource;
+
+  @override
+  Widget build(BuildContext context) {
+    final comparableCount =
+        allTrends.where((item) => item.hasPreviousSnapshot).length;
+    final newCount = allTrends.where(_isNewRankEntry).length;
+    final upCount = allTrends
+        .where((item) => item.hasPreviousSnapshot && item.rankChange > 0)
+        .length;
+    final unchangedCount = allTrends
+        .where((item) => item.hasPreviousSnapshot && item.rankChange == 0)
+        .length;
+    final downCount = allTrends
+        .where((item) => item.hasPreviousSnapshot && item.rankChange < 0)
+        .length;
+    final hasComparableRound = comparableCount > 0 || newCount > 0;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _rankMovementTitle(platform),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 12),
+            if (allTrends.isEmpty)
+              Text(
+                _noTrendsMessage(platform),
+                style: Theme.of(context).textTheme.bodyMedium,
+              )
+            else if (!hasComparableRound)
+              Text(
+                'ยังไม่มี Snapshot รอบก่อนสำหรับเปรียบเทียบอันดับ',
+                style: Theme.of(context).textTheme.bodyMedium,
+              )
+            else ...[
+              Wrap(
+                spacing: 24,
+                runSpacing: 12,
+                children: [
+                  _RankMovementStat(
+                    icon: Icons.trending_up,
+                    label: 'ขยับขึ้น',
+                    value: upCount,
+                    color: Colors.green.shade700,
+                  ),
+                  _RankMovementStat(
+                    icon: Icons.fiber_new_outlined,
+                    label: 'เข้าอันดับใหม่',
+                    value: newCount,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  _RankMovementStat(
+                    icon: Icons.horizontal_rule,
+                    label: 'อันดับคงเดิม',
+                    value: unchangedCount,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  _RankMovementStat(
+                    icon: Icons.trending_down,
+                    label: 'อันดับลดลง',
+                    value: downCount,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (rankMovers.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          downCount > 0
+                              ? 'รอบนี้ยังไม่มีรายการขยับขึ้น แต่มี $downCount รายการที่อันดับลดลง'
+                              : 'อันดับทั้ง $comparableCount รายการยังคงเดิมเมื่อเทียบกับรอบก่อน',
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                ...rankMovers.map(
+                  (item) => _CompactTrendTile(
+                    item: item,
+                    detailedMovement: true,
+                    isFollowing: isFollowing(item),
+                    onToggleFollow: () => onToggleFollow(item),
+                    onOpenDetails: () => onOpenDetails(item),
+                    onOpenSource: () => onOpenSource(item),
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RankMovementStat extends StatelessWidget {
+  const _RankMovementStat({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final int value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 142,
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$value', style: Theme.of(context).textTheme.titleMedium),
+                Text(label, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1156,8 +1272,9 @@ class _CompactTrendTile extends StatelessWidget {
 }
 
 class _CategoryOverview extends StatelessWidget {
-  const _CategoryOverview({required this.trends});
+  const _CategoryOverview({required this.platform, required this.trends});
 
+  final String platform;
   final List<DashboardTrendItem> trends;
 
   @override
@@ -1182,21 +1299,73 @@ class _CategoryOverview extends StatelessWidget {
               'เทรนด์ตามหมวดหมู่',
               style: Theme.of(context).textTheme.titleMedium,
             ),
+            const SizedBox(height: 4),
+            Text(
+              'สัดส่วนจาก ${trends.length} รายการในอันดับปัจจุบันของ ${_formatPlatformName(platform)}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 12),
             if (items.isEmpty)
               Text('ยังไม่มีข้อมูลหมวดหมู่สำหรับแพลตฟอร์มนี้',
                   style: Theme.of(context).textTheme.bodyMedium)
             else
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: items
-                    .map((entry) => _SmallPill('${entry.key} (${entry.value})'))
-                    .toList(),
+              ...items.map(
+                (entry) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _CategoryShareRow(
+                    label: entry.key,
+                    count: entry.value,
+                    total: trends.length,
+                  ),
+                ),
               ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CategoryShareRow extends StatelessWidget {
+  const _CategoryShareRow({
+    required this.label,
+    required this.count,
+    required this.total,
+  });
+
+  final String label;
+  final int count;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    final share = total > 0 ? count / total : 0.0;
+    final percentage = (share * 100).round();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text('$count รายการ ($percentage%)'),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            minHeight: 8,
+            value: share.clamp(0.0, 1.0),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1468,32 +1637,14 @@ class _MovementPresentation {
   final _MovementDirection direction;
 }
 
-class _SmallPill extends StatelessWidget {
-  const _SmallPill(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(label, style: Theme.of(context).textTheme.labelSmall),
-    );
-  }
-}
-
 bool _isRankMovement(DashboardTrendItem item) {
-  return item.changeKind == 'new' || item.isNew || item.rankChange > 0;
+  return item.changeKind == 'new' || item.rankChange > 0;
 }
 
 int _compareRankMovers(DashboardTrendItem left, DashboardTrendItem right) {
   int priority(DashboardTrendItem item) {
     if (item.rankChange > 0) return 2;
-    if (item.changeKind == 'new' || item.isNew) return 1;
+    if (item.changeKind == 'new') return 1;
     return 0;
   }
 
@@ -1514,7 +1665,7 @@ _MovementPresentation? _movementPresentation(
   DashboardTrendItem item, {
   required bool detailed,
 }) {
-  if (item.changeKind == 'new' || item.isNew) {
+  if (item.changeKind == 'new') {
     return _MovementPresentation(
       label: item.rank > 0
           ? 'เข้าอันดับรอบนี้ที่ #${item.rank}'
@@ -1583,6 +1734,14 @@ String _topTrendsTitle(String platform, String? categoryLabel) {
   }
 }
 
+String _rankMovementTitle(String platform) {
+  return switch (_platformFamily(platform)) {
+    'google' => 'อันดับคำค้นขยับขึ้นล่าสุดบน Google',
+    'tiktok' => 'อันดับวิดีโอขยับขึ้นล่าสุดบน TikTok',
+    _ => 'อันดับวิดีโอขยับขึ้นล่าสุดบน YouTube',
+  };
+}
+
 String _topTrendsSubtitle(
   String platform,
   String? categoryLabel,
@@ -1592,7 +1751,7 @@ String _topTrendsSubtitle(
     return 'เรียงตามลำดับคำค้นจาก Google ในข้อมูลรอบล่าสุด โดยไม่เทียบกับแพลตฟอร์มอื่น';
   }
   if (_platformFamily(platform) == 'youtube' && categoryLabel != null) {
-    return 'YouTube ส่งกลับ $itemCount รายการในรอบล่าสุดของหมวด$categoryLabel (สูงสุด 50) อัปเดตทุก 15 นาที';
+    return 'YouTube ส่งกลับ $itemCount รายการในรอบล่าสุดของหมวด$categoryLabel (สูงสุด 50) อัปเดตทุก 1 นาที';
   }
   final name = _formatPlatformName(platform);
   return 'เรียงตามลำดับวิดีโอจาก $name ในข้อมูลรอบล่าสุด โดยไม่เทียบกับแพลตฟอร์มอื่น';
@@ -1629,9 +1788,8 @@ String _noTrendsMessage(String platform) {
   return 'ยังไม่มีข้อมูลเทรนด์ของ $name ที่ตรงกับตัวกรอง';
 }
 
-String _noRankMoversMessage(String platform) {
-  final name = _formatPlatformName(platform);
-  return 'รอบนี้ยังไม่มีรายการที่เข้าอันดับใหม่หรือขยับขึ้นบน $name';
+bool _isNewRankEntry(DashboardTrendItem item) {
+  return item.changeKind == 'new';
 }
 
 String _formatPlatformList(List<String> platforms) {

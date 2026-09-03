@@ -32,6 +32,8 @@ void main() {
     expect(find.text('Fastest Rising'), findsNothing);
     expect(find.text('Stable'), findsNothing);
     expect(find.text('Momentum Score'), findsNothing);
+    expect(find.text('ค้นหาชื่อหรือหมวดหมู่'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
 
     await tester.scrollUntilVisible(
       find.text('อันดับวิดีโอบน YouTube ตอนนี้').first,
@@ -62,6 +64,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text(firstRoundMessage), findsOneWidget);
+    expect(find.text('อันดับคำค้นขยับขึ้นล่าสุดบน Google'), findsOneWidget);
+    expect(find.text('เทรนด์ตามหมวดหมู่'), findsNothing);
   });
 
   testWidgets('rank movement list explains the exact snapshot comparison',
@@ -82,13 +86,16 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.scrollUntilVisible(
-      find.text('อันดับขยับขึ้นล่าสุด').first,
+      find.text('อันดับวิดีโอขยับขึ้นล่าสุดบน YouTube').first,
       500,
       maxScrolls: 20,
       scrollable: find.byType(Scrollable).first,
     );
 
-    expect(find.text('อันดับขยับขึ้นล่าสุด'), findsOneWidget);
+    expect(
+      find.text('อันดับวิดีโอขยับขึ้นล่าสุดบน YouTube'),
+      findsOneWidget,
+    );
     expect(find.text('น่าจับตาในรอบล่าสุด'), findsNothing);
     expect(find.text('YouTube climber'), findsWidgets);
     expect(
@@ -100,6 +107,58 @@ void main() {
     expect(find.textContaining('ภายใน YouTube เท่านั้น'), findsOneWidget);
     expect(find.textContaining('Momentum'), findsNothing);
     expect(find.textContaining('ความสนใจเพิ่มขึ้น'), findsNothing);
+    expect(find.text('ขยับขึ้น'), findsOneWidget);
+    expect(find.text('เข้าอันดับใหม่'), findsOneWidget);
+    expect(find.text('อันดับคงเดิม'), findsOneWidget);
+    expect(find.text('อันดับลดลง'), findsOneWidget);
+  });
+
+  testWidgets('unchanged ranking round shows evidence instead of an empty card',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final authController = AuthController();
+    addTearDown(authController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AuthScope(
+          controller: authController,
+          child: DashboardScreen(
+            repository: _FakeDashboardRepository(
+              snapshotJson: _stableSnapshotJson(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('อันดับวิดีโอขยับขึ้นล่าสุดบน YouTube').first,
+      500,
+      maxScrolls: 20,
+      scrollable: find.byType(Scrollable).first,
+    );
+
+    expect(
+      find.text('อันดับทั้ง 5 รายการยังคงเดิมเมื่อเทียบกับรอบก่อน'),
+      findsOneWidget,
+    );
+    expect(find.text('อันดับคงเดิม'), findsOneWidget);
+    expect(find.text('จำนวนข้อมูลตามแหล่งที่มา'), findsNothing);
+
+    await tester.scrollUntilVisible(
+      find.text('เทรนด์ตามหมวดหมู่').first,
+      500,
+      maxScrolls: 20,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.text('สัดส่วนจาก 5 รายการในอันดับปัจจุบันของ YouTube'),
+      findsOneWidget,
+    );
+    expect(find.text('5 รายการ (100%)'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('youtube category uses its own 1 to 50 ranking', (tester) async {
@@ -162,11 +221,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('YouTube video 1'),
-      250,
-      scrollable: find.byType(Scrollable).first,
-    );
 
     await tester.tap(find.text('YouTube video 1'));
     await tester.pumpAndSettle();
@@ -296,24 +350,23 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('YouTube video 1'),
-      250,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.ensureVisible(find.text('YouTube video 1'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('YouTube video 1'));
     await tester.pumpAndSettle();
 
     expect(find.text('รายละเอียดเทรนด์'), findsOneWidget);
-    expect(find.text('อันดับปัจจุบัน'), findsOneWidget);
+    expect(find.text('อันดับรวมบน YouTube'), findsOneWidget);
+    expect(find.text('การเปลี่ยนแปลงจากรอบก่อน'), findsOneWidget);
+    expect(find.text('อันดับคงเดิม'), findsWidgets);
     expect(find.text('ดูบน YouTube'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
 
 class _FakeDashboardRepository extends DashboardRepository {
-  _FakeDashboardRepository()
-      : _snapshot = LiveTrendSnapshot.fromJson(_snapshotJson()),
+  _FakeDashboardRepository({Map<String, dynamic>? snapshotJson})
+      : _snapshot = LiveTrendSnapshot.fromJson(snapshotJson ?? _snapshotJson()),
         _overview = DashboardOverview.fromJson(_overviewJson());
 
   final LiveTrendSnapshot _snapshot;
@@ -394,6 +447,7 @@ Map<String, dynamic> _snapshotJson() {
         platform: 'youtube_live',
         rank: 14,
         category: 'Technology',
+        changeKind: 'new',
         isNew: true,
         hasPreviousSnapshot: false,
       ),
@@ -420,6 +474,24 @@ Map<String, dynamic> _snapshotJson() {
       'tiktok': {'mode': 'live', 'items': <dynamic>[]},
     },
   };
+}
+
+Map<String, dynamic> _stableSnapshotJson() {
+  final snapshot = _snapshotJson();
+  final platforms = snapshot['platforms'] as Map<String, dynamic>;
+  platforms['youtube'] = {
+    'mode': 'live',
+    'items': List.generate(
+      5,
+      (index) => _trendItem(
+        title: 'Stable YouTube video ${index + 1}',
+        platform: 'youtube_live',
+        rank: index + 1,
+        category: 'Technology',
+      ),
+    ),
+  };
+  return snapshot;
 }
 
 Map<String, dynamic> _youtubeCategorySnapshotJson({String? categoryId}) {
@@ -467,7 +539,7 @@ Map<String, dynamic> _youtubeCategorySnapshotJson({String? categoryId}) {
     'snapshot_status': 'completed',
     'generated_at': '2026-08-31T10:45:00Z',
     'region': 'TH',
-    'refresh_interval_seconds': 900,
+    'refresh_interval_seconds': 60,
     'categories': categories,
     'selected_category': selected,
   };
@@ -515,7 +587,7 @@ Map<String, dynamic> _trendItem({
     'change_label': '',
     'is_meaningful_rising': meaningfulRising,
     'has_previous_snapshot': hasPreviousSnapshot,
-    'comparison_window_seconds': hasPreviousSnapshot ? 900 : 0,
+    'comparison_window_seconds': hasPreviousSnapshot ? 60 : 0,
     'is_new': isNew,
   };
 }

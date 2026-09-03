@@ -1,10 +1,8 @@
-import 'package:content_ai_web/models/admin_report.dart';
 import 'package:content_ai_web/models/common_models.dart';
 import 'package:content_ai_web/models/dataset_item.dart';
 import 'package:content_ai_web/models/dataset_review.dart';
 import 'package:content_ai_web/models/system_log.dart';
 import 'package:content_ai_web/repositories/admin_repository.dart';
-import 'package:content_ai_web/screens/admin_console_screen.dart';
 import 'package:content_ai_web/screens/admin_datasets_screen.dart';
 import 'package:content_ai_web/screens/admin_logs_screen.dart';
 import 'package:content_ai_web/utils/system_log_presenter.dart';
@@ -35,28 +33,6 @@ void main() {
     );
   });
 
-  testWidgets('admin console shows only settings backed by current behavior',
-      (tester) async {
-    await tester.binding.setSurfaceSize(const Size(1280, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: AdminConsoleScreen(repository: _ConsoleRepository()),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('ข้อมูลพร้อมใช้กับโมเดล'), findsOneWidget);
-    expect(find.text('ช่วงเปิดคลิปที่ใช้วิเคราะห์ (วินาที)'), findsOneWidget);
-    expect(find.text('Max keywords'), findsNothing);
-    expect(find.text('Scan interval hr'), findsNothing);
-    expect(find.text('Google Rows'), findsNothing);
-    expect(find.text('TikTok Rows'), findsNothing);
-    expect(find.text('Visual Summary'), findsNothing);
-    expect(find.text('YouTube / Google / TikTok Comparison'), findsNothing);
-  });
-
   testWidgets('system logs present audit events in Thai with time and actor',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
@@ -69,11 +45,34 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('ค้นหารหัสเหตุการณ์'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
     expect(find.text('อนุมัติข้อมูลฝึกเข้าสู่ฐานข้อมูล'), findsOneWidget);
     expect(find.text('dataset_review_approve'), findsOneWidget);
     expect(find.text('สำเร็จ'), findsAtLeastNWidgets(1));
     expect(find.text('ผู้ใช้หมายเลข 2'), findsOneWidget);
   });
+
+  testWidgets('admin navigation omits the removed admin console',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AdminDatasetsScreen(repository: _DatasetsRepository()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DrawerButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Admin Console'), findsNothing);
+    expect(find.text('Transcript Import'), findsOneWidget);
+    expect(find.text('Dataset Review'), findsOneWidget);
+    expect(find.text('System Logs'), findsOneWidget);
+  });
+
   testWidgets(
       'dataset editor submits transcript with the canonical taxonomy leaf',
       (tester) async {
@@ -85,6 +84,11 @@ void main() {
       MaterialApp(home: AdminDatasetsScreen(repository: repository)),
     );
     await tester.pumpAndSettle();
+
+    expect(find.text('Search title or transcript'), findsNothing);
+    expect(
+        find.byKey(const ValueKey('dataset-category-filter')), findsOneWidget);
+    expect(find.text('score'), findsNothing);
 
     await tester.tap(find.text('Phone review'));
     await tester.pumpAndSettle();
@@ -112,43 +116,6 @@ void main() {
     expect(
         repository.updatedPayload?.containsKey('transcript_sha256'), isFalse);
   });
-}
-
-class _ConsoleRepository extends AdminRepository {
-  @override
-  Future<RecommendationAdminReport> getRecommendationReport() async {
-    return RecommendationAdminReport.fromJson({
-      'dataset_health': {
-        'total_dataset_contents': 150,
-        'youtube_dataset_contents': 150,
-        'google_dataset_contents': 0,
-        'tiktok_dataset_contents': 0,
-        'duration_coverage_count': 45,
-        'duration_coverage_ratio': 0.3,
-      },
-      'profile_health': {
-        'youtube_profiles': 3,
-        'google_profiles': 0,
-        'tiktok_profiles': 0,
-        'youtube_domains': ['phone', 'camera', 'laptop'],
-        'google_domains': <String>[],
-        'tiktok_domains': <String>[],
-      },
-      'youtube_profiles': <dynamic>[],
-      'google_profiles': <dynamic>[],
-      'tiktok_profiles': <dynamic>[],
-    });
-  }
-
-  @override
-  Future<AdminSettings> getSettings() async {
-    return AdminSettings.fromJson({'hook_analysis_duration': 60});
-  }
-
-  @override
-  Future<AdminSettings> updateSettings(Map<String, dynamic> payload) async {
-    return AdminSettings.fromJson(payload);
-  }
 }
 
 class _LogsRepository extends AdminRepository {

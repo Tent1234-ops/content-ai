@@ -17,7 +17,6 @@ class AdminLogsScreen extends StatefulWidget {
 
 class _AdminLogsScreenState extends State<AdminLogsScreen> {
   late final AdminRepository _repository;
-  final _actionController = TextEditingController();
   List<SystemLogItem> _items = [];
   String _status = 'all';
   String? _error;
@@ -33,12 +32,6 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
     _load();
   }
 
-  @override
-  void dispose() {
-    _actionController.dispose();
-    super.dispose();
-  }
-
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -49,7 +42,6 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
         limit: _limit,
         offset: _offset,
         status: _status,
-        action: _actionController.text,
       );
       if (!mounted) return;
       setState(() {
@@ -89,51 +81,31 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
       title: 'บันทึกการทำงานระบบ',
       currentRoute: '/admin-logs',
       isAdmin: true,
+      actions: [
+        IconButton(
+          onPressed: _load,
+          icon: const Icon(Icons.refresh),
+          tooltip: 'โหลดข้อมูลใหม่',
+        ),
+      ],
       child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _actionController,
-                        decoration: const InputDecoration(
-                          labelText: 'ค้นหารหัสเหตุการณ์',
-                          hintText: 'เช่น dataset_review หรือ model',
-                          prefixIcon: Icon(Icons.search),
-                        ),
-                        onSubmitted: (_) => _applyFilters(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    IconButton(
-                      onPressed: _load,
-                      icon: const Icon(Icons.refresh),
-                      tooltip: 'โหลดข้อมูลใหม่',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: _status,
-                  decoration: const InputDecoration(labelText: 'สถานะ'),
-                  items: const [
-                    DropdownMenuItem(value: 'all', child: Text('ทั้งหมด')),
-                    DropdownMenuItem(value: 'success', child: Text('สำเร็จ')),
-                    DropdownMenuItem(value: 'failed', child: Text('ไม่สำเร็จ')),
-                    DropdownMenuItem(
-                        value: 'error', child: Text('เกิดข้อผิดพลาด')),
-                  ],
-                  onChanged: (value) {
-                    if (value == null) return;
-                    setState(() => _status = value);
-                    _applyFilters();
-                  },
-                ),
+            child: DropdownButtonFormField<String>(
+              initialValue: _status,
+              decoration: const InputDecoration(labelText: 'สถานะ'),
+              items: const [
+                DropdownMenuItem(value: 'all', child: Text('ทั้งหมด')),
+                DropdownMenuItem(value: 'success', child: Text('สำเร็จ')),
+                DropdownMenuItem(value: 'failed', child: Text('ไม่สำเร็จ')),
+                DropdownMenuItem(value: 'error', child: Text('เกิดข้อผิดพลาด')),
               ],
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => _status = value);
+                _applyFilters();
+              },
             ),
           ),
           if (_loading) const LinearProgressIndicator(),
@@ -143,7 +115,7 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
                 : _items.isEmpty
                     ? const EmptyStateView(
                         title: 'ไม่พบบันทึกการทำงาน',
-                        message: 'ลองเปลี่ยนสถานะหรือรหัสเหตุการณ์ที่ค้นหา',
+                        message: 'ยังไม่มีบันทึกที่ตรงกับสถานะที่เลือก',
                         icon: Icons.receipt_long_outlined,
                       )
                     : RefreshIndicator(
