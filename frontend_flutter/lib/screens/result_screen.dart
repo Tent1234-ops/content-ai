@@ -115,6 +115,14 @@ class _ResultScreenState extends State<ResultScreen> {
     final hookKeywords = recommendation?.hookKeywords ?? const <KeywordScore>[];
     final duration = recommendation?.duration;
     final evidence = recommendation?.evidence;
+    final hasReferenceEvidence =
+        (recommendation?.datasetProfile.sampleSize ?? 0) > 0;
+    final missingKeywordsEmptyMessage = hasReferenceEvidence
+        ? 'ยังไม่พบหัวข้อเพิ่มเติมที่มีหลักฐานสนับสนุนเพียงพอจากคลิปอ้างอิง'
+        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับสร้างคำแนะนำ';
+    final hookKeywordsEmptyMessage = hasReferenceEvidence
+        ? 'ยังไม่พบคำแนะนำเพิ่มเติมสำหรับช่วงเปิดคลิปจากข้อมูลอ้างอิง'
+        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับแนะนำช่วงเปิดคลิป';
     final isSaved = _saved || data?.contentId != null;
 
     return AppShell(
@@ -172,19 +180,19 @@ class _ResultScreenState extends State<ResultScreen> {
                           Chip(
                             avatar:
                                 const Icon(Icons.category_outlined, size: 18),
-                            label: Text('Type: $domain'),
+                            label: Text('หมวดหมู่: $domain'),
                           ),
                           Chip(
                             avatar: const Icon(Icons.check_circle, size: 18),
                             label: Text(
-                              '${classifierConfidence.toStringAsFixed(0)}% confidence',
+                              'ความมั่นใจ ${classifierConfidence.toStringAsFixed(0)}%',
                             ),
                           ),
                           if (isSaved)
                             const Chip(
                               avatar:
                                   Icon(Icons.bookmark_added_outlined, size: 18),
-                              label: Text('Saved in My Ideas'),
+                              label: Text('บันทึกในไอเดียของฉันแล้ว'),
                             ),
                         ],
                       ),
@@ -195,11 +203,12 @@ class _ResultScreenState extends State<ResultScreen> {
                         userKeywords: userKeywords,
                         missingKeywords: missingKeywords,
                         duration: duration,
+                        hasReferenceEvidence: hasReferenceEvidence,
                       ),
                       const SizedBox(height: 24),
                       if (data.transcript.isNotEmpty) ...[
                         const _SectionHeader(
-                          title: 'Transcript Preview',
+                          title: 'ตัวอย่างข้อความถอดเสียง',
                           icon: Icons.subtitles_outlined,
                         ),
                         Card(
@@ -216,7 +225,7 @@ class _ResultScreenState extends State<ResultScreen> {
                         const SizedBox(height: 24),
                       ],
                       const _SectionHeader(
-                        title: 'Content Type',
+                        title: 'หมวดหมู่ของคลิป',
                         icon: Icons.account_tree_outlined,
                       ),
                       _ClassificationCard(
@@ -226,64 +235,62 @@ class _ResultScreenState extends State<ResultScreen> {
                       ),
                       const SizedBox(height: 24),
                       const _SectionHeader(
-                        title: 'Content Keywords From Full Transcript',
+                        title: 'คำสำคัญที่พบทั้งคลิป',
                         icon: Icons.article_outlined,
                       ),
                       _StringKeywordCard(
-                        keywords: contentKeywords.isNotEmpty
-                            ? contentKeywords
-                            : userKeywords,
-                        emptyMessage:
-                            'No keywords were detected from this clip.',
+                        keywords: contentKeywords,
+                        emptyMessage: 'ยังไม่พบคำสำคัญจากเนื้อหาในคลิปนี้',
                       ),
                       const SizedBox(height: 24),
-                      if (comparableKeywords.isNotEmpty) ...[
-                        const _SectionHeader(
-                          title: 'Comparable Keywords',
-                          icon: Icons.compare_arrows_outlined,
-                        ),
-                        _StringKeywordCard(
-                          keywords: comparableKeywords,
-                          emptyMessage: 'No comparable keywords were detected.',
-                        ),
-                        const SizedBox(height: 24),
-                      ],
-                      if (hookTerms.isNotEmpty) ...[
-                        const _SectionHeader(
-                          title: 'Hook Terms From Opening Segment',
-                          icon: Icons.bolt_outlined,
-                        ),
-                        _StringKeywordCard(
-                          keywords: hookTerms,
-                          emptyMessage: 'No hook terms were detected.',
-                        ),
-                        const SizedBox(height: 24),
-                      ],
+                      const _SectionHeader(
+                        title: 'หัวข้อหลักที่ใช้เปรียบเทียบ',
+                        icon: Icons.compare_arrows_outlined,
+                      ),
+                      _StringKeywordCard(
+                        keywords: comparableKeywords,
+                        emptyMessage:
+                            'ยังไม่พบหัวข้อที่ระบบรู้จักสำหรับใช้เปรียบเทียบ',
+                      ),
+                      const SizedBox(height: 24),
+                      const _SectionHeader(
+                        title: 'คำสำคัญที่พบในช่วงเปิดคลิป',
+                        icon: Icons.bolt_outlined,
+                      ),
+                      _StringKeywordCard(
+                        keywords: hookTerms,
+                        emptyMessage:
+                            'ยังไม่พบคำสำคัญจากเสียงพูดในช่วงเปิดคลิป',
+                      ),
+                      const SizedBox(height: 24),
+                      const _SectionHeader(
+                        title: 'หัวข้อที่ควรเพิ่มในคลิป',
+                        icon: Icons.auto_awesome_outlined,
+                      ),
                       if (missingKeywords.isNotEmpty) ...[
-                        const _SectionHeader(
-                          title: 'Keyword Gap From Same-Category Transcripts',
-                          icon: Icons.auto_awesome_outlined,
-                        ),
                         Text(
-                          'These topics are supported by high-performing $domain clips but were not found in your transcript or its known synonyms.',
+                          'หัวข้อเหล่านี้พบในคลิปตัวอย่างหมวด $domain ที่มีผลตอบรับสูง '
+                          'แต่ยังไม่พบในเนื้อหาของคุณหรือคำที่มีความหมายใกล้กัน',
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
                               ?.copyWith(color: Colors.grey),
                         ),
                         const SizedBox(height: 4),
-                        if (evidence != null)
-                          Text(
-                            evidence.keywordScoreExplanation,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
+                        const Text(
+                          'เรียงลำดับจากจำนวนคลิปอ้างอิงที่พูดถึง ความถี่ '
+                          'และผลตอบรับของคลิป',
+                        ),
                         const SizedBox(height: 8),
-                        _ScoredKeywordCard(keywords: missingKeywords),
-                        const SizedBox(height: 24),
                       ],
+                      _ScoredKeywordCard(
+                        keywords: missingKeywords,
+                        emptyMessage: missingKeywordsEmptyMessage,
+                      ),
+                      const SizedBox(height: 24),
                       if (duration != null) ...[
                         const _SectionHeader(
-                          title: 'Recommended Video Duration',
+                          title: 'ความยาวคลิปที่แนะนำ',
                           icon: Icons.schedule_outlined,
                         ),
                         _DurationCard(duration: duration),
@@ -297,14 +304,15 @@ class _ResultScreenState extends State<ResultScreen> {
                         ],
                         const SizedBox(height: 24),
                       ],
-                      if (hookKeywords.isNotEmpty) ...[
-                        const _SectionHeader(
-                          title: 'Hook Keywords Recommendation',
-                          icon: Icons.lightbulb_outline,
-                        ),
-                        _ScoredKeywordCard(keywords: hookKeywords),
-                        const SizedBox(height: 24),
-                      ],
+                      const _SectionHeader(
+                        title: 'คำแนะนำสำหรับช่วงเปิดคลิป',
+                        icon: Icons.lightbulb_outline,
+                      ),
+                      _ScoredKeywordCard(
+                        keywords: hookKeywords,
+                        emptyMessage: hookKeywordsEmptyMessage,
+                      ),
+                      const SizedBox(height: 24),
                       Row(
                         children: [
                           Expanded(
@@ -342,6 +350,7 @@ class _ScopeSummaryCard extends StatelessWidget {
     required this.userKeywords,
     required this.missingKeywords,
     required this.duration,
+    required this.hasReferenceEvidence,
   });
 
   final String domain;
@@ -349,6 +358,7 @@ class _ScopeSummaryCard extends StatelessWidget {
   final List<String> userKeywords;
   final List<KeywordScore> missingKeywords;
   final DurationRecommendation? duration;
+  final bool hasReferenceEvidence;
 
   @override
   Widget build(BuildContext context) {
@@ -360,22 +370,24 @@ class _ScopeSummaryCard extends StatelessWidget {
           children: [
             _SummaryRow(
               icon: Icons.category_outlined,
-              label: 'Clip type',
+              label: 'หมวดหมู่คลิป',
               value: '$domain (${confidence.toStringAsFixed(0)}%)',
             ),
             const Divider(height: 20),
             _SummaryRow(
               icon: Icons.key_outlined,
-              label: 'Keywords in clip',
+              label: 'หัวข้อที่พบในคลิป',
               value:
                   userKeywords.isEmpty ? '-' : userKeywords.take(6).join(', '),
             ),
             const Divider(height: 20),
             _SummaryRow(
               icon: Icons.auto_awesome_outlined,
-              label: 'Keyword gap',
+              label: 'หัวข้อที่ควรเพิ่ม',
               value: missingKeywords.isEmpty
-                  ? 'No major gap detected'
+                  ? hasReferenceEvidence
+                      ? 'ยังไม่พบหัวข้อเพิ่มเติมที่มีหลักฐานเพียงพอ'
+                      : 'ข้อมูลอ้างอิงยังไม่เพียงพอ'
                   : missingKeywords
                       .take(6)
                       .map((item) => item.keyword)
@@ -384,7 +396,7 @@ class _ScopeSummaryCard extends StatelessWidget {
             const Divider(height: 20),
             _SummaryRow(
               icon: Icons.schedule_outlined,
-              label: 'Recommended duration',
+              label: 'ความยาวที่แนะนำ',
               value: duration?.recommendedRange ?? '-',
             ),
           ],
@@ -456,7 +468,7 @@ class _ClassificationCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Predicted category',
+                        'หมวดหมู่ที่โมเดลคาดการณ์',
                         style: Theme.of(context).textTheme.labelMedium,
                       ),
                       const SizedBox(height: 4),
@@ -477,7 +489,7 @@ class _ClassificationCard extends StatelessWidget {
                               ),
                     ),
                     Text(
-                      'confidence',
+                      'ความมั่นใจ',
                       style: Theme.of(context).textTheme.labelSmall,
                     ),
                   ],
@@ -509,7 +521,7 @@ class _ClassificationCard extends StatelessWidget {
               const Divider(height: 1),
               const SizedBox(height: 12),
               Text(
-                'Other possible categories',
+                'หมวดหมู่อื่นที่เป็นไปได้',
                 style: Theme.of(context).textTheme.labelMedium,
               ),
               const SizedBox(height: 8),
@@ -580,95 +592,112 @@ class _StringKeywordCard extends StatelessWidget {
 }
 
 class _ScoredKeywordCard extends StatelessWidget {
-  const _ScoredKeywordCard({required this.keywords});
+  const _ScoredKeywordCard({
+    required this.keywords,
+    required this.emptyMessage,
+  });
 
   final List<KeywordScore> keywords;
+  final String emptyMessage;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (var index = 0; index < keywords.length; index++) ...[
-              if (index > 0) const Divider(height: 24),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: Column(
+        child: keywords.isEmpty
+            ? Text(emptyMessage)
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var index = 0; index < keywords.length; index++) ...[
+                    if (index > 0) const Divider(height: 24),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                keywords[index].keyword,
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              if (keywords[index].hasDatasetEvidence) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${keywords[index].supportCount} of ${keywords[index].sampleSize} high-performing clips support this topic '
-                                  '(${keywords[index].totalFrequency} mentions)',
-                                  style: Theme.of(context).textTheme.bodySmall,
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      keywords[index].keyword,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleSmall,
+                                    ),
+                                    if (keywords[index].hasDatasetEvidence) ...[
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'พบหัวข้อนี้ในคลิปตัวอย่างที่มีผลตอบรับสูง '
+                                        '${keywords[index].supportCount} จาก ${keywords[index].sampleSize} คลิป '
+                                        '(กล่าวถึงรวม ${keywords[index].totalFrequency} ครั้ง)',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall,
+                                      ),
+                                    ],
+                                  ],
                                 ),
-                              ],
+                              ),
+                              const SizedBox(width: 12),
+                              Chip(
+                                label: Text(
+                                  keywords[index].hasDatasetEvidence
+                                      ? 'คะแนนสนับสนุน ${(keywords[index].score.clamp(0.0, 1.0) * 100).toStringAsFixed(0)}%'
+                                      : keywords[index]
+                                          .score
+                                          .toStringAsFixed(2),
+                                ),
+                                side:
+                                    const BorderSide(color: Color(0xFFE0E0E0)),
+                                backgroundColor: Colors.transparent,
+                              ),
                             ],
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Chip(
-                          label: Text(
-                            keywords[index].hasDatasetEvidence
-                                ? '${(keywords[index].score.clamp(0.0, 1.0) * 100).toStringAsFixed(0)}% evidence'
-                                : keywords[index].score.toStringAsFixed(2),
-                          ),
-                          side: const BorderSide(color: Color(0xFFE0E0E0)),
-                          backgroundColor: Colors.transparent,
-                        ),
-                      ],
-                    ),
-                    if (keywords[index].supportingExamples.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        'Supporting examples',
-                        style: Theme.of(context).textTheme.labelSmall,
-                      ),
-                      const SizedBox(height: 6),
-                      for (final example
-                          in keywords[index].supportingExamples) ...[
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Padding(
-                              padding: EdgeInsets.only(top: 2),
-                              child:
-                                  Icon(Icons.ondemand_video_outlined, size: 16),
+                          if (keywords[index]
+                              .supportingExamples
+                              .isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              'ตัวอย่างคลิปอ้างอิง',
+                              style: Theme.of(context).textTheme.labelSmall,
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                '${example.title} '
-                                '(Dataset #${example.datasetId}, ${example.frequency} mentions)',
-                                style: Theme.of(context).textTheme.bodySmall,
+                            const SizedBox(height: 6),
+                            for (final example
+                                in keywords[index].supportingExamples) ...[
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 2),
+                                    child: Icon(Icons.ondemand_video_outlined,
+                                        size: 16),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      '${example.title} '
+                                      '(ข้อมูล #${example.datasetId}, กล่าวถึง ${example.frequency} ครั้ง)',
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
+                              const SizedBox(height: 4),
+                            ],
                           ],
-                        ),
-                        const SizedBox(height: 4),
-                      ],
-                    ],
+                        ],
+                      ),
+                    ),
                   ],
-                ),
+                ],
               ),
-            ],
-          ],
-        ),
       ),
     );
   }
@@ -684,13 +713,13 @@ class _DurationCard extends StatelessWidget {
     final isSufficient = duration.hasSufficientEvidence;
     final median = duration.medianSeconds ?? duration.recommendedSeconds;
     final headline = isSufficient && median != null
-        ? 'Median $median sec'
-        : 'Insufficient evidence';
+        ? 'ค่ากลาง $median วินาที'
+        : 'ข้อมูลอ้างอิงยังไม่เพียงพอ';
     final detail = isSufficient
-        ? 'P${duration.percentileLow}-P${duration.percentileHigh}: '
-            '${duration.recommendedRange}'
-        : '${duration.sampleSize} of ${duration.minimumSampleSize} required '
-            'duration samples are available.';
+        ? 'ช่วงกลางของข้อมูลอ้างอิง: ${duration.recommendedRange} '
+            '(เปอร์เซ็นไทล์ ${duration.percentileLow}-${duration.percentileHigh})'
+        : 'ขณะนี้มีข้อมูลความยาว ${duration.sampleSize} คลิป '
+            'จากขั้นต่ำ ${duration.minimumSampleSize} คลิป';
     return Card(
       color: Theme.of(context).colorScheme.primaryContainer,
       child: Padding(
@@ -729,16 +758,16 @@ class _DurationCard extends StatelessWidget {
               runSpacing: 12,
               children: [
                 _DurationFact(
-                  label: 'Source',
+                  label: 'แหล่งข้อมูล',
                   value: _durationSourceLabel(duration.source),
                 ),
                 _DurationFact(
-                  label: 'Evidence',
-                  value: '${duration.sampleSize} videos '
-                      '(target ${duration.targetSampleSize})',
+                  label: 'จำนวนตัวอย่าง',
+                  value: '${duration.sampleSize} คลิป '
+                      '(เป้าหมาย ${duration.targetSampleSize})',
                 ),
                 _DurationFact(
-                  label: 'Cohort',
+                  label: 'กลุ่มเปรียบเทียบ',
                   value: _durationCohortLabel(duration.cohort),
                 ),
               ],
@@ -772,14 +801,14 @@ class _DurationFact extends StatelessWidget {
 }
 
 String _durationSourceLabel(String source) {
-  if (source == 'youtube_metadata') return 'YouTube metadata';
-  if (source == 'none') return 'No verified source';
+  if (source == 'youtube_metadata') return 'ข้อมูลความยาวจาก YouTube';
+  if (source == 'none') return 'ยังไม่มีแหล่งข้อมูลที่ตรวจสอบแล้ว';
   return source.replaceAll('_', ' ');
 }
 
 String _durationCohortLabel(String cohort) {
   if (cohort == 'upload_compatible_under_5m') {
-    return 'Videos up to 5 minutes';
+    return 'คลิปอ้างอิงที่ยาวไม่เกิน 5 นาที';
   }
   return cohort.replaceAll('_', ' ');
 }

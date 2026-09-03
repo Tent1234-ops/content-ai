@@ -1,22 +1,26 @@
 import 'package:flutter/material.dart';
 
 import '../models/dataset_item.dart';
+import '../models/dataset_review.dart';
 import '../repositories/admin_repository.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
 
 class AdminDatasetsScreen extends StatefulWidget {
-  const AdminDatasetsScreen({super.key});
+  const AdminDatasetsScreen({super.key, this.repository});
+
+  final AdminRepository? repository;
 
   @override
   State<AdminDatasetsScreen> createState() => _AdminDatasetsScreenState();
 }
 
 class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
-  final _repository = AdminRepository();
+  late final AdminRepository _repository;
   final _searchController = TextEditingController();
   List<DatasetItem> _items = [];
   List<String> _categories = ['all'];
+  List<DatasetReviewTaxonomyLeaf> _taxonomyLeaves = [];
   String _source = 'all';
   String _category = 'all';
   String? _error;
@@ -28,6 +32,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
   @override
   void initState() {
     super.initState();
+    _repository = widget.repository ?? AdminRepository();
     _load();
   }
 
@@ -43,6 +48,9 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
       _error = null;
     });
     try {
+      final taxonomyLeaves = _taxonomyLeaves.isEmpty
+          ? await _repository.listTaxonomyLeaves()
+          : _taxonomyLeaves;
       final response = await _repository.listDatasets(
         limit: _limit,
         offset: _offset,
@@ -51,13 +59,20 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
         search: _searchController.text,
       );
       if (!mounted) return;
-      final discoveredCategories = <String>{'all'};
+      final discoveredCategories = <String>{
+        'all',
+        ...taxonomyLeaves.map((item) => item.leafKey),
+      };
       for (final item in response.items) {
-        if (item.category.isNotEmpty) discoveredCategories.add(item.category);
+        final category = item.taxonomyLeafKey.isNotEmpty
+            ? item.taxonomyLeafKey
+            : item.category;
+        if (category.isNotEmpty) discoveredCategories.add(category);
       }
       setState(() {
         _items = response.items;
         _total = response.total;
+        _taxonomyLeaves = taxonomyLeaves;
         _categories = discoveredCategories.toList()..sort();
       });
     } catch (error) {
@@ -73,13 +88,35 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
     _load();
   }
 
+  String _categoryLabel(String leafKey) {
+    if (leafKey == 'all') return 'All';
+    for (final leaf in _taxonomyLeaves) {
+      if (leaf.leafKey == leafKey) return leaf.path;
+    }
+    return leafKey;
+  }
+
   Future<void> _openEditor(DatasetItem item) async {
-    final saved = await showDialog<bool>(
+    final saved = await showDialog<String>(
       context: context,
-      builder: (context) => _DatasetEditorDialog(item: item),
+      builder: (context) => _DatasetEditorDialog(
+        item: item,
+        repository: _repository,
+        taxonomyLeaves: _taxonomyLeaves,
+      ),
     );
-    if (saved == true) {
+    if (saved != null) {
       await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            saved == 'training'
+                ? 'Saved. Train and activate a new model before this correction affects Analyze.'
+                : 'Dataset metadata saved.',
+          ),
+        ),
+      );
     }
   }
 
@@ -140,8 +177,15 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                         decoration:
                             const InputDecoration(labelText: 'Category'),
                         items: _categories
-                            .map((value) => DropdownMenuItem(
-                                value: value, child: Text(value)))
+                            .map(
+                              (value) => DropdownMenuItem(
+                                value: value,
+                                child: Text(
+                                  _categoryLabel(value),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
                             .toList(),
                         onChanged: (value) {
                           if (value == null) return;
@@ -193,12 +237,15 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                               );
                             }
                             final item = _items[index];
+                            final categoryLabel = item.taxonomyPath.isNotEmpty
+                                ? item.taxonomyPath
+                                : item.category;
                             return Card(
                               child: ListTile(
                                 leading: const Icon(Icons.dataset_outlined),
                                 title: Text(item.title),
                                 subtitle: Text(
-                                  '${item.sourcePlatform} | ${item.category}\n'
+                                  '${item.sourcePlatform} | $categoryLabel\n'
                                   'views ${item.views} likes ${item.likes} comments ${item.comments} | '
                                   'duration ${item.durationSeconds ?? 0}s',
                                 ),
@@ -224,26 +271,30 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
 }
 
 class _DatasetEditorDialog extends StatefulWidget {
-  const _DatasetEditorDialog({required this.item});
+  const _DatasetEditorDialog({
+    required this.item,
+    required this.repository,
+    required this.taxonomyLeaves,
+  });
 
   final DatasetItem item;
+  final AdminRepository repository;
+  final List<DatasetReviewTaxonomyLeaf> taxonomyLeaves;
 
   @override
   State<_DatasetEditorDialog> createState() => _DatasetEditorDialogState();
 }
 
 class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
-  final _repository = AdminRepository();
   late final TextEditingController _title;
   late final TextEditingController _url;
   late final TextEditingController _transcript;
-  late final TextEditingController _category;
-  late final TextEditingController _source;
   late final TextEditingController _views;
   late final TextEditingController _likes;
   late final TextEditingController _comments;
   late final TextEditingController _score;
   late final TextEditingController _duration;
+  late String _taxonomyLeafKey;
   bool _saving = false;
   String? _error;
 
@@ -254,8 +305,13 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
     _title = TextEditingController(text: item.title);
     _url = TextEditingController(text: item.videoUrl);
     _transcript = TextEditingController(text: item.transcript);
-    _category = TextEditingController(text: item.category);
-    _source = TextEditingController(text: item.sourcePlatform);
+    final currentLeaf =
+        item.taxonomyLeafKey.isNotEmpty ? item.taxonomyLeafKey : item.category;
+    _taxonomyLeafKey = widget.taxonomyLeaves.any(
+      (leaf) => leaf.leafKey == currentLeaf,
+    )
+        ? currentLeaf
+        : '';
     _views = TextEditingController(text: '${item.views}');
     _likes = TextEditingController(text: '${item.likes}');
     _comments = TextEditingController(text: '${item.comments}');
@@ -268,8 +324,6 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
     _title.dispose();
     _url.dispose();
     _transcript.dispose();
-    _category.dispose();
-    _source.dispose();
     _views.dispose();
     _likes.dispose();
     _comments.dispose();
@@ -285,9 +339,7 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
       'video_url': _url.text.trim().isEmpty ? null : _url.text.trim(),
       'transcript':
           _transcript.text.trim().isEmpty ? null : _transcript.text.trim(),
-      'category': _category.text.trim().isEmpty ? null : _category.text.trim(),
-      'source_platform':
-          _source.text.trim().isEmpty ? 'youtube_admin' : _source.text.trim(),
+      'taxonomy_leaf_key': _taxonomyLeafKey,
       'views': int.tryParse(_views.text.trim()) ?? 0,
       'likes': int.tryParse(_likes.text.trim()) ?? 0,
       'comments': int.tryParse(_comments.text.trim()) ?? 0,
@@ -302,14 +354,32 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
       setState(() => _error = 'Title is required');
       return;
     }
+    if (_taxonomyLeafKey.isEmpty) {
+      setState(() => _error = 'A model taxonomy category is required');
+      return;
+    }
+    if (widget.item.isTrainingEligible && _transcript.text.trim().length < 80) {
+      setState(
+        () => _error =
+            'A training transcript must contain at least 80 characters',
+      );
+      return;
+    }
+    final originalTranscript =
+        widget.item.transcript.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final editedTranscript =
+        _transcript.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final trainingContentChanged =
+        _taxonomyLeafKey != widget.item.taxonomyLeafKey ||
+            editedTranscript != originalTranscript;
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      await _repository.updateDataset(widget.item.datasetId, _payload());
+      await widget.repository.updateDataset(widget.item.datasetId, _payload());
       if (!mounted) return;
-      Navigator.pop(context, true);
+      Navigator.pop(context, trainingContentChanged ? 'training' : 'metadata');
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -336,22 +406,48 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
                           color: Theme.of(context).colorScheme.error)),
                 ),
               TextField(
-                  controller: _title,
-                  decoration: const InputDecoration(labelText: 'Title')),
+                key: const ValueKey('dataset-title'),
+                controller: _title,
+                decoration: const InputDecoration(labelText: 'Title'),
+              ),
               const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
-                      child: TextField(
-                          controller: _source,
-                          decoration: const InputDecoration(
-                              labelText: 'Source platform'))),
+                    child: InputDecorator(
+                      decoration:
+                          const InputDecoration(labelText: 'Source platform'),
+                      child: Text(widget.item.sourcePlatform),
+                    ),
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
-                      child: TextField(
-                          controller: _category,
-                          decoration:
-                              const InputDecoration(labelText: 'Category'))),
+                    child: DropdownButtonFormField<String>(
+                      key: const ValueKey('dataset-taxonomy-leaf'),
+                      initialValue:
+                          _taxonomyLeafKey.isEmpty ? null : _taxonomyLeafKey,
+                      isExpanded: true,
+                      decoration:
+                          const InputDecoration(labelText: 'Model category'),
+                      items: widget.taxonomyLeaves
+                          .map(
+                            (leaf) => DropdownMenuItem(
+                              value: leaf.leafKey,
+                              child: Text(
+                                leaf.path,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: _saving
+                          ? null
+                          : (value) {
+                              if (value == null) return;
+                              setState(() => _taxonomyLeafKey = value);
+                            },
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 10),
@@ -360,10 +456,22 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
                   decoration: const InputDecoration(labelText: 'Video URL')),
               const SizedBox(height: 10),
               TextField(
+                key: const ValueKey('dataset-transcript'),
                 controller: _transcript,
-                decoration: const InputDecoration(labelText: 'Transcript'),
-                minLines: 3,
-                maxLines: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Training transcript',
+                  helperText:
+                      'The transcript hash is recalculated automatically.',
+                ),
+                minLines: 6,
+                maxLines: 12,
+              ),
+              const SizedBox(height: 8),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Changing the transcript or model category requires training and activating a new model.',
+                ),
               ),
               const SizedBox(height: 10),
               Row(
@@ -417,6 +525,7 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
             onPressed: _saving ? null : () => Navigator.pop(context, false),
             child: const Text('Cancel')),
         FilledButton.icon(
+          key: const ValueKey('dataset-save'),
           onPressed: _saving ? null : _save,
           icon: _saving
               ? const SizedBox(

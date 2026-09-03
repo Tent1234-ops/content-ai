@@ -1,43 +1,4 @@
-import 'common_models.dart';
 import 'recommendation_result.dart' hide DatasetProfile;
-
-class AdminOverviewReport {
-  const AdminOverviewReport({
-    required this.datasetTotal,
-    required this.systemLogTotal,
-    required this.topSources,
-    required this.topCategories,
-    required this.statusBreakdown,
-  });
-
-  final int datasetTotal;
-  final int systemLogTotal;
-  final List<ChartItem> topSources;
-  final List<ChartItem> topCategories;
-  final List<ChartItem> statusBreakdown;
-
-  factory AdminOverviewReport.fromJson(Map<String, dynamic> json) {
-    return AdminOverviewReport(
-      datasetTotal: (json['dataset_total'] as num?)?.toInt() ?? 0,
-      systemLogTotal: (json['system_log_total'] as num?)?.toInt() ?? 0,
-      topSources: (json['top_sources'] as List<dynamic>? ?? const [])
-          .map((item) => ChartItem.fromJson(
-              Map<String, dynamic>.from(item as Map),
-              labelKey: 'source_platform'))
-          .toList(),
-      topCategories: (json['top_categories'] as List<dynamic>? ?? const [])
-          .map((item) => ChartItem.fromJson(
-              Map<String, dynamic>.from(item as Map),
-              labelKey: 'category'))
-          .toList(),
-      statusBreakdown: (json['status_breakdown'] as List<dynamic>? ?? const [])
-          .map((item) => ChartItem.fromJson(
-              Map<String, dynamic>.from(item as Map),
-              labelKey: 'status'))
-          .toList(),
-    );
-  }
-}
 
 class DatasetHealth {
   const DatasetHealth({
@@ -207,59 +168,6 @@ class AdminSettings {
       enableYoutubeTrending: json['enable_youtube_trending'] != false,
       enableGoogleTrends: json['enable_google_trends'] != false,
       enableTiktokTrending: json['enable_tiktok_trending'] != false,
-    );
-  }
-}
-
-class ProfileComparison {
-  const ProfileComparison({
-    required this.domain,
-    required this.leftSource,
-    required this.rightSource,
-    required this.leftSampleSize,
-    required this.rightSampleSize,
-    required this.leftDuration,
-    required this.rightDuration,
-    required this.leftTopKeywords,
-    required this.rightTopKeywords,
-  });
-
-  final String domain;
-  final String leftSource;
-  final String rightSource;
-  final int leftSampleSize;
-  final int rightSampleSize;
-  final DurationRecommendation leftDuration;
-  final DurationRecommendation rightDuration;
-  final List<KeywordScore> leftTopKeywords;
-  final List<KeywordScore> rightTopKeywords;
-
-  factory ProfileComparison.fromJson(
-    Map<String, dynamic> json, {
-    String leftSource = 'youtube',
-    String rightSource = 'google',
-  }) {
-    return ProfileComparison(
-      domain: json['domain']?.toString() ?? '-',
-      leftSource: leftSource,
-      rightSource: rightSource,
-      leftSampleSize: (json['left_sample_size'] as num?)?.toInt() ?? 0,
-      rightSampleSize: (json['right_sample_size'] as num?)?.toInt() ?? 0,
-      leftDuration: DurationRecommendation.fromJson(
-        Map<String, dynamic>.from((json['left_duration'] as Map?) ?? const {}),
-      ),
-      rightDuration: DurationRecommendation.fromJson(
-        Map<String, dynamic>.from((json['right_duration'] as Map?) ?? const {}),
-      ),
-      leftTopKeywords: (json['left_top_keywords'] as List<dynamic>? ?? const [])
-          .map((item) =>
-              KeywordScore.fromJson(Map<String, dynamic>.from(item as Map)))
-          .toList(),
-      rightTopKeywords:
-          (json['right_top_keywords'] as List<dynamic>? ?? const [])
-              .map((item) =>
-                  KeywordScore.fromJson(Map<String, dynamic>.from(item as Map)))
-              .toList(),
     );
   }
 }

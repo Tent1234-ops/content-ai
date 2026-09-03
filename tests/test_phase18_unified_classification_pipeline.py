@@ -65,6 +65,7 @@ class Phase18UnifiedClassificationPipelineTests(unittest.TestCase):
                 "context_keywords": ["ergonomics"],
                 "analysis_quality": 0.8,
                 "hook_transcript": "phone camera battery display",
+                "hook_keywords": ["legacy ambiguous value"],
                 "stt_meta": {"transcript_source": "speech_to_text"},
             },
         }
@@ -82,6 +83,12 @@ class Phase18UnifiedClassificationPipelineTests(unittest.TestCase):
         self.assertEqual(
             result["analysis"]["domain_source"],
             "trained_tfidf_classifier",
+        )
+        self.assertIn("hook_terms", result["analysis"])
+        self.assertNotIn("hook_keywords", result["analysis"])
+        self.assertEqual(
+            result["analysis"]["hook_terms"],
+            recommendation["hook_terms"],
         )
         for removed_key in (
             "product",

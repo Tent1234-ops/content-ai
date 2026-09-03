@@ -51,6 +51,20 @@ class AdminRepository {
     return DatasetItem.fromJson(Map<String, dynamic>.from(response as Map));
   }
 
+  Future<List<DatasetReviewTaxonomyLeaf>> listTaxonomyLeaves() async {
+    final response = Map<String, dynamic>.from(
+      await _client.get('/classification/taxonomy') as Map,
+    );
+    return (response['leaves'] as List<dynamic>? ?? const [])
+        .map(
+          (item) => DatasetReviewTaxonomyLeaf.fromJson(
+            Map<String, dynamic>.from(item as Map),
+          ),
+        )
+        .where((item) => item.leafKey.trim().isNotEmpty)
+        .toList();
+  }
+
   Future<DatasetReviewQueueResult> listDatasetReviewQueue({
     required int limit,
     required int offset,
@@ -126,41 +140,11 @@ class AdminRepository {
     );
   }
 
-  Future<AdminOverviewReport> getOverviewReport() async {
-    final response = await _client.get('/admin/reports/overview');
-    return AdminOverviewReport.fromJson(
-        Map<String, dynamic>.from(response as Map));
-  }
-
   Future<RecommendationAdminReport> getRecommendationReport() async {
     final response = await _client.get('/recommendations/admin/report');
     return RecommendationAdminReport.fromJson(
       Map<String, dynamic>.from(response as Map),
     );
-  }
-
-  Future<List<ProfileComparison>> compareProfiles() async {
-    final pairs = [
-      ['youtube', 'google'],
-      ['youtube', 'tiktok'],
-      ['google', 'tiktok'],
-    ];
-    final items = <ProfileComparison>[];
-    for (final pair in pairs) {
-      final response = Map<String, dynamic>.from(
-        await _client.get(
-          '/recommendations/profiles/compare?left_source=${pair[0]}&right_source=${pair[1]}&limit=100',
-        ) as Map,
-      );
-      items.addAll((response['comparisons'] as List<dynamic>? ?? const [])
-          .map((item) => ProfileComparison.fromJson(
-                Map<String, dynamic>.from(item as Map),
-                leftSource: pair[0],
-                rightSource: pair[1],
-              ))
-          .toList());
-    }
-    return items;
   }
 
   Future<AdminSettings> getSettings() async {

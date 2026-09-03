@@ -3,6 +3,7 @@ import 'package:content_ai_web/models/dataset_review.dart';
 import 'package:content_ai_web/repositories/admin_repository.dart';
 import 'package:content_ai_web/screens/admin_dataset_review_screen.dart';
 import 'package:content_ai_web/screens/login_screen.dart';
+import 'package:content_ai_web/screens/result_screen.dart';
 import 'package:content_ai_web/state/auth_controller.dart';
 import 'package:content_ai_web/state/auth_scope.dart';
 import 'package:flutter/material.dart';
@@ -155,6 +156,179 @@ void main() {
     expect(repository.reviewCalls, 1);
     expect(find.text('Galaxy Z Flip 6 Review'), findsNothing);
     expect(find.text('No candidates waiting for review'), findsOneWidget);
+  });
+
+  testWidgets('analysis result shows explicit states for empty outputs',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AuthController();
+    addTearDown(controller.dispose);
+    final navigatorKey = GlobalKey<NavigatorState>();
+
+    await tester.pumpWidget(
+      AuthScope(
+        controller: controller,
+        child: MaterialApp(
+          navigatorKey: navigatorKey,
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      ),
+    );
+    navigatorKey.currentState!.push(
+      MaterialPageRoute<void>(
+        settings: RouteSettings(
+          arguments: ResultScreenArgs(
+            initialData: _analysisResultData(populated: false),
+          ),
+        ),
+        builder: (_) => const ResultScreen(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final heading in <String>[
+      'คำสำคัญที่พบทั้งคลิป',
+      'หัวข้อหลักที่ใช้เปรียบเทียบ',
+      'คำสำคัญที่พบในช่วงเปิดคลิป',
+      'หัวข้อที่ควรเพิ่มในคลิป',
+      'ความยาวคลิปที่แนะนำ',
+      'คำแนะนำสำหรับช่วงเปิดคลิป',
+    ]) {
+      expect(find.text(heading), findsOneWidget);
+    }
+    expect(
+      find.text('ยังไม่พบคำสำคัญจากเนื้อหาในคลิปนี้'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('ยังไม่พบหัวข้อที่ระบบรู้จักสำหรับใช้เปรียบเทียบ'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('ยังไม่พบคำสำคัญจากเสียงพูดในช่วงเปิดคลิป'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับสร้างคำแนะนำ'),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับแนะนำช่วงเปิดคลิป',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text('ข้อมูลอ้างอิงยังไม่เพียงพอ'),
+      findsAtLeastNWidgets(1),
+    );
+  });
+
+  testWidgets('analysis result keeps detected and suggested outputs separate',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = AuthController();
+    addTearDown(controller.dispose);
+    final navigatorKey = GlobalKey<NavigatorState>();
+
+    await tester.pumpWidget(
+      AuthScope(
+        controller: controller,
+        child: MaterialApp(
+          navigatorKey: navigatorKey,
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      ),
+    );
+    navigatorKey.currentState!.push(
+      MaterialPageRoute<void>(
+        settings: RouteSettings(
+          arguments: ResultScreenArgs(
+            initialData: _analysisResultData(populated: true),
+          ),
+        ),
+        builder: (_) => const ResultScreen(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('แบตเตอรี่'), findsOneWidget);
+    expect(find.text('battery life'), findsAtLeastNWidgets(1));
+    expect(find.text('ชิป'), findsOneWidget);
+    expect(find.text('camera quality'), findsAtLeastNWidgets(1));
+    expect(find.text('display quality'), findsOneWidget);
+    expect(
+      find.text('ยังไม่พบคำสำคัญจากเนื้อหาในคลิปนี้'),
+      findsNothing,
+    );
+    expect(
+      find.text('ยังไม่พบคำสำคัญจากเสียงพูดในช่วงเปิดคลิป'),
+      findsNothing,
+    );
+  });
+}
+
+AnalysisResultViewData _analysisResultData({required bool populated}) {
+  return AnalysisResultViewData.fromJson({
+    'title': 'คลิปทดสอบ',
+    'transcript': 'ทดสอบข้อความถอดเสียง',
+    'saved': true,
+    'analysis': <String, dynamic>{},
+    'recommendation': {
+      'domain': 'phone',
+      'user_keywords': populated ? ['battery life'] : <String>[],
+      'content_keywords': populated ? ['แบตเตอรี่'] : <String>[],
+      'comparable_keywords': populated ? ['battery life'] : <String>[],
+      'hook_terms': populated ? ['ชิป'] : <String>[],
+      'missing_keywords': populated
+          ? [
+              {'keyword': 'camera quality', 'score': 0.8},
+            ]
+          : <Map<String, dynamic>>[],
+      'hook_keywords': populated
+          ? [
+              {'keyword': 'display quality', 'score': 0.7},
+            ]
+          : <Map<String, dynamic>>[],
+      'missing_dimensions': <Map<String, dynamic>>[],
+      'recommended_duration': {
+        'recommended_seconds': populated ? 75 : null,
+        'recommended_range': populated ? '60-90 sec' : 'Insufficient evidence',
+        'sample_size': populated ? 10 : 0,
+        'minimum_sample_size': 10,
+        'target_sample_size': 15,
+        'source': populated ? 'youtube_metadata' : 'none',
+        'evidence_status': populated ? 'sufficient' : 'insufficient_evidence',
+        'cohort': 'upload_compatible_under_5m',
+        'median_seconds': populated ? 75 : null,
+        'percentile_low': 25,
+        'percentile_high': 75,
+      },
+      'dataset_profile': {
+        'domain': 'phone',
+        'sample_size': populated ? 10 : 0,
+        'source': populated ? 'youtube_public_human_verified' : 'none',
+        'source_platform_counts': populated ? {'youtube': 10} : <String, int>{},
+        'exemplar_titles': <String>[],
+      },
+      'evidence': <String, dynamic>{},
+      'classification': {
+        'domain': 'phone',
+        'confidence': 0.91,
+        'rule_domain': 'phone',
+        'source': 'youtube_public_research',
+        'taxonomy_version': 'content-taxonomy-v1',
+        'taxonomy_leaf_key': 'phone',
+        'category_level_1': 'Technology',
+        'category_level_2': 'Electronics',
+        'category_level_3': 'Phone',
+        'is_unknown': false,
+        'taxonomy_ready': true,
+        'candidates': <Map<String, dynamic>>[],
+      },
+    },
   });
 }
 

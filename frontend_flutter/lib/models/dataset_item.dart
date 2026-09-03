@@ -12,6 +12,16 @@ class DatasetItem {
     required this.trendScore,
     required this.durationSeconds,
     required this.publishedAt,
+    this.taxonomyVersion = '',
+    this.taxonomyLeafKey = '',
+    this.categoryLevel1 = '',
+    this.categoryLevel2 = '',
+    this.categoryLevel3 = '',
+    this.transcriptSha256 = '',
+    this.dataSplit = '',
+    this.isTrainingEligible = false,
+    this.reviewedBy = '',
+    this.reviewedAt = '',
   });
 
   final int datasetId;
@@ -26,6 +36,20 @@ class DatasetItem {
   final num trendScore;
   final int? durationSeconds;
   final String publishedAt;
+  final String taxonomyVersion;
+  final String taxonomyLeafKey;
+  final String categoryLevel1;
+  final String categoryLevel2;
+  final String categoryLevel3;
+  final String transcriptSha256;
+  final String dataSplit;
+  final bool isTrainingEligible;
+  final String reviewedBy;
+  final String reviewedAt;
+
+  String get taxonomyPath => [categoryLevel1, categoryLevel2, categoryLevel3]
+      .where((value) => value.trim().isNotEmpty)
+      .join(' > ');
 
   factory DatasetItem.fromJson(Map<String, dynamic> json) {
     return DatasetItem(
@@ -41,6 +65,16 @@ class DatasetItem {
       trendScore: json['trend_score'] as num? ?? 0,
       durationSeconds: (json['duration_seconds'] as num?)?.toInt(),
       publishedAt: json['published_at']?.toString() ?? '',
+      taxonomyVersion: json['taxonomy_version']?.toString() ?? '',
+      taxonomyLeafKey: json['taxonomy_leaf_key']?.toString() ?? '',
+      categoryLevel1: json['category_level_1']?.toString() ?? '',
+      categoryLevel2: json['category_level_2']?.toString() ?? '',
+      categoryLevel3: json['category_level_3']?.toString() ?? '',
+      transcriptSha256: json['transcript_sha256']?.toString() ?? '',
+      dataSplit: json['data_split']?.toString() ?? '',
+      isTrainingEligible: json['is_training_eligible'] as bool? ?? false,
+      reviewedBy: json['reviewed_by']?.toString() ?? '',
+      reviewedAt: json['reviewed_at']?.toString() ?? '',
     );
   }
 
@@ -49,8 +83,7 @@ class DatasetItem {
       'title': title,
       'video_url': videoUrl,
       'transcript': transcript,
-      'source_platform': sourcePlatform,
-      'category': category,
+      'taxonomy_leaf_key': taxonomyLeafKey,
       'views': views,
       'likes': likes,
       'comments': comments,

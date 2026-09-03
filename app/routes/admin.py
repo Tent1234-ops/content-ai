@@ -111,6 +111,7 @@ def admin_dataset_update(
             dataset_id=dataset_id,
             payload=payload,
             user_id=current_user.user_id,
+            reviewer=current_user.username,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -201,7 +202,7 @@ def get_admin_settings(
 @router.put("/settings", response_model=AdminConfigResponse, tags=["admin-settings"])
 def update_admin_settings(
     config_update: AdminConfigUpdate,
-    _current_user: User = Depends(require_roles("admin")),
+    current_user: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
     """
@@ -230,7 +231,11 @@ def update_admin_settings(
             )
         
         # Save configuration
-        config = save_admin_config(db, config_update)
+        config = save_admin_config(
+            db,
+            config_update,
+            user_id=current_user.user_id,
+        )
         return config
     except HTTPException:
         raise
@@ -604,7 +609,7 @@ def remove_lexicon_brand(
 def update_admin_source(
         source_name: str,
         payload: SourceUpdate,
-        _current_user: User = Depends(require_roles("admin")),
+        current_user: User = Depends(require_roles("admin")),
         db: Session = Depends(get_db),
 ):
         """
@@ -644,7 +649,11 @@ def update_admin_source(
 
         try:
             cfg_update = AdminConfigUpdate(**update_kwargs)
-            updated = save_admin_config(db, cfg_update)
+            updated = save_admin_config(
+                db,
+                cfg_update,
+                user_id=current_user.user_id,
+            )
             return {"status": "ok", "config": updated}
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Error updating source config: {str(exc)}")

@@ -92,7 +92,12 @@ def get_admin_config(db: Session) -> AdminConfigResponse:
     )
 
 
-def save_admin_config(db: Session, config_update: AdminConfigUpdate) -> AdminConfigResponse:
+def save_admin_config(
+    db: Session,
+    config_update: AdminConfigUpdate,
+    *,
+    user_id: int | None = None,
+) -> AdminConfigResponse:
     """
     Save/update admin configuration.
     Only updates fields that are provided (not None).
@@ -142,15 +147,15 @@ def save_admin_config(db: Session, config_update: AdminConfigUpdate) -> AdminCon
                 config.redis_url = value
                 runtime_set("redis_url", value)
     
-    db.commit()
-    db.refresh(config)
     log_system_event(
         db=db,
-        user_id=None,
+        user_id=user_id,
         action="admin_settings_update",
         status="success",
         detail=f"updated_fields={list(update_data.keys())}",
     )
+    db.commit()
+    db.refresh(config)
     
     return AdminConfigResponse(
         config_id=config.config_id,

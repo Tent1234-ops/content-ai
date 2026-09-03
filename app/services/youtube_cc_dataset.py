@@ -64,6 +64,7 @@ from app.services.taxonomy import (
     taxonomy_coverage,
     taxonomy_path,
 )
+from app.services.training_transcript import normalize_training_transcript
 from app.services.view_metrics import resolve_view_metric_version
 
 
@@ -2962,13 +2963,12 @@ def extract_youtube_video_id(value: str) -> str:
 
 
 def _normalize_notebooklm_transcript(value: str) -> str:
-    transcript = html.unescape(str(value or ""))
-    transcript = re.sub(r"\s+", " ", transcript).strip()
-    if len(transcript) < 80:
+    try:
+        return normalize_training_transcript(value)
+    except ValueError as exc:
         raise YouTubeCCDatasetError(
             "Transcript is too short; paste the complete source transcript from NotebookLM"
-        )
-    return transcript
+        ) from exc
 
 
 def _notebooklm_artifact_paths(

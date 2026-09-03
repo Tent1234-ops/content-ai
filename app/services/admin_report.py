@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -5,6 +7,15 @@ from app.database.models import Cluster, ClusterMembership, ClusterRun, DatasetC
 from app.schemas.admin_report import AdminDatasetCreate, AdminDatasetUpdate
 from app.services.dataset_eligibility import validate_training_eligibility_values
 from app.services.persistence import log_system_event
+from app.services.taxonomy import (
+    ACTIVE_LEAF_KEYS,
+    normalize_taxonomy_leaf,
+    taxonomy_path,
+)
+from app.services.training_transcript import (
+    normalize_training_transcript,
+    training_transcript_sha256,
+)
 from app.services.view_metrics import resolve_view_metric_version
 
 
@@ -71,13 +82,83 @@ def update_admin_dataset(
     dataset_id: int,
     payload: AdminDatasetUpdate,
     user_id: int | None = None,
+    reviewer: str | None = None,
 ) -> DatasetContent | None:
     item = db.query(DatasetContent).filter(DatasetContent.dataset_id == dataset_id).first()
     if item is None:
         return None
     update_data = payload.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(item, key, value)
+
+    old_leaf_key = str(item.taxonomy_leaf_key or "")
+    old_transcript_hash = str(item.transcript_sha256 or "")
+    requested_leaf = update_data.pop("taxonomy_leaf_key", None)
+    derived_taxonomy_fields = {
+        "taxonomy_version",
+        "category_level_1",
+        "category_level_2",
+        "category_level_3",
+    }
+    if requested_leaf is None and "category" in update_data and item.is_training_eligible:
+        requested_leaf = update_data.get("category")
+    if requested_leaf is None and derived_taxonomy_fields.intersection(update_data):
+        raise ValueError(
+            "Set taxonomy_leaf_key instead of editing derived taxonomy fields directly"
+        )
+    for field in derived_taxonomy_fields:
+        update_data.pop(field, None)
+
+    if requested_leaf is not None:
+        normalized_leaf = normalize_taxonomy_leaf(str(requested_leaf))
+        if normalized_leaf not in ACTIVE_LEAF_KEYS:
+            raise ValueError(
+                "taxonomy_leaf_key must be one of: " + ", ".join(ACTIVE_LEAF_KEYS)
+            )
+        path = taxonomy_path(normalized_leaf)
+        update_data.update(
+            {
+                "category": normalized_leaf,
+                "taxonomy_version": path["taxonomy_version"],
+                "taxonomy_leaf_key": normalized_leaf,
+                "category_level_1": path["category_level_1"],
+                "category_level_2": path["category_level_2"],
+                "category_level_3": path["category_level_3"],
+            }
+        )
+
+    supplied_transcript_hash = update_data.pop("transcript_sha256", None)
+    if supplied_transcript_hash is not None and "transcript" not in update_data:
+        raise ValueError(
+            "transcript_sha256 is derived automatically; submit transcript instead"
+        )
+    if "transcript" in update_data:
+        will_be_training_eligible = bool(
+            update_data.get("is_training_eligible", item.is_training_eligible)
+        )
+        minimum_length = 80 if will_be_training_eligible else 1
+        normalized_transcript = normalize_training_transcript(
+            update_data.get("transcript"),
+            minimum_length=minimum_length,
+        )
+        transcript_hash = training_transcript_sha256(normalized_transcript)
+        duplicate = (
+            db.query(DatasetContent)
+            .filter(
+                DatasetContent.transcript_sha256 == transcript_hash,
+                DatasetContent.dataset_id != dataset_id,
+            )
+            .first()
+        )
+        if duplicate is not None:
+            raise ValueError(
+                "Transcript duplicates existing dataset "
+                f"#{duplicate.dataset_id} ({duplicate.title})"
+            )
+        update_data["transcript"] = normalized_transcript
+        update_data["transcript_sha256"] = transcript_hash
+
+    if "title" in update_data:
+        update_data["title"] = str(update_data["title"] or "").strip()
+
     explicit_metric_version = update_data.get("view_metric_version")
     metric_inputs_changed = any(
         key in update_data
@@ -87,26 +168,68 @@ def update_admin_dataset(
             "views",
         )
     )
-    item.view_metric_version = resolve_view_metric_version(
-        item.source_platform,
-        item.statistics_captured_at or item.created_at,
+    current_values = {
+        column.name: getattr(item, column.name)
+        for column in DatasetContent.__table__.columns
+    }
+    current_values.update(update_data)
+    current_values["view_metric_version"] = resolve_view_metric_version(
+        current_values.get("source_platform"),
+        current_values.get("statistics_captured_at") or current_values.get("created_at"),
         (
             explicit_metric_version
             if explicit_metric_version is not None
-            else None if metric_inputs_changed else item.view_metric_version
+            else None if metric_inputs_changed else current_values.get("view_metric_version")
         ),
     )
+
+    corrected_training_content = (
+        str(current_values.get("taxonomy_leaf_key") or "") != old_leaf_key
+        or str(current_values.get("transcript_sha256") or "") != old_transcript_hash
+    )
+    if corrected_training_content:
+        current_values["reviewed_by"] = (
+            str(reviewer or "").strip()
+            or (f"admin_user_id:{user_id}" if user_id is not None else "admin")
+        )
+        current_values["reviewed_at"] = datetime.utcnow()
+
     try:
-        validate_training_eligibility_values(item)
+        validate_training_eligibility_values(current_values)
     except ValueError:
         db.rollback()
         raise
+
+    for key, value in current_values.items():
+        if key in update_data or (
+            corrected_training_content and key in {"reviewed_by", "reviewed_at"}
+        ) or key == "view_metric_version":
+            setattr(item, key, value)
+
+    changed_fields = sorted(update_data)
+    detail_parts = [
+        f"dataset_id={dataset_id}",
+        f"fields={changed_fields}",
+    ]
+    if corrected_training_content:
+        detail_parts.extend(
+            (
+                f"taxonomy={old_leaf_key or '-'}->{item.taxonomy_leaf_key or '-'}",
+                "transcript_sha256="
+                f"{old_transcript_hash or '-'}->{item.transcript_sha256 or '-'}",
+                "model_retrain_required=true",
+            )
+        )
     log_system_event(
         db,
         user_id=user_id,
-        action="admin_dataset_update",
+        action=(
+            "admin_dataset_training_content_corrected"
+            if corrected_training_content
+            else "admin_dataset_update"
+        ),
         status="success",
-        detail=f"dataset_id={dataset_id}, fields={list(update_data.keys())}",
+        detail=", ".join(detail_parts),
     )
     db.commit()
     db.refresh(item)

@@ -2,18 +2,21 @@ import 'package:flutter/material.dart';
 
 import '../models/system_log.dart';
 import '../repositories/admin_repository.dart';
+import '../utils/system_log_presenter.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
 
 class AdminLogsScreen extends StatefulWidget {
-  const AdminLogsScreen({super.key});
+  const AdminLogsScreen({super.key, this.repository});
+
+  final AdminRepository? repository;
 
   @override
   State<AdminLogsScreen> createState() => _AdminLogsScreenState();
 }
 
 class _AdminLogsScreenState extends State<AdminLogsScreen> {
-  final _repository = AdminRepository();
+  late final AdminRepository _repository;
   final _actionController = TextEditingController();
   List<SystemLogItem> _items = [];
   String _status = 'all';
@@ -26,7 +29,14 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
   @override
   void initState() {
     super.initState();
+    _repository = widget.repository ?? AdminRepository();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _actionController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -76,7 +86,7 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
   @override
   Widget build(BuildContext context) {
     return AppShell(
-      title: 'System Logs',
+      title: 'บันทึกการทำงานระบบ',
       currentRoute: '/admin-logs',
       isAdmin: true,
       child: Column(
@@ -91,7 +101,8 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
                       child: TextField(
                         controller: _actionController,
                         decoration: const InputDecoration(
-                          labelText: 'Search action',
+                          labelText: 'ค้นหารหัสเหตุการณ์',
+                          hintText: 'เช่น dataset_review หรือ model',
                           prefixIcon: Icon(Icons.search),
                         ),
                         onSubmitted: (_) => _applyFilters(),
@@ -99,18 +110,22 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
                     ),
                     const SizedBox(width: 12),
                     IconButton(
-                        onPressed: _load, icon: const Icon(Icons.refresh)),
+                      onPressed: _load,
+                      icon: const Icon(Icons.refresh),
+                      tooltip: 'โหลดข้อมูลใหม่',
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
                   initialValue: _status,
-                  decoration: const InputDecoration(labelText: 'Status'),
+                  decoration: const InputDecoration(labelText: 'สถานะ'),
                   items: const [
-                    DropdownMenuItem(value: 'all', child: Text('All')),
-                    DropdownMenuItem(value: 'success', child: Text('Success')),
-                    DropdownMenuItem(value: 'failed', child: Text('Failed')),
-                    DropdownMenuItem(value: 'error', child: Text('Error')),
+                    DropdownMenuItem(value: 'all', child: Text('ทั้งหมด')),
+                    DropdownMenuItem(value: 'success', child: Text('สำเร็จ')),
+                    DropdownMenuItem(value: 'failed', child: Text('ไม่สำเร็จ')),
+                    DropdownMenuItem(
+                        value: 'error', child: Text('เกิดข้อผิดพลาด')),
                   ],
                   onChanged: (value) {
                     if (value == null) return;
@@ -127,8 +142,8 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
                 ? ErrorStateView(message: _error!, onRetry: _load)
                 : _items.isEmpty
                     ? const EmptyStateView(
-                        title: 'No logs found',
-                        message: 'Try another status or action filter.',
+                        title: 'ไม่พบบันทึกการทำงาน',
+                        message: 'ลองเปลี่ยนสถานะหรือรหัสเหตุการณ์ที่ค้นหา',
                         icon: Icons.receipt_long_outlined,
                       )
                     : RefreshIndicator(
@@ -159,19 +174,9 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
                               );
                             }
                             final item = _items[index];
-                            final status = item.status;
-                            return Card(
-                              child: ListTile(
-                                title: Text(item.action),
-                                subtitle: Text(item.detail),
-                                trailing: Chip(
-                                  label: Text(status),
-                                  backgroundColor: _statusColor(status, context)
-                                      .withValues(alpha: 0.12),
-                                  side: BorderSide(
-                                      color: _statusColor(status, context)),
-                                ),
-                              ),
+                            return _SystemLogCard(
+                              item: item,
+                              statusColor: _statusColor(item.status, context),
                             );
                           },
                         ),
@@ -179,6 +184,100 @@ class _AdminLogsScreenState extends State<AdminLogsScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SystemLogCard extends StatelessWidget {
+  const _SystemLogCard({
+    required this.item,
+    required this.statusColor,
+  });
+
+  final SystemLogItem item;
+  final Color statusColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = item.detail.trim();
+    final actor =
+        item.userId == null ? 'ระบบอัตโนมัติ' : 'ผู้ใช้หมายเลข ${item.userId}';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    systemLogActionLabel(item.action),
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Chip(
+                  label: Text(systemLogStatusLabel(item.status)),
+                  backgroundColor: statusColor.withValues(alpha: 0.12),
+                  side: BorderSide(color: statusColor),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            SelectableText(
+              item.action,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 10),
+            SelectableText(
+              detail.isEmpty || detail == '-'
+                  ? 'ไม่มีรายละเอียดเพิ่มเติม'
+                  : detail,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 18,
+              runSpacing: 8,
+              children: [
+                _LogMetadata(
+                  icon: Icons.schedule_outlined,
+                  label: formatSystemLogTimestamp(item.timestamp),
+                ),
+                _LogMetadata(
+                  icon: item.userId == null
+                      ? Icons.settings_outlined
+                      : Icons.person_outline,
+                  label: actor,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LogMetadata extends StatelessWidget {
+  const _LogMetadata({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16),
+        const SizedBox(width: 6),
+        Text(label),
+      ],
     );
   }
 }

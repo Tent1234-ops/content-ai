@@ -118,7 +118,9 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
     analysis["top_keywords"] = list(nlp_result.get("top_keywords", []))
     analysis["all_keywords"] = list(user_signals["content_keywords"])
     analysis["content_keywords"] = list(user_signals["content_keywords"])
-    analysis["hook_keywords"] = list(user_signals["hook_terms"])
+    # Hook terms are observed in the uploaded clip; hook keywords are suggestions.
+    analysis.pop("hook_keywords", None)
+    analysis["hook_terms"] = list(user_signals["hook_terms"])
     analysis["comparable_keywords"] = list(user_signals["comparable_keywords"])
     analysis["comparable_keyword_evidence"] = list(
         user_signals["comparable_keyword_evidence"]
