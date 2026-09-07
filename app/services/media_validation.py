@@ -61,7 +61,7 @@ def validate_user_upload_duration(
     duration = probe_media_duration_seconds(media_path)
     if duration > max_duration_seconds + 0.05:
         raise MediaValidationError(
-            "Video duration exceeds the 5-minute upload limit "
+            "Video duration exceeds the maximum video duration "
             f"({duration:.1f}s > {max_duration_seconds}s)"
         )
     return duration

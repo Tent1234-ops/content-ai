@@ -272,6 +272,13 @@ class AnalysisResultViewData {
   final String rawTranscript;
   final String cleanedTranscript;
 
+  Map<String, dynamic> get analysisSettings {
+    final root = raw['analysis'] as Map? ?? const {};
+    return Map<String, dynamic>.from(raw['analysis_settings'] as Map? ??
+        root['analysis_settings'] as Map? ??
+        const {});
+  }
+
   factory AnalysisResultViewData.fromJson(Map<String, dynamic> json) {
     final analysisRoot =
         Map<String, dynamic>.from((json['analysis'] as Map?) ?? const {});

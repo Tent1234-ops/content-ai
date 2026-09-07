@@ -1,5 +1,30 @@
+import 'dart:convert';
+
+String systemLogActorLabel(int? userId, String detail) {
+  if (userId != null) return 'ผู้ใช้หมายเลข $userId';
+  try {
+    final data = jsonDecode(detail);
+    if (data is Map && data['deleted_actor_user_id'] is num) {
+      return 'ผู้ใช้หมายเลข ${data['deleted_actor_user_id']} (ลบบัญชีแล้ว)';
+    }
+  } on FormatException {
+    // Older audit rows also contain plain text details.
+  }
+  return 'ระบบอัตโนมัติ';
+}
+
 String systemLogActionLabel(String action) {
   switch (action.trim().toLowerCase()) {
+    case 'admin_user_create':
+      return 'เพิ่มบัญชีผู้ใช้โดยผู้ดูแล';
+    case 'admin_user_update':
+      return 'เปลี่ยนข้อมูล สิทธิ์ หรือสถานะบัญชีผู้ใช้';
+    case 'admin_user_sessions_revoke':
+      return 'บังคับบัญชีผู้ใช้ออกจากระบบทุกเซสชัน';
+    case 'admin_user_delete':
+      return 'ลบบัญชีผู้ใช้และข้อมูลส่วนตัวที่บันทึก';
+    case 'admin_user_file_cleanup':
+      return 'ลบบัญชีแล้ว แต่ยังมีไฟล์อัปโหลดที่ลบไม่สำเร็จ';
     case 'notebooklm_candidate_created':
       return 'นำ Transcript เข้าคิวตรวจสอบ';
     case 'dataset_review_approve':
@@ -14,6 +39,8 @@ String systemLogActionLabel(String action) {
       return 'แก้ไข Transcript หรือหมวดข้อมูลฝึกที่อนุมัติแล้ว';
     case 'admin_settings_update':
       return 'แก้ไขการตั้งค่าระบบ';
+    case 'admin_analysis_settings_update':
+      return 'แก้ไขความยาวอัปโหลด รุ่น Whisper หรือช่วงเปิดคลิป';
     case 'admin_settings_reset':
       return 'คืนค่าตั้งต้นของระบบ';
     case 'admin_settings_backup':
@@ -28,6 +55,14 @@ String systemLogActionLabel(String action) {
       return 'ทดสอบขั้นตอนฝึกโมเดลเบื้องต้น';
     case 'classification_model_benchmark':
       return 'ฝึกและประเมินโมเดลจำแนกหมวด';
+    case 'classification_training_requested':
+      return 'เริ่มรอบเทรนโมเดลจากหน้า Admin';
+    case 'classification_training_completed':
+      return 'เทรนและบันทึกผลประเมินเรียบร้อย';
+    case 'classification_training_failed':
+      return 'รอบเทรนโมเดลไม่สำเร็จ';
+    case 'classification_training_interrupted':
+      return 'รอบเทรนโมเดลหยุดกลางทาง';
     case 'classification_model_activate':
       return 'เปิดใช้งานโมเดลจำแนกหมวด';
     case 'youtube_trends_sync':

@@ -2,8 +2,20 @@ import 'package:flutter/material.dart';
 
 import '../state/auth_scope.dart';
 
+class LoginDestination {
+  const LoginDestination(this.route, {this.arguments});
+
+  final String route;
+  final Object? arguments;
+}
+
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({
+    super.key,
+    this.destination = const LoginDestination('/dashboard'),
+  });
+
+  final LoginDestination destination;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -31,7 +43,12 @@ class _LoginScreenState extends State<LoginScreen> {
         _passwordController.text.trim(),
       );
       if (!mounted) return;
-      Navigator.pushNamedAndRemoveUntil(context, '/dashboard', (_) => false);
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        widget.destination.route,
+        (_) => false,
+        arguments: widget.destination.arguments,
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -99,8 +116,15 @@ class _LoginScreenState extends State<LoginScreen> {
                   TextButton(
                     onPressed: auth.loading
                         ? null
-                        : () => Navigator.pushNamed(context, '/register'),
+                        : () => Navigator.pushNamed(context, '/register',
+                            arguments: widget.destination),
                     child: const Text('Create account'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => Navigator.pushNamedAndRemoveUntil(
+                        context, '/dashboard', (_) => false),
+                    icon: const Icon(Icons.trending_up),
+                    label: const Text('กลับไปดูเทรนด์'),
                   ),
                 ],
               ),

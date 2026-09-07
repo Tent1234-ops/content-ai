@@ -172,8 +172,7 @@ class _SystemLogCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final detail = item.detail.trim();
-    final actor =
-        item.userId == null ? 'ระบบอัตโนมัติ' : 'ผู้ใช้หมายเลข ${item.userId}';
+    final actor = systemLogActorLabel(item.userId, item.detail);
 
     return Card(
       child: Padding(

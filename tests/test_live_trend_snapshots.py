@@ -27,7 +27,7 @@ from app.routes.dashboard import (
     dashboard_youtube_category_snapshots,
 )
 from app.services.dashboard import build_dashboard_summary
-from app.services.live_trend_notifications import compare_live_trend_snapshot
+from app.services.live_trend_notifications import compare_live_trend_snapshot, load_public_trend_snapshot
 from app.services.live_trend_snapshots import (
     GLOBAL_SNAPSHOT_KIND,
     YOUTUBE_CATEGORY_SNAPSHOT_KIND,
@@ -656,6 +656,30 @@ class LiveTrendSnapshotTests(unittest.TestCase):
         self.assertEqual(item["engagement_rate_per_minute"], 0)
         self.assertFalse(item["has_previous_snapshot"])
         self.assertTrue(item["metric_version_changed"])
+
+    def test_public_snapshot_compares_rankings_without_user_writes(self):
+        for titles in [("A", "B"), ("B", "A")]:
+            refresh_global_live_trends(
+                region="TH", limit=50, db=self.db,
+                fetchers={"youtube": self._youtube,
+                          "google": self._google_ranked(*titles),
+                          "tiktok": self._empty_provider},
+            )
+            if titles[0] == "A":
+                self._backdate_latest_run()
+
+        with patch.object(self.db, "commit", side_effect=AssertionError("Public read must not write")):
+            result = load_public_trend_snapshot(self.db, region="TH", limit=50)
+            repeated = load_public_trend_snapshot(self.db, region="TH", limit=50)
+        self.assertEqual(result, repeated)
+        self.assertEqual(result["platforms"]["google"]["items"][0]["rank_change"], 1)
+        video = result["platforms"]["youtube"]["items"][0]
+        self.assertEqual(video["channel_title"], "Channel")
+        self.assertEqual(video["duration_seconds"], 125)
+        self.assertEqual(video["views"], 1000)
+        self.assertEqual(self.db.query(UserTrendWatchSession).count(), 0)
+        self.assertEqual(self.db.query(Notification).count(), 0)
+        self.assertNotIn("recent_analyses", result)
 
     def test_google_momentum_uses_rank_movement(self):
         empty = self._empty_provider

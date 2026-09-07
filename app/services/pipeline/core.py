@@ -2234,6 +2234,7 @@ def analyze_video(
     video_path: str,
     display_name: str | None = None,
     hook_duration_seconds: int = 60,
+    asr_model_size: str | None = None,
 ):
     print(f"[pipeline] analyze_video start: {video_path}", flush=True)
     # Lazy import heavy NLP models to avoid failing app startup
@@ -2259,7 +2260,7 @@ def analyze_video(
         print(f"[pipeline] ML model import failed: {exc}", flush=True)
         ml_import_ok = False
 
-    hook_seconds = max(10, min(int(hook_duration_seconds or 60), 300))
+    hook_seconds = max(5, min(int(hook_duration_seconds or 60), 300))
     with tempfile.NamedTemporaryFile(
         prefix="content_ai_",
         suffix=".wav",
@@ -2283,9 +2284,11 @@ def analyze_video(
         )
         if audio_ok:
             try:
-                stt = transcribe_with_meta(audio_path)
+                stt = transcribe_with_meta(audio_path, model_size=asr_model_size)
             except Exception as exc:
                 print(f"[pipeline] STT failed: {exc}", flush=True)
+                if asr_model_size is not None:
+                    raise RuntimeError(f"Whisper {asr_model_size} could not transcribe this clip") from exc
                 stt = {
                     "text": "",
                     "language": None,
@@ -2592,6 +2595,9 @@ def analyze_video(
                 "pipeline_mode": "hybrid_full" if use_ml_enrichment else ("rule_first" if ml_import_ok else "rule_first_offline"),
                 "analysis_quality": round(min(1.0, quality_score), 3),
                 "stt_meta": {
+                    "model_size": stt.get("model_size") or asr_model_size,
+                    "device": stt.get("device"),
+                    "compute_type": stt.get("compute_type"),
                     "language": stt.get("language"),
                     "language_probability": stt.get("language_probability"),
                     "segment_count": stt.get("segment_count"),

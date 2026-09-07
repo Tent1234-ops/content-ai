@@ -10,6 +10,8 @@ import '../state/auth_scope.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
 import '../widgets/trend_detail_panel.dart';
+import '../widgets/trend_catalog.dart';
+import 'login_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, this.repository});
@@ -39,6 +41,9 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _loading = false;
   bool _loadingYoutubeCategory = false;
   bool _syncing = false;
+  bool? _authenticated;
+  int? _userId;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -48,8 +53,26 @@ class _DashboardScreenState extends State<DashboardScreen>
       length: _platforms.length,
       vsync: this,
     );
-    _loadAll();
     _pollTimer = Timer.periodic(const Duration(seconds: 60), (_) => _loadAll());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final auth = AuthScope.of(context);
+    if (_authenticated == auth.isAuthenticated &&
+        _userId == auth.user?.userId) {
+      return;
+    }
+    _authenticated = auth.isAuthenticated;
+    _userId = auth.user?.userId;
+    _loadGeneration++;
+    _followedTopics = const [];
+    _notifications = const [];
+    _sectionErrors = const {};
+    _data = _snapshot == null ? null : DashboardOverview.liveOnly(_snapshot!);
+    _loading = false;
+    _loadAll();
   }
 
   @override
@@ -61,13 +84,18 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _loadAll() async {
     if (_loading) return;
+    final generation = _loadGeneration;
+    final signedIn = _authenticated == true;
     setState(() {
       _loading = true;
       _error = null;
     });
-    final overviewRequest = _capture(_repository.getOverview());
-    final snapshotRequest =
-        _capture(_repository.getLiveTrendSnapshot(limit: 50));
+    final overviewRequest = signedIn
+        ? _capture(_repository.getOverview())
+        : Future.value(const _DashboardLoadResult<DashboardOverview>._());
+    final snapshotRequest = _capture(signedIn
+        ? _repository.getLiveTrendSnapshot(limit: 50)
+        : _repository.getPublicTrendSnapshot(limit: 50));
     final requestedCategoryId =
         _selectedPlatform == 'youtube' && _categoryFilter != 'All'
             ? _categoryFilter
@@ -78,16 +106,19 @@ class _DashboardScreenState extends State<DashboardScreen>
         limit: 50,
       ),
     );
-    final topicsRequest = _capture(_repository.getFollowedTopics());
-    final notificationsRequest =
-        _capture(_repository.getNotifications(limit: 20));
+    final topicsRequest = signedIn
+        ? _capture(_repository.getFollowedTopics())
+        : Future.value(const _DashboardLoadResult<List<FollowedTopicItem>>._());
+    final notificationsRequest = signedIn
+        ? _capture(_repository.getNotifications(limit: 20))
+        : Future.value(const _DashboardLoadResult<List<NotificationItem>>._());
 
     final overviewResult = await overviewRequest;
     final snapshotResult = await snapshotRequest;
     final youtubeCategoriesResult = await youtubeCategoriesRequest;
     final topicsResult = await topicsRequest;
     final notificationsResult = await notificationsRequest;
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
 
     final errors = <String, String>{};
     if (overviewResult.error != null) {
@@ -138,12 +169,14 @@ class _DashboardScreenState extends State<DashboardScreen>
       _loading = false;
     });
 
-    if (liveSnapshot != null && liveSnapshot.newCount > 0) {
+    if (signedIn && liveSnapshot != null && liveSnapshot.newCount > 0) {
       await _loadNotificationsOnly();
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
     }
 
-    if (liveSnapshot != null && liveSnapshot.newNotifications.isNotEmpty) {
+    if (signedIn &&
+        liveSnapshot != null &&
+        liveSnapshot.newNotifications.isNotEmpty) {
       final first = liveSnapshot.newNotifications.first;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -204,6 +237,11 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<void> _toggleFollowTopic(DashboardTrendItem item) async {
+    if (_authenticated != true) {
+      Navigator.pushNamed(context, '/login',
+          arguments: const LoginDestination('/dashboard'));
+      return;
+    }
     final value = item.title.trim().toLowerCase();
     final existing = _followedTopics.where(
       (topic) => topic.matchType == 'keyword' && topic.value == value,
@@ -242,15 +280,19 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<void> _loadFollowStateOnly() async {
+    if (_authenticated != true) return;
+    final generation = _loadGeneration;
     final topics = await _repository.getFollowedTopics();
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
     setState(() => _followedTopics = topics);
   }
 
   Future<void> _loadNotificationsOnly() async {
+    if (_authenticated != true) return;
+    final generation = _loadGeneration;
     try {
       final notifications = await _repository.getNotifications(limit: 20);
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _notifications = notifications;
         if (_sectionErrors.containsKey('Notifications')) {
@@ -260,7 +302,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         }
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _sectionErrors = {
           ..._sectionErrors,
@@ -271,6 +313,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<void> _markAllRead() async {
+    if (_authenticated != true) return;
+    final generation = _loadGeneration;
     final unreadIds = _notifications
         .where((item) => !item.isRead)
         .map((item) => item.id)
@@ -279,14 +323,14 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (unreadIds.isEmpty) return;
     await _repository.markNotificationsRead(unreadIds);
     final notifications = await _repository.getNotifications(limit: 20);
-    if (!mounted) return;
+    if (!mounted || generation != _loadGeneration) return;
     setState(() => _notifications = notifications);
   }
 
   Future<void> _logout() async {
     await AuthScope.of(context).logout();
     if (!mounted) return;
-    Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+    Navigator.pushNamedAndRemoveUntil(context, '/dashboard', (_) => false);
   }
 
   bool _isFollowing(DashboardTrendItem item) {
@@ -448,26 +492,34 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget build(BuildContext context) {
     final auth = AuthScope.of(context);
     final data = _data;
+    final selectedPlatforms = data == null
+        ? const <DashboardPlatformTrends>[]
+        : _displayPlatforms(data)
+            .where((item) => item.platform == _selectedPlatform)
+            .toList();
+    final selectedMode =
+        selectedPlatforms.isEmpty ? '' : selectedPlatforms.first.mode;
     final unreadNotifications =
         _notifications.where((item) => !item.isRead).length;
 
     return AppShell(
-      title: 'Dashboard',
+      title: 'Content AI',
       currentRoute: '/dashboard',
       isAdmin: auth.isAdmin,
-      onLogout: _logout,
+      onLogout: auth.isAuthenticated ? _logout : null,
       actions: [
-        Badge(
-          isLabelVisible: unreadNotifications > 0,
-          label: Text(
-            unreadNotifications > 99 ? '99+' : '$unreadNotifications',
+        if (auth.isAuthenticated)
+          Badge(
+            isLabelVisible: unreadNotifications > 0,
+            label: Text(
+              unreadNotifications > 99 ? '99+' : '$unreadNotifications',
+            ),
+            child: IconButton(
+              onPressed: _loadNotificationsOnly,
+              icon: const Icon(Icons.notifications_outlined),
+              tooltip: 'อัปเดตการแจ้งเตือน',
+            ),
           ),
-          child: IconButton(
-            onPressed: _loadNotificationsOnly,
-            icon: const Icon(Icons.notifications_outlined),
-            tooltip: 'อัปเดตการแจ้งเตือน',
-          ),
-        ),
         if (auth.isAdmin)
           IconButton(
             onPressed: _syncing ? null : _syncTrends,
@@ -485,11 +537,12 @@ class _DashboardScreenState extends State<DashboardScreen>
           icon: const Icon(Icons.refresh),
           tooltip: 'รีเฟรช',
         ),
-        IconButton(
-          onPressed: () => Navigator.pushNamed(context, '/upload'),
-          icon: const Icon(Icons.upload_file),
-          tooltip: 'วิเคราะห์คลิปของฉัน',
-        ),
+        if (!auth.isAuthenticated)
+          TextButton.icon(
+            onPressed: () => Navigator.pushNamed(context, '/login'),
+            icon: const Icon(Icons.login),
+            label: const Text('เข้าสู่ระบบ'),
+          ),
       ],
       child: _error != null
           ? ErrorStateView(message: _error!, onRetry: _loadAll)
@@ -497,67 +550,84 @@ class _DashboardScreenState extends State<DashboardScreen>
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
                   onRefresh: _loadAll,
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      if (_loading) const LinearProgressIndicator(),
-                      if (_sectionErrors.isNotEmpty) ...[
-                        _DashboardWarning(errors: _sectionErrors),
-                        const SizedBox(height: 16),
-                      ],
-                      _DashboardIntro(
-                        totalTrends: _allTrends(data).length,
-                        generatedAt: _snapshot?.generatedAt ?? '',
-                        activePlatforms: _displayPlatforms(data)
-                            .where((platform) => platform.items.isNotEmpty)
-                            .map((platform) => platform.platform)
-                            .toList(),
-                      ),
-                      const SizedBox(height: 16),
-                      _NotificationPanel(
-                        notifications: _notifications,
-                        onMarkAllRead: _markAllRead,
-                      ),
-                      const SizedBox(height: 16),
-                      _TrendFilters(
-                        platformTabController: _platformTabController,
-                        category: _categoryFilter,
-                        categories: _categories(data),
-                        onPlatformChanged: _changePlatform,
-                        onCategoryChanged: (value) {
-                          _changeCategory(value);
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      _TrendDashboardSections(
-                        platform: _selectedPlatform,
-                        categoryLabel: _selectedYoutubeCategoryLabel,
-                        generatedAt: _selectedPlatform == 'youtube' &&
-                                _categoryFilter != 'All'
-                            ? _youtubeCategorySnapshot?.generatedAt ?? ''
-                            : _snapshot?.generatedAt ?? '',
-                        trends: _filteredTrends(data),
-                        isLoading: _loadingYoutubeCategory,
-                        isFollowing: _isFollowing,
-                        onToggleFollow: _toggleFollowTopic,
-                        onOpenDetails: _showTrendDetails,
-                        onOpenSource: _openTrendSource,
-                      ),
-                      const SizedBox(height: 16),
-                      _FollowedTopicsPanel(
-                        topics: _followedTopics,
-                        onDelete: (topic) async {
-                          await _repository.unfollowTopic(topic.id);
-                          await _loadFollowStateOnly();
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      if (auth.isAdmin) ...[
-                        _MetricsGrid(metrics: data.metrics),
-                        const SizedBox(height: 16),
-                      ],
-                    ],
-                  ),
+                  child: Center(
+                      child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 1440),
+                          child: ListView(
+                            padding: const EdgeInsets.all(16),
+                            children: [
+                              if (_loading) const LinearProgressIndicator(),
+                              if (_sectionErrors.isNotEmpty) ...[
+                                _DashboardWarning(errors: _sectionErrors),
+                                const SizedBox(height: 16),
+                              ],
+                              _DashboardIntro(
+                                totalTrends: _allTrends(data).length,
+                                generatedAt: _snapshot?.generatedAt ?? '',
+                                activePlatforms: _displayPlatforms(data)
+                                    .where(
+                                        (platform) => platform.items.isNotEmpty)
+                                    .map((platform) => platform.platform)
+                                    .toList(),
+                              ),
+                              const SizedBox(height: 16),
+                              _TrendFilters(
+                                platformTabController: _platformTabController,
+                                category: _categoryFilter,
+                                categories: _categories(data),
+                                showCategories: _selectedPlatform != 'google',
+                                onPlatformChanged: _changePlatform,
+                                onCategoryChanged: (value) {
+                                  _changeCategory(value);
+                                },
+                              ),
+                              const SizedBox(height: 16),
+                              if (_categoryFilter == 'All' &&
+                                  (selectedMode == 'live_error' ||
+                                      selectedMode == 'live_stale'))
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 16),
+                                  child: Text(selectedMode == 'live_stale'
+                                      ? 'การอัปเดตรอบล่าสุดไม่สำเร็จ กำลังแสดงข้อมูลที่เก็บไว้ล่าสุด'
+                                      : 'ยังโหลดข้อมูลจาก ${_formatPlatformName(_selectedPlatform)} ไม่สำเร็จ กรุณาลองรีเฟรชภายหลัง'),
+                                ),
+                              _TrendDashboardSections(
+                                platform: _selectedPlatform,
+                                categoryLabel: _selectedYoutubeCategoryLabel,
+                                generatedAt: _selectedPlatform == 'youtube' &&
+                                        _categoryFilter != 'All'
+                                    ? _youtubeCategorySnapshot?.generatedAt ??
+                                        ''
+                                    : _snapshot?.generatedAt ?? '',
+                                trends: _filteredTrends(data),
+                                isLoading: _loadingYoutubeCategory,
+                                isFollowing: _isFollowing,
+                                onToggleFollow: _toggleFollowTopic,
+                                onOpenDetails: _showTrendDetails,
+                                onOpenSource: _openTrendSource,
+                              ),
+                              const SizedBox(height: 16),
+                              if (auth.isAuthenticated) ...[
+                                _NotificationPanel(
+                                  notifications: _notifications,
+                                  onMarkAllRead: _markAllRead,
+                                ),
+                                const SizedBox(height: 16),
+                                _FollowedTopicsPanel(
+                                  topics: _followedTopics,
+                                  onDelete: (topic) async {
+                                    await _repository.unfollowTopic(topic.id);
+                                    await _loadFollowStateOnly();
+                                  },
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+                              if (auth.isAdmin) ...[
+                                _MetricsGrid(metrics: data.metrics),
+                                const SizedBox(height: 16),
+                              ],
+                            ],
+                          ))),
                 ),
     );
   }
@@ -629,37 +699,42 @@ class _DashboardIntro extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            const Icon(Icons.trending_up),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('เทรนด์ตอนนี้',
-                      style: Theme.of(context).textTheme.titleLarge),
-                  const SizedBox(height: 4),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Row(
+        children: [
+          const Icon(Icons.trending_up),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Content AI',
+                    style: Theme.of(context).textTheme.headlineMedium),
+                Text('เทรนด์วิดีโอและคำค้นในประเทศไทย',
+                    style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed: () => Navigator.pushNamed(context, '/upload'),
+                  icon: const Icon(Icons.upload_file_outlined),
+                  label: const Text('วิเคราะห์คลิปของฉัน'),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  activePlatforms.isEmpty
+                      ? 'ยังไม่มีข้อมูลเทรนด์ในขณะนี้'
+                      : '$totalTrends รายการจาก ${_formatPlatformList(activePlatforms)}',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                if (generatedAt.isNotEmpty)
                   Text(
-                    activePlatforms.isEmpty
-                        ? 'ยังไม่มีข้อมูลเทรนด์ในขณะนี้'
-                        : '$totalTrends รายการจาก ${_formatPlatformList(activePlatforms)}',
-                    style: Theme.of(context).textTheme.bodyMedium,
+                    'ตรวจล่าสุด ${_formatDateTime(generatedAt)}',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                  if (generatedAt.isNotEmpty)
-                    Text(
-                      'ตรวจล่าสุด ${_formatDateTime(generatedAt)}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                ],
-              ),
+              ],
             ),
-            const _SnapshotDataPill(),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -670,6 +745,7 @@ class _TrendFilters extends StatelessWidget {
     required this.platformTabController,
     required this.category,
     required this.categories,
+    required this.showCategories,
     required this.onPlatformChanged,
     required this.onCategoryChanged,
   });
@@ -677,47 +753,44 @@ class _TrendFilters extends StatelessWidget {
   final TabController platformTabController;
   final String category;
   final List<_CategoryOption> categories;
+  final bool showCategories;
   final ValueChanged<String> onPlatformChanged;
   final ValueChanged<String> onCategoryChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final stacked = constraints.maxWidth < 760;
-            final controlsWidth = stacked
-                ? constraints.maxWidth
-                : math.min(560.0, constraints.maxWidth);
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'เลือกแพลตฟอร์ม',
-                  style: Theme.of(context).textTheme.labelLarge,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stacked = constraints.maxWidth < 760;
+          final controlsWidth = stacked
+              ? constraints.maxWidth
+              : math.min(560.0, constraints.maxWidth);
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'เลือกแพลตฟอร์ม',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: controlsWidth,
+                child: TabBar(
+                  controller: platformTabController,
+                  onTap: (index) {
+                    const platforms = ['youtube', 'google', 'tiktok'];
+                    onPlatformChanged(platforms[index]);
+                  },
+                  tabs: const [
+                    Tab(icon: Icon(Icons.play_circle_outline), text: 'YouTube'),
+                    Tab(icon: Icon(Icons.search), text: 'Google'),
+                    Tab(icon: Icon(Icons.music_video_outlined), text: 'TikTok'),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: controlsWidth,
-                  child: TabBar(
-                    controller: platformTabController,
-                    onTap: (index) {
-                      const platforms = ['youtube', 'google', 'tiktok'];
-                      onPlatformChanged(platforms[index]);
-                    },
-                    tabs: const [
-                      Tab(
-                          icon: Icon(Icons.play_circle_outline),
-                          text: 'YouTube'),
-                      Tab(icon: Icon(Icons.search), text: 'Google'),
-                      Tab(
-                          icon: Icon(Icons.music_video_outlined),
-                          text: 'TikTok'),
-                    ],
-                  ),
-                ),
+              ),
+              if (showCategories) ...[
                 const SizedBox(height: 16),
                 _FilterDropdown(
                   width: controlsWidth,
@@ -727,9 +800,9 @@ class _TrendFilters extends StatelessWidget {
                   onChanged: onCategoryChanged,
                 ),
               ],
-            );
-          },
-        ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -835,7 +908,9 @@ class _TrendDashboardSections extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _TrendListSection(
+        TrendCatalog(
+          key: ValueKey('$platform:${categoryLabel ?? 'all'}'),
+          platform: platform,
           title: _topTrendsTitle(platform, categoryLabel),
           subtitle: _topTrendsSubtitle(
             platform,
@@ -844,8 +919,6 @@ class _TrendDashboardSections extends StatelessWidget {
           ),
           trends: trendingNow,
           emptyMessage: _noTrendsMessage(platform),
-          detailedMovement: false,
-          scrollKey: const Key('top-trend-scroll'),
           isFollowing: isFollowing,
           onToggleFollow: onToggleFollow,
           onOpenDetails: onOpenDetails,
@@ -1042,107 +1115,6 @@ class _RankMovementStat extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _TrendListSection extends StatefulWidget {
-  const _TrendListSection({
-    required this.title,
-    required this.subtitle,
-    required this.trends,
-    required this.emptyMessage,
-    required this.detailedMovement,
-    required this.isFollowing,
-    required this.onToggleFollow,
-    required this.onOpenDetails,
-    required this.onOpenSource,
-    this.scrollKey,
-  });
-
-  final String title;
-  final String subtitle;
-  final List<DashboardTrendItem> trends;
-  final String emptyMessage;
-  final bool detailedMovement;
-  final bool Function(DashboardTrendItem item) isFollowing;
-  final Future<void> Function(DashboardTrendItem item) onToggleFollow;
-  final Future<void> Function(DashboardTrendItem item) onOpenDetails;
-  final Future<void> Function(DashboardTrendItem item) onOpenSource;
-  final Key? scrollKey;
-
-  @override
-  State<_TrendListSection> createState() => _TrendListSectionState();
-}
-
-class _TrendListSectionState extends State<_TrendListSection> {
-  static const int _scrollThreshold = 10;
-  final ScrollController _scrollController = ScrollController();
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  Widget _buildTrendTile(DashboardTrendItem item) {
-    return _CompactTrendTile(
-      item: item,
-      detailedMovement: widget.detailedMovement,
-      isFollowing: widget.isFollowing(item),
-      onToggleFollow: () => widget.onToggleFollow(item),
-      onOpenDetails: () => widget.onOpenDetails(item),
-      onOpenSource: () => widget.onOpenSource(item),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final shouldScroll = widget.trends.length > _scrollThreshold;
-    final listHeight = MediaQuery.sizeOf(context).width < 700 ? 480.0 : 520.0;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.title, style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(
-              widget.subtitle,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            if (widget.trends.isEmpty)
-              Text(
-                widget.emptyMessage,
-                style: Theme.of(context).textTheme.bodyMedium,
-              )
-            else if (shouldScroll)
-              SizedBox(
-                height: listHeight,
-                child: Scrollbar(
-                  controller: _scrollController,
-                  thumbVisibility: true,
-                  trackVisibility: true,
-                  interactive: true,
-                  child: ListView.builder(
-                    key: widget.scrollKey,
-                    controller: _scrollController,
-                    primary: false,
-                    padding: const EdgeInsets.only(right: 12),
-                    physics: const ClampingScrollPhysics(),
-                    itemCount: widget.trends.length,
-                    itemBuilder: (context, index) =>
-                        _buildTrendTile(widget.trends[index]),
-                  ),
-                ),
-              )
-            else
-              ...widget.trends.map(_buildTrendTile),
-          ],
-        ),
       ),
     );
   }
@@ -1567,26 +1539,6 @@ class _FollowedTopicsPanel extends StatelessWidget {
               ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SnapshotDataPill extends StatelessWidget {
-  const _SnapshotDataPill();
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Colors.green.shade700;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        'อัปเดตเป็นรอบ',
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
       ),
     );
   }

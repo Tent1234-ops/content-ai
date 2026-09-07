@@ -26,7 +26,7 @@ class MediaValidationTests(unittest.TestCase):
     @patch("app.services.media_validation.subprocess.run")
     def test_user_upload_rejects_video_over_five_minutes(self, run):
         run.return_value = self._probe_result("301.250000\n")
-        with self.assertRaisesRegex(MediaValidationError, "5-minute"):
+        with self.assertRaisesRegex(MediaValidationError, "maximum video duration"):
             validate_user_upload_duration("clip.mp4")
 
     @patch("app.services.media_validation.subprocess.run")

@@ -2,12 +2,16 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../models/recommendation_result.dart';
+import '../models/analysis_settings.dart';
 import '../services/api_client.dart';
 
 class AnalysisRepository {
   AnalysisRepository({ApiClient? client}) : _client = client ?? ApiClient();
 
   final ApiClient _client;
+
+  Future<AnalysisSettings> getSettings() async => AnalysisSettings.fromJson(
+      Map<String, dynamic>.from(await _client.get('/analyze/settings') as Map));
 
   Future<String> startAnalyzeAndSaveVideo({
     String? filePath,

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database.models import DatasetContent, SystemConfig, User, UserContent, FollowedTopic, Notification, SystemLog
 from app.schemas.admin_config import AdminConfigUpdate, AdminConfigResponse
+from app.schemas.analysis_settings import AnalysisParameters
 from app.services.persistence import log_system_event
 
 
@@ -106,6 +107,12 @@ def save_admin_config(
     
     # Update only provided fields
     update_data = config_update.model_dump(exclude_unset=True)
+    if update_data.get("hook_analysis_duration") is not None:
+        AnalysisParameters(
+            upload_max_duration_seconds=config.upload_max_duration_seconds,
+            asr_model=config.asr_model_default,
+            hook_duration_seconds=update_data["hook_analysis_duration"],
+        )
     
     from app.runtime import set as runtime_set
 
@@ -182,7 +189,7 @@ def reset_admin_config(db: Session) -> AdminConfigResponse:
     config = get_or_create_admin_config(db)
     
     config.max_keywords = DEFAULT_CONFIG["max_keywords_display"]
-    config.hook_duration = DEFAULT_CONFIG["hook_analysis_duration"]
+    config.hook_duration = min(DEFAULT_CONFIG["hook_analysis_duration"], config.upload_max_duration_seconds)
     config.process_interval = DEFAULT_CONFIG["analysis_time_range_days"]
     config.notification_batch_size = DEFAULT_CONFIG["notification_batch_size"]
     config.youtube_region = DEFAULT_CONFIG["youtube_region"]
@@ -409,6 +416,12 @@ def apply_config_from_backup(db: Session, backup_config: Dict) -> AdminConfigRes
     
     if "configuration" in backup_config:
         cfg = backup_config["configuration"]
+        if "hook_duration" in cfg:
+            AnalysisParameters(
+                upload_max_duration_seconds=config.upload_max_duration_seconds,
+                asr_model=config.asr_model_default,
+                hook_duration_seconds=cfg["hook_duration"],
+            )
         if "max_keywords" in cfg:
             config.max_keywords = cfg["max_keywords"]
         if "hook_duration" in cfg:

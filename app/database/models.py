@@ -297,6 +297,25 @@ class DatasetReviewEvent(Base):
     dataset = relationship("DatasetContent", back_populates="review_events")
 
 
+class ModelTrainingRun(Base):
+    __tablename__ = "model_training_runs"
+
+    run_id = Column(String(36), primary_key=True)
+    requested_by = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    status = Column(String(30), nullable=False, default="queued", index=True)
+    # NULL permits completed history; slot 1 admits only one live training run.
+    active_slot = Column(Integer, nullable=True, unique=True)
+    stage = Column(String(40), nullable=False, default="queued")
+    current_model_key = Column(String(100))
+    parameters_json = Column(Text, nullable=False)
+    result_json = Column(AnalysisPayloadText)
+    error = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime)
+
+
 class ClassificationModel(Base):
     __tablename__ = "classification_models"
     __table_args__ = (
@@ -460,6 +479,7 @@ class SystemConfig(Base):
     auto_scan_interval_hours = Column(Integer, nullable=False, default=6)
     # New runtime/admin-configurable fields
     asr_model_default = Column(String(20), nullable=False, default="small")
+    upload_max_duration_seconds = Column(Integer, nullable=False, default=300)
     enable_model_toggle = Column(Boolean, nullable=False, default=True)
     job_backend = Column(String(20), nullable=False, default='inprocess')
     redis_url = Column(String(255), nullable=True)

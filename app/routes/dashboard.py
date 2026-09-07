@@ -14,7 +14,10 @@ from app.schemas.dashboard import (
 )
 from app.schemas.notifications import NotificationItem
 from app.services.dashboard import build_dashboard_overview, build_dashboard_topic_insights
-from app.services.live_trend_notifications import compare_live_trend_snapshot
+from app.services.live_trend_notifications import (
+    compare_live_trend_snapshot,
+    load_public_trend_snapshot,
+)
 from app.services.live_trend_snapshots import (
     load_trend_item_detail,
     load_youtube_category_snapshot,
@@ -22,6 +25,30 @@ from app.services.live_trend_snapshots import (
 from app.services.trending_fetcher import RateLimitedError, trigger_trending_refresh
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+@router.get("/public/trends")
+def public_dashboard_trends(
+    region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
+    trend_limit: int = Query(default=50, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    return load_public_trend_snapshot(db, region=region.upper(), limit=trend_limit)
+
+
+@router.get("/public/youtube/categories")
+def public_youtube_category_snapshots(
+    region: str = Query(default=settings.youtube_region, min_length=2, max_length=2),
+    video_category_id: str | None = Query(default=None, max_length=32),
+    trend_limit: int = Query(default=50, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    try:
+        return load_youtube_category_snapshot(
+            db, region=region.upper(), category_id=video_category_id, limit=trend_limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/overview", response_model=DashboardOverviewResponse)

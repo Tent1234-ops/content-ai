@@ -11,6 +11,7 @@ from app.database.models import ClassificationModel, DatasetContent
 from app.services.classification_training import (
     ClassificationTrainingError,
     classify_with_artifact,
+    classification_artifact_sha256,
 )
 from app.services.dataset_eligibility import production_transcript_query
 from app.services.nlp import filter_tokens
@@ -199,13 +200,8 @@ def _apply_taxonomy_contract(db: Session, result: Dict[str, object]) -> Dict[str
     return result
 
 
-def _classify_with_active_model(
-    db: Session,
-    *,
-    text: str,
-    title: str | None,
-) -> Dict[str, object] | None:
-    model = (
+def get_active_classification_model(db: Session) -> ClassificationModel | None:
+    return (
         db.query(ClassificationModel)
         .filter(
             ClassificationModel.is_active.is_(True),
@@ -217,6 +213,26 @@ def _classify_with_active_model(
         )
         .first()
     )
+
+
+def _classify_with_active_model(
+    db: Session,
+    *,
+    text: str,
+    title: str | None,
+    model_snapshot: dict | None = None,
+) -> Dict[str, object] | None:
+    if model_snapshot is None:
+        model = get_active_classification_model(db)
+    else:
+        model_id = model_snapshot.get("model_id")
+        if model_id is None:
+            return None
+        model = db.get(ClassificationModel, model_id)
+        if model is None or model.status != "qualified":
+            raise ClassificationTrainingError("The queued classification model is no longer available")
+        if classification_artifact_sha256(model.artifact_path) != model_snapshot["artifact_sha256"]:
+            raise ClassificationTrainingError("The classification artifact changed after this job was queued")
     if model is None or not str(model.artifact_path or "").strip():
         return None
 
@@ -227,6 +243,8 @@ def _classify_with_active_model(
             text=text,
         )
     except (ClassificationTrainingError, OSError, ValueError):
+        if model_snapshot is not None:
+            raise
         return None
 
     raw_leaf_key = normalize_taxonomy_leaf(
@@ -286,6 +304,7 @@ def _classify_with_active_model(
         "model_id": int(model.model_id),
         "model_key": str(model.model_key),
         "model_version": str(model.model_version),
+        "unknown_threshold": prediction.get("unknown_threshold"),
     }
 
 
@@ -298,6 +317,7 @@ def classify_text_domain(
     profile_limit: int = 200,
     top_k: int = 5,
     require_active_model: bool = False,
+    model_snapshot: dict | None = None,
 ) -> Dict[str, object]:
     transcript_text = str(text or "").strip()
     if not transcript_text:
@@ -319,6 +339,7 @@ def classify_text_domain(
         db,
         title=None,
         text=transcript_text,
+        model_snapshot=model_snapshot,
     )
     if trained_result is not None:
         return trained_result

@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_roles
 from app.database.db import get_db
 from app.database.models import User
+from app.schemas.analysis_settings import AnalysisParameters
+from app.services.analysis_settings import get_analysis_settings, save_analysis_settings
 from app.schemas.admin_report import (
     AdminClusterRunListResponse,
     AdminClusterRunDetailResponse,
@@ -179,6 +181,27 @@ def admin_reports_overview(
 # ADMIN CONFIGURATION MANAGEMENT ENDPOINTS
 # ============================================================================
 
+@router.get("/analysis-settings", tags=["admin-settings"])
+def read_analysis_settings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("admin")),
+):
+    return get_analysis_settings(db, admin=True)
+
+
+@router.put("/analysis-settings", tags=["admin-settings"])
+def update_analysis_settings(
+    parameters: AnalysisParameters,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("admin")),
+):
+    try:
+        return save_analysis_settings(db, parameters, user_id=current_user.user_id)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/settings", response_model=AdminConfigResponse, tags=["admin-settings"])
 def get_admin_settings(
     _current_user: User = Depends(require_roles("admin")),
@@ -239,6 +262,9 @@ def update_admin_settings(
         return config
     except HTTPException:
         raise
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,
@@ -402,6 +428,9 @@ def restore_admin_configuration_from_backup(
     try:
         config = apply_config_from_backup(db, backup_data)
         return config
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=500,

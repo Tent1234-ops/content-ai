@@ -1,12 +1,130 @@
 import 'package:content_ai_web/models/dashboard_overview.dart';
 import 'package:content_ai_web/repositories/dashboard_repository.dart';
+import 'package:content_ai_web/repositories/auth_repository.dart';
+import 'package:content_ai_web/models/app_user.dart';
+import 'package:content_ai_web/models/auth_session.dart';
+import 'package:content_ai_web/screens/login_screen.dart';
+import 'package:content_ai_web/routing/app_router.dart';
+import 'package:content_ai_web/screens/upload_screen.dart';
 import 'package:content_ai_web/screens/dashboard_screen.dart';
 import 'package:content_ai_web/state/auth_controller.dart';
 import 'package:content_ai_web/state/auth_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+  testWidgets('guest reads only public APIs, polls and can sign in to analyze',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final auth = AuthController(repository: _GuestAuthRepository());
+    await auth.initialize();
+    addTearDown(auth.dispose);
+    final repository = _FakeDashboardRepository();
+    final router = AppRouter(auth);
+    await tester.pumpWidget(AuthScope(
+        controller: auth,
+        child: MaterialApp(
+          onGenerateRoute: router.onGenerateRoute,
+          home: DashboardScreen(repository: repository),
+        )));
+    await tester.pumpAndSettle();
+    expect(repository.publicReads, 1);
+    expect(repository.privateReads, 0);
+    expect(find.text('การแจ้งเตือนเทรนด์'), findsNothing);
+    expect(find.text('หัวข้อที่ติดตาม'), findsNothing);
+    final more = find.byKey(const Key('trends-load-more'));
+    await Scrollable.ensureVisible(tester.element(more), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(more);
+    await tester.pumpAndSettle();
+    expect(repository.publicReads, 1);
+    expect(repository.categoryReads, 1);
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pumpAndSettle();
+    expect(repository.publicReads, 2);
+    expect(repository.privateReads, 0);
+
+    final analyze = find.widgetWithText(FilledButton, 'วิเคราะห์คลิปของฉัน');
+    await tester.scrollUntilVisible(analyze, -500,
+        scrollable: find.byType(Scrollable).first);
+    await Scrollable.ensureVisible(tester.element(analyze), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(analyze);
+    await tester.pumpAndSettle();
+    expect(find.byType(LoginScreen), findsOneWidget);
+    expect(find.byType(UploadScreen), findsNothing);
+    expect(
+        tester.widget<LoginScreen>(find.byType(LoginScreen)).destination.route,
+        '/upload');
+    await tester.enterText(
+        find.byType(TextFormField).at(0), 'guest@example.com');
+    await tester.enterText(find.byType(TextFormField).at(1), 'test-password');
+    await tester.tap(find.widgetWithText(FilledButton, 'Login'));
+    await tester.pumpAndSettle();
+    expect(find.byType(UploadScreen), findsOneWidget);
+    expect(find.byType(LoginScreen), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('logout clears private dashboard panels and resumes public reads',
+      (tester) async {
+    final auth = AuthController(repository: _GuestAuthRepository());
+    await auth.initialize();
+    await auth.login('guest@example.com', 'test-password');
+    addTearDown(auth.dispose);
+    final repository = _FakeDashboardRepository();
+    await tester.pumpWidget(MaterialApp(
+        home: AuthScope(
+            controller: auth, child: DashboardScreen(repository: repository))));
+    await tester.pumpAndSettle();
+    expect(repository.privateReads, 4);
+    expect(repository.publicReads, 0);
+    await auth.logout();
+    await tester.pumpAndSettle();
+    expect(repository.publicReads, 1);
+    expect(repository.privateReads, 4);
+    expect(find.text('หัวข้อที่ติดตาม'), findsNothing);
+    expect(find.text('การแจ้งเตือนเทรนด์'), findsNothing);
+    expect(find.text('เข้าสู่ระบบ'), findsOneWidget);
+  });
+
+  testWidgets('cold private routes request login and keep their destination',
+      (tester) async {
+    for (final route in [
+      '/upload',
+      '/history',
+      '/result',
+      '/admin-datasets',
+      '/admin-analysis-settings',
+      '/admin-training',
+      '/admin-users'
+    ]) {
+      final auth = AuthController(repository: _GuestAuthRepository());
+      final router = AppRouter(auth);
+      await tester.pumpWidget(AuthScope(
+          controller: auth,
+          child: MaterialApp(
+            key: ValueKey(route),
+            initialRoute: route,
+            onGenerateRoute: router.onGenerateRoute,
+          )));
+      await auth.initialize();
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(
+          tester
+              .widget<LoginScreen>(find.byType(LoginScreen))
+              .destination
+              .route,
+          route);
+      await tester.pumpWidget(const SizedBox());
+      auth.dispose();
+    }
+  });
+
   testWidgets('dashboard keeps platform rankings in separate tabs',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
@@ -190,16 +308,15 @@ void main() {
 
     expect(find.text('อันดับวิดีโอ YouTube หมวดบันเทิง'), findsOneWidget);
     expect(find.text('Category 24 video 1'), findsOneWidget);
-    expect(find.byKey(const Key('top-trend-scroll')), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('Category 24 video 50'),
-      500,
-      maxScrolls: 20,
-      scrollable: find.descendant(
-        of: find.byKey(const Key('top-trend-scroll')),
-        matching: find.byType(Scrollable),
-      ),
-    );
+    expect(find.text('Category 24 video 13'), findsNothing);
+    for (var page = 0; page < 4; page++) {
+      final more = find.byKey(const Key('trends-load-more'));
+      await Scrollable.ensureVisible(tester.element(more), alignment: 0.5);
+      await tester.pumpAndSettle();
+      await tester.tap(more);
+      await tester.pumpAndSettle();
+    }
+    expect(find.byKey(const Key('trends-load-more')), findsNothing);
     expect(find.text('Category 24 video 50'), findsOneWidget);
     expect(find.text('#50'), findsOneWidget);
     expect(find.text('YouTube video 1'), findsNothing);
@@ -226,9 +343,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('รายละเอียดเทรนด์'), findsOneWidget);
-    expect(find.text('Test creator channel'), findsOneWidget);
+    expect(find.text('Test creator channel'), findsWidgets);
     expect(find.text('1,234'), findsOneWidget);
-    expect(find.text('2:05'), findsOneWidget);
+    expect(find.text('2:05'), findsWidgets);
     expect(find.text('คำอธิบายจากช่อง'), findsOneWidget);
     expect(find.text('Description supplied by the channel'), findsOneWidget);
     expect(find.text('ดูบน YouTube'), findsOneWidget);
@@ -263,7 +380,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('รายละเอียดเทรนด์'), findsOneWidget);
-    expect(find.text('Test creator channel'), findsNothing);
     expect(find.text('ความยาว'), findsNothing);
     expect(find.text('สถิติปัจจุบันจาก YouTube'), findsNothing);
     expect(find.text('คำอธิบายจากช่อง'), findsNothing);
@@ -350,7 +466,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('YouTube video 1'));
+    await Scrollable.ensureVisible(tester.element(find.text('YouTube video 1')),
+        alignment: 0.5);
     await tester.pumpAndSettle();
     await tester.tap(find.text('YouTube video 1'));
     await tester.pumpAndSettle();
@@ -371,32 +488,74 @@ class _FakeDashboardRepository extends DashboardRepository {
 
   final LiveTrendSnapshot _snapshot;
   final DashboardOverview _overview;
+  int publicReads = 0;
+  int privateReads = 0;
+  int categoryReads = 0;
 
   @override
-  Future<DashboardOverview> getOverview() async => _overview;
+  Future<LiveTrendSnapshot> getPublicTrendSnapshot({int limit = 50}) async {
+    publicReads++;
+    return _snapshot;
+  }
 
   @override
-  Future<LiveTrendSnapshot> getLiveTrendSnapshot({int limit = 50}) async =>
-      _snapshot;
+  Future<DashboardOverview> getOverview() async {
+    privateReads++;
+    return _overview;
+  }
+
+  @override
+  Future<LiveTrendSnapshot> getLiveTrendSnapshot({int limit = 50}) async {
+    privateReads++;
+    return _snapshot;
+  }
 
   @override
   Future<YouTubeCategoryTrendSnapshot> getYouTubeCategoryTrendSnapshot({
     String? categoryId,
     int limit = 50,
-  }) async =>
-      YouTubeCategoryTrendSnapshot.fromJson(
-        _youtubeCategorySnapshotJson(categoryId: categoryId),
-      );
+  }) async {
+    categoryReads++;
+    return YouTubeCategoryTrendSnapshot.fromJson(
+      _youtubeCategorySnapshotJson(categoryId: categoryId),
+    );
+  }
 
   @override
-  Future<List<FollowedTopicItem>> getFollowedTopics() async => const [];
+  Future<List<FollowedTopicItem>> getFollowedTopics() async {
+    privateReads++;
+    return const [];
+  }
 
   @override
   Future<List<NotificationItem>> getNotifications({
     bool unreadOnly = false,
     int limit = 20,
-  }) async =>
-      const [];
+  }) async {
+    privateReads++;
+    return const [];
+  }
+}
+
+class _GuestAuthRepository extends AuthRepository {
+  @override
+  Future<AuthSession?> restoreSession() async => null;
+
+  @override
+  Future<AuthSession> login(String email, String password) async =>
+      const AuthSession(
+        accessToken: 'test-token',
+        sessionKey: 'test-session',
+        user: AppUser(
+            userId: 1,
+            username: 'Test',
+            email: 'guest@example.com',
+            role: 'user',
+            isActive: true),
+      );
+
+  @override
+  Future<void> logout() async {}
 }
 
 Map<String, dynamic> _overviewJson() {

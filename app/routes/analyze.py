@@ -6,9 +6,10 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.api.deps import require_roles
-from app.database.db import SessionLocal
+from app.database.db import SessionLocal, get_db
+from sqlalchemy.orm import Session
 from app.database.models import User
-from app.services.admin_settings import get_admin_config
+from app.services.analysis_settings import capture_analysis_settings, get_analysis_settings
 from app.services.ai_pipeline import analyze_video as pipeline_analyze
 from app.services.classification import classify_text_domain
 from app.services.jobs import enqueue, update_current_job
@@ -36,17 +37,17 @@ def _save_upload(file: UploadFile) -> str:
     return file_path
 
 
-def _save_validated_upload(file: UploadFile) -> str:
+def _save_validated_upload(file: UploadFile, *, max_duration_seconds: int = 300) -> str:
     file_path = _save_upload(file)
     try:
-        validate_user_upload_duration(file_path)
+        validate_user_upload_duration(file_path, max_duration_seconds=max_duration_seconds)
     except MediaValidationError as exc:
         Path(file_path).unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return file_path
 
 
-def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dict]:
+def _build_recommendation(db, *, filename: str, result: dict, settings_snapshot: dict | None = None) -> tuple[dict, dict]:
     update_current_job(stage="classifying", progress=62, message="Classifying clip type")
     raw_transcript = str(
         result.get("raw_transcript")
@@ -79,6 +80,7 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
         source_prefix="youtube",
         profile_limit=80,
         require_active_model=True,
+        **({"model_snapshot": settings_snapshot["classification_model"]} if settings_snapshot else {}),
     )
     if filename_fallback:
         classification["input_source"] = "filename_fallback"
@@ -163,44 +165,48 @@ def _build_recommendation(db, *, filename: str, result: dict) -> tuple[dict, dic
     return recommendation, nlp_result
 
 
-def analyze_video_job(file_path: str, filename: str, user_id: int | None = None) -> dict:
+def analyze_video_job(file_path: str, filename: str, user_id: int | None = None, *, settings_snapshot: dict | None = None) -> dict:
     db = SessionLocal()
     try:
-        config = get_admin_config(db)
+        settings_snapshot = settings_snapshot or capture_analysis_settings(db)
         update_current_job(stage="extracting_audio", progress=18, message="Preparing full video audio")
         result = pipeline_analyze(
             file_path,
             display_name=filename,
-            hook_duration_seconds=config.hook_analysis_duration,
+            hook_duration_seconds=settings_snapshot["hook_duration_seconds"],
+            asr_model_size=settings_snapshot["asr_model"],
         )
-        recommendation, _nlp_result = _build_recommendation(db, filename=filename, result=result)
+        result["analysis_settings"] = settings_snapshot
+        recommendation, _nlp_result = _build_recommendation(db, filename=filename, result=result, settings_snapshot=settings_snapshot)
         result["recommendation"] = recommendation
         return result
     finally:
         db.close()
 
 
-def analyze_and_save_video_job(file_path: str, filename: str, user_id: int) -> dict:
+def analyze_and_save_video_job(file_path: str, filename: str, user_id: int, *, settings_snapshot: dict | None = None) -> dict:
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.user_id == user_id).first()
         if user is None:
             raise RuntimeError("User not found for analysis job.")
 
-        config = get_admin_config(db)
+        settings_snapshot = settings_snapshot or capture_analysis_settings(db)
         update_current_job(stage="extracting_audio", progress=18, message="Preparing full video audio")
         result = pipeline_analyze(
             file_path,
             display_name=filename,
-            hook_duration_seconds=config.hook_analysis_duration,
+            hook_duration_seconds=settings_snapshot["hook_duration_seconds"],
+            asr_model_size=settings_snapshot["asr_model"],
         )
+        result["analysis_settings"] = settings_snapshot
         transcript = str(result.get("transcript") or "")
         raw_transcript = str(result.get("raw_transcript") or transcript)
         cleaned_transcript = str(
             result.get("cleaned_transcript")
             or normalize_text_for_nlp(raw_transcript)
         )
-        recommendation, nlp_result = _build_recommendation(db, filename=filename, result=result)
+        recommendation, nlp_result = _build_recommendation(db, filename=filename, result=result, settings_snapshot=settings_snapshot)
         update_current_job(stage="saving", progress=90, message="Saving analysis to My Ideas")
         saved = save_video_analysis_result(
             db,
@@ -226,21 +232,39 @@ def analyze_and_save_video_job(file_path: str, filename: str, user_id: int) -> d
             "recommended_duration": saved["recommended_duration"],
             "recommendation": recommendation,
             "analysis": result,
+            "analysis_settings": settings_snapshot,
             "nlp_result": nlp_result,
         }
     finally:
         db.close()
 
 
+@router.get("/analyze/settings")
+def read_upload_settings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("admin", "user")),
+):
+    return get_analysis_settings(db)
+
+
+def _capture_upload_settings(db: Session) -> dict:
+    try:
+        return capture_analysis_settings(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/analyze")
 async def analyze(
     file: UploadFile = File(...),
     current_user: User = Depends(require_roles("admin", "user")),
+    db: Session = Depends(get_db),
 ):
     print(f"[analyze] received upload: {file.filename}", flush=True)
-    file_path = _save_validated_upload(file)
+    settings_snapshot = _capture_upload_settings(db)
+    file_path = _save_validated_upload(file, max_duration_seconds=settings_snapshot["upload_max_duration_seconds"])
     filename = Path(file.filename or file_path).name
-    job_id = enqueue(analyze_video_job, file_path, filename, current_user.user_id)
+    job_id = enqueue(analyze_video_job, file_path, filename, current_user.user_id, settings_snapshot=settings_snapshot)
     return {"job_id": job_id}
 
 
@@ -248,10 +272,12 @@ async def analyze(
 async def analyze_and_save(
     file: UploadFile = File(...),
     current_user: User = Depends(require_roles("admin", "user")),
+    db: Session = Depends(get_db),
 ):
     print(f"[analyze/save] received upload: {file.filename}", flush=True)
-    file_path = _save_validated_upload(file)
+    settings_snapshot = _capture_upload_settings(db)
+    file_path = _save_validated_upload(file, max_duration_seconds=settings_snapshot["upload_max_duration_seconds"])
     filename = Path(file.filename or file_path).name
     print(f"[analyze/save] saved file to {file_path}, enqueueing analysis+save job", flush=True)
-    job_id = enqueue(analyze_and_save_video_job, file_path, filename, current_user.user_id)
+    job_id = enqueue(analyze_and_save_video_job, file_path, filename, current_user.user_id, settings_snapshot=settings_snapshot)
     return {"job_id": job_id}

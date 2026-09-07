@@ -47,7 +47,6 @@ class _ContentAiAppState extends State<ContentAiApp> {
             theme: _buildLightTheme(),
             darkTheme: _buildDarkTheme(),
             themeMode: themeMode,
-            initialRoute: '/',
             onGenerateRoute: _router.onGenerateRoute,
           );
         },

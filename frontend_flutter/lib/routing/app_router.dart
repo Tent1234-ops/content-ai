@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import '../screens/auth_gate.dart';
 import '../screens/admin_dataset_review_screen.dart';
 import '../screens/admin_datasets_screen.dart';
+import '../screens/admin_analysis_settings_screen.dart';
+import '../screens/admin_training_screen.dart';
+import '../screens/admin_users_screen.dart';
 import '../screens/admin_logs_screen.dart';
 import '../screens/admin_transcript_import_screen.dart';
 import '../screens/dashboard_screen.dart';
@@ -18,8 +21,16 @@ class AppRouter {
 
   final AuthController authController;
 
-  static const Set<String> _publicRoutes = {'/', '/login', '/register'};
+  static const Set<String> _publicRoutes = {
+    '/',
+    '/dashboard',
+    '/login',
+    '/register',
+  };
   static const Set<String> _adminRoutes = {
+    '/admin-users',
+    '/admin-training',
+    '/admin-analysis-settings',
     '/admin-dataset-review',
     '/admin-datasets',
     '/admin-logs',
@@ -29,10 +40,21 @@ class AppRouter {
   Route<dynamic> onGenerateRoute(RouteSettings settings) {
     final name = settings.name ?? '/';
     if (!authController.initialized) {
-      return _page(const AuthGate(), settings);
+      return _page(
+        AuthGate(
+          destination: name == '/' ? '/dashboard' : name,
+          arguments: settings.arguments,
+        ),
+        settings,
+      );
     }
     if (!_publicRoutes.contains(name) && !authController.isAuthenticated) {
-      return _page(const LoginScreen(), settings.copyWith(name: '/login'));
+      return _page(
+        LoginScreen(
+          destination: LoginDestination(name, arguments: settings.arguments),
+        ),
+        settings.copyWith(name: '/login'),
+      );
     }
     if (_adminRoutes.contains(name) && !authController.isAdmin) {
       return _page(
@@ -43,9 +65,23 @@ class AppRouter {
       case '/':
         return _page(const AuthGate(), settings);
       case '/login':
-        return _page(const LoginScreen(), settings);
+        return _page(
+          LoginScreen(
+            destination: settings.arguments is LoginDestination
+                ? settings.arguments as LoginDestination
+                : const LoginDestination('/dashboard'),
+          ),
+          settings,
+        );
       case '/register':
-        return _page(const RegisterScreen(), settings);
+        return _page(
+          RegisterScreen(
+            destination: settings.arguments is LoginDestination
+                ? settings.arguments as LoginDestination
+                : const LoginDestination('/dashboard'),
+          ),
+          settings,
+        );
       case '/dashboard':
         return _page(const DashboardScreen(), settings);
       case '/upload':
@@ -58,6 +94,12 @@ class AppRouter {
         return _page(const AdminDatasetReviewScreen(), settings);
       case '/admin-datasets':
         return _page(const AdminDatasetsScreen(), settings);
+      case '/admin-analysis-settings':
+        return _page(const AdminAnalysisSettingsScreen(), settings);
+      case '/admin-training':
+        return _page(const AdminTrainingScreen(), settings);
+      case '/admin-users':
+        return _page(const AdminUsersScreen(), settings);
       case '/admin-logs':
         return _page(const AdminLogsScreen(), settings);
       case '/admin-transcript-import':

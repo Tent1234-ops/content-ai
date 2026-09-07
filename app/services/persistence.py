@@ -395,7 +395,7 @@ def save_video_analysis_result(
             .filter(ClassificationModel.model_id == int(classification_model_id))
             .first()
         )
-    if classification_model is None:
+    if classification_model is None and "analysis_settings" not in analysis_payload:
         classification_model = (
             db.query(ClassificationModel)
             .filter(ClassificationModel.is_active.is_(True))

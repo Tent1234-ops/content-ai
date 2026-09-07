@@ -155,7 +155,7 @@ def _apply_session_and_engagement_status(
     db: Session,
     *,
     snapshot: Dict[str, object],
-    watch_session: UserTrendWatchSession,
+    watch_session: UserTrendWatchSession | None,
 ) -> None:
     notified_keys = {
         key
@@ -164,7 +164,7 @@ def _apply_session_and_engagement_status(
             .filter(Notification.watch_session_id == watch_session.watch_session_id)
             .all()
         )
-    }
+    } if watch_session is not None else set()
     default_run_id = snapshot.get("run_id")
     if not isinstance(default_run_id, int):
         return
@@ -369,6 +369,18 @@ def _apply_session_and_engagement_status(
             item["is_meaningful_rising"] = meaningful_rising
             item["status"] = status
             item["is_new"] = bool(row["is_new"])
+
+
+def load_public_trend_snapshot(
+    db: Session,
+    *,
+    region: str,
+    limit: int,
+) -> Dict[str, object]:
+    """Read shared rankings without creating a user session or notifications."""
+    snapshot = load_latest_live_snapshot(db, region=region, limit=limit)
+    _apply_session_and_engagement_status(db, snapshot=snapshot, watch_session=None)
+    return snapshot
 
 
 def compare_live_trend_snapshot(

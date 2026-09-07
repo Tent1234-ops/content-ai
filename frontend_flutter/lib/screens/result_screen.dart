@@ -5,6 +5,7 @@ import '../models/recommendation_result.dart';
 import '../repositories/content_repository.dart';
 import '../state/auth_scope.dart';
 import '../widgets/app_shell.dart';
+import '../widgets/analysis_settings_audit.dart';
 import '../widgets/state_widgets.dart';
 
 class ResultScreenArgs {
@@ -172,30 +173,6 @@ class _ResultScreenState extends State<ResultScreen> {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          Chip(
-                            avatar:
-                                const Icon(Icons.category_outlined, size: 18),
-                            label: Text('หมวดหมู่: $domain'),
-                          ),
-                          Chip(
-                            avatar: const Icon(Icons.check_circle, size: 18),
-                            label: Text(
-                              'ความมั่นใจ ${classifierConfidence.toStringAsFixed(0)}%',
-                            ),
-                          ),
-                          if (isSaved)
-                            const Chip(
-                              avatar:
-                                  Icon(Icons.bookmark_added_outlined, size: 18),
-                              label: Text('บันทึกในไอเดียของฉันแล้ว'),
-                            ),
-                        ],
-                      ),
                       const SizedBox(height: 24),
                       _ScopeSummaryCard(
                         domain: domain,
@@ -311,7 +288,10 @@ class _ResultScreenState extends State<ResultScreen> {
                       _ScoredKeywordCard(
                         keywords: hookKeywords,
                         emptyMessage: hookKeywordsEmptyMessage,
+                        showScore: false,
                       ),
+                      const SizedBox(height: 24),
+                      AnalysisSettingsAudit(snapshot: data.analysisSettings),
                       const SizedBox(height: 24),
                       Row(
                         children: [
@@ -595,10 +575,12 @@ class _ScoredKeywordCard extends StatelessWidget {
   const _ScoredKeywordCard({
     required this.keywords,
     required this.emptyMessage,
+    this.showScore = true,
   });
 
   final List<KeywordScore> keywords;
   final String emptyMessage;
+  final bool showScore;
 
   @override
   Widget build(BuildContext context) {
@@ -644,19 +626,21 @@ class _ScoredKeywordCard extends StatelessWidget {
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 12),
-                              Chip(
-                                label: Text(
-                                  keywords[index].hasDatasetEvidence
-                                      ? 'คะแนนสนับสนุน ${(keywords[index].score.clamp(0.0, 1.0) * 100).toStringAsFixed(0)}%'
-                                      : keywords[index]
-                                          .score
-                                          .toStringAsFixed(2),
+                              if (showScore) ...[
+                                const SizedBox(width: 12),
+                                Chip(
+                                  label: Text(
+                                    keywords[index].hasDatasetEvidence
+                                        ? 'คะแนนสนับสนุน ${(keywords[index].score.clamp(0.0, 1.0) * 100).toStringAsFixed(0)}%'
+                                        : keywords[index]
+                                            .score
+                                            .toStringAsFixed(2),
+                                  ),
+                                  side: const BorderSide(
+                                      color: Color(0xFFE0E0E0)),
+                                  backgroundColor: Colors.transparent,
                                 ),
-                                side:
-                                    const BorderSide(color: Color(0xFFE0E0E0)),
-                                backgroundColor: Colors.transparent,
-                              ),
+                              ],
                             ],
                           ),
                           if (keywords[index]

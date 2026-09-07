@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import '../state/auth_scope.dart';
 
 class AuthGate extends StatelessWidget {
-  const AuthGate({super.key});
+  const AuthGate({super.key, this.destination = '/dashboard', this.arguments});
+
+  final String destination;
+  final Object? arguments;
 
   @override
   Widget build(BuildContext context) {
@@ -13,10 +16,11 @@ class AuthGate extends StatelessWidget {
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!context.mounted) return;
+      if (!context.mounted || ModalRoute.of(context)?.isCurrent != true) return;
       Navigator.pushReplacementNamed(
         context,
-        auth.isAuthenticated ? '/dashboard' : '/login',
+        destination,
+        arguments: arguments,
       );
     });
 

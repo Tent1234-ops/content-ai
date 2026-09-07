@@ -56,6 +56,27 @@ class AppShell extends StatelessWidget {
               if (isAdmin) const Divider(),
               if (isAdmin)
                 ListTile(
+                  leading: const Icon(Icons.manage_accounts_outlined),
+                  title: const Text('จัดการผู้ใช้'),
+                  selected: currentRoute == '/admin-users',
+                  onTap: () => _navigate(context, '/admin-users'),
+                ),
+              if (isAdmin)
+                ListTile(
+                  leading: const Icon(Icons.model_training),
+                  title: const Text('เทรนโมเดล AI'),
+                  selected: currentRoute == '/admin-training',
+                  onTap: () => _navigate(context, '/admin-training'),
+                ),
+              if (isAdmin)
+                ListTile(
+                  leading: const Icon(Icons.tune),
+                  title: const Text('ตั้งค่าการวิเคราะห์'),
+                  selected: currentRoute == '/admin-analysis-settings',
+                  onTap: () => _navigate(context, '/admin-analysis-settings'),
+                ),
+              if (isAdmin)
+                ListTile(
                   leading: const Icon(Icons.text_snippet_outlined),
                   title: const Text('Transcript Import'),
                   selected: currentRoute == '/admin-transcript-import',

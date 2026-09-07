@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 
 import '../state/auth_scope.dart';
+import 'login_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  const RegisterScreen({
+    super.key,
+    this.destination = const LoginDestination('/dashboard'),
+  });
+
+  final LoginDestination destination;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -36,7 +42,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Account created. Please login.')));
-      Navigator.pushReplacementNamed(context, '/login');
+      Navigator.pushReplacementNamed(context, '/login',
+          arguments: widget.destination);
     } catch (error) {
       if (!mounted) return;
       setState(() => _error = error.toString());
@@ -114,8 +121,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   TextButton(
                     onPressed: auth.loading
                         ? null
-                        : () =>
-                            Navigator.pushReplacementNamed(context, '/login'),
+                        : () => Navigator.pushReplacementNamed(
+                            context, '/login',
+                            arguments: widget.destination),
                     child: const Text('Back to login'),
                   ),
                 ],

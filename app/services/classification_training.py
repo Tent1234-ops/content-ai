@@ -1504,6 +1504,7 @@ def train_and_evaluate_classification_models(
     embedding_cache_folder: str | Path | None = None,
     allow_embedding_download: bool = False,
     enforce_phase22_gate: bool = True,
+    progress_callback: Callable[[str, str | None], None] | None = None,
 ) -> dict[str, Any]:
     if not 0.0 < promotion_threshold <= 1.0:
         raise ClassificationTrainingError(
@@ -1522,6 +1523,8 @@ def train_and_evaluate_classification_models(
         model_version or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     )
     run_root = Path(artifact_root) / version
+    if progress_callback:
+        progress_callback("preparing", None)
     prepared = prepare_classification_dataset(
         db,
         artifact_root=run_root / "dataset",
@@ -1661,6 +1664,8 @@ def train_and_evaluate_classification_models(
     trained_results: list[dict[str, Any]] = []
     estimators: dict[str, Any] = {}
     for spec in available_specs:
+        if progress_callback:
+            progress_callback("cross_validation", spec.model_key)
         try:
             tuning_report: dict[str, Any] | None = None
             selected_factory = spec.factory
@@ -1733,10 +1738,14 @@ def train_and_evaluate_classification_models(
                     unknown_threshold=unknown_threshold,
                 )
             estimator = selected_factory()
+            if progress_callback:
+                progress_callback("fitting", spec.model_key)
             estimator.fit(
                 [item.model_text for item in development_rows],
                 [item.leaf_key for item in development_rows],
             )
+            if progress_callback:
+                progress_callback("evaluating", spec.model_key)
             test = _evaluation_by_language(
                 estimator,
                 test_rows,
@@ -1840,6 +1849,8 @@ def train_and_evaluate_classification_models(
     dataset_manifest_path = prepared.report["artifacts"].get("manifest_path")
     dataset_manifest_sha256 = prepared.report["artifacts"].get("manifest_sha256")
     now = _utc_now()
+    if progress_callback:
+        progress_callback("persisting", None)
     try:
         for result in trained_results:
             model_key = str(result["model_key"])
@@ -2116,6 +2127,18 @@ def _load_classification_artifact_cached(
     return joblib.load(Path(resolved_path))
 
 
+@lru_cache(maxsize=16)
+def _artifact_digest_cached(path: str, modified_ns: int, size: int) -> str:
+    del modified_ns, size
+    return _sha256_file(Path(path))
+
+
+def classification_artifact_sha256(path: str | Path) -> str:
+    artifact_path = Path(path).resolve()
+    stat = artifact_path.stat()
+    return _artifact_digest_cached(str(artifact_path), stat.st_mtime_ns, stat.st_size)
+
+
 def load_classification_artifact(path: str | Path) -> dict[str, Any]:
     artifact_path = Path(path).resolve()
     if not artifact_path.is_file():
@@ -2179,11 +2202,12 @@ def classify_with_artifact(
             )
         ),
         "is_unknown": predictions[0] == str(payload["unknown_leaf_key"]),
+        "unknown_threshold": float(payload["unknown_threshold"]),
         "smoke_test_only": bool(payload.get("smoke_test_only", False)),
     }
 
 
-def activate_classification_model(db: Session, model_id: int) -> dict[str, Any]:
+def activate_classification_model(db: Session, model_id: int, *, user_id: int | None = None) -> dict[str, Any]:
     model = (
         db.query(ClassificationModel)
         .filter(ClassificationModel.model_id == model_id)
@@ -2212,6 +2236,7 @@ def activate_classification_model(db: Session, model_id: int) -> dict[str, Any]:
     db.add(
         SystemLog(
             action="classification_model_activate",
+            user_id=user_id,
             status="success",
             detail=json.dumps(
                 {

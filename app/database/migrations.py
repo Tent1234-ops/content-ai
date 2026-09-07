@@ -374,6 +374,40 @@ def migrate_phase19_transcript_schema(engine: Engine) -> Dict[str, object]:
     }
 
 
+def migrate_analysis_settings_schema(engine: Engine) -> Dict[str, object]:
+    with engine.begin() as connection:
+        if "system_configs" not in inspect(connection).get_table_names():
+            return {"added_columns": []}
+        columns = {column["name"] for column in inspect(connection).get_columns("system_configs")}
+        added = []
+        if "upload_max_duration_seconds" not in columns:
+            connection.execute(text(
+                "ALTER TABLE system_configs ADD COLUMN upload_max_duration_seconds INT NOT NULL DEFAULT 300"
+            ))
+            added.append("upload_max_duration_seconds")
+        return {"added_columns": added}
+
+
+def migrate_training_requestor_schema(engine: Engine) -> Dict[str, object]:
+    """Keep historical training runs when their requesting account is deleted."""
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "model_training_runs" not in inspector.get_table_names():
+            return {"changed": False}
+        column = next(c for c in inspector.get_columns("model_training_runs") if c["name"] == "requested_by")
+        if column["nullable"]:
+            return {"changed": False}
+        dialect = connection.dialect.name
+        if dialect in {"mysql", "mariadb"}:
+            connection.execute(text("ALTER TABLE model_training_runs MODIFY COLUMN requested_by INT NULL"))
+        elif dialect == "postgresql":
+            connection.execute(text("ALTER TABLE model_training_runs ALTER COLUMN requested_by DROP NOT NULL"))
+        else:
+            # Fresh SQLite test databases use the nullable model definition.
+            return {"changed": False, "requires_manual_migration": True}
+        return {"changed": True}
+
+
 def migrate_analysis_payload_schema(engine: Engine) -> Dict[str, object]:
     """Allow saved analysis JSON to exceed MySQL TEXT's 64 KiB limit."""
     widened_columns: list[str] = []

@@ -1,4 +1,7 @@
 import '../models/admin_report.dart';
+import '../models/analysis_settings.dart';
+import '../models/model_training.dart';
+import '../models/managed_user.dart';
 import '../models/common_models.dart';
 import '../models/dataset_item.dart';
 import '../models/dataset_review.dart';
@@ -9,6 +12,86 @@ class AdminRepository {
   AdminRepository({ApiClient? client}) : _client = client ?? ApiClient();
 
   final ApiClient _client;
+
+  Future<ManagedUsersPage> listUsers(
+      {String query = '',
+      String role = 'all',
+      String state = 'all',
+      int offset = 0}) async {
+    final params = Uri(queryParameters: {
+      'q': query,
+      'role': role,
+      'state': state,
+      'offset': '$offset',
+      'limit': '20'
+    }).query;
+    return ManagedUsersPage.fromJson(Map<String, dynamic>.from(
+        await _client.get('/admin/users?$params') as Map));
+  }
+
+  Future<ManagedUser> userDetail(int id) async => ManagedUser.fromJson(
+      Map<String, dynamic>.from(await _client.get('/admin/users/$id') as Map));
+  Future<void> createUser(Map<String, dynamic> fields) async {
+    await _client.post('/admin/users', fields);
+  }
+
+  Future<void> updateUser(int id, Map<String, dynamic> fields) async {
+    await _client.put('/admin/users/$id', fields);
+  }
+
+  Future<void> revokeUserSessions(ManagedUser user) async {
+    await _client.post('/admin/users/${user.id}/revoke-sessions',
+        {'expected_revision': user.revision});
+  }
+
+  Future<int> deleteUser(ManagedUser user, String confirmation) async {
+    final response = Map<String, dynamic>.from(await _client
+        .delete('/admin/users/${user.id}', body: {
+      'expected_revision': user.revision,
+      'confirmation': confirmation
+    }) as Map);
+    return (response['files_remaining'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<TrainingOverview> trainingOverview() async =>
+      TrainingOverview.fromJson(
+          trainingMap(await _client.get('/admin/training')));
+  Future<TrainingRun> startTraining(String fingerprint) async =>
+      TrainingRun.fromJson(trainingMap(await _client
+          .post('/admin/training/runs', {'dataset_fingerprint': fingerprint})));
+  Future<TrainingRun> trainingRun(String id) async => TrainingRun.fromJson(
+      trainingMap(await _client.get('/admin/training/runs/$id')));
+  Future<PaginatedResult<TrainedModel>> trainingModels(
+      {required int offset}) async {
+    final json = trainingMap(
+        await _client.get('/admin/training/models?limit=20&offset=$offset'));
+    return PaginatedResult(
+        total: (json['total'] as num).toInt(),
+        items: trainingRows(json['items']).map(TrainedModel.fromJson).toList());
+  }
+
+  Future<TrainedModel> trainingModel(int id) async => TrainedModel.fromJson(
+      trainingMap(await _client.get('/admin/training/models/$id')));
+  Future<void> activateTrainingModel(int id, int? activeId) async {
+    await _client.post('/admin/training/models/$id/activate',
+        {'expected_active_model_id': activeId});
+  }
+
+  Future<AnalysisSettings> getAnalysisSettings() async =>
+      AnalysisSettings.fromJson(Map<String, dynamic>.from(
+          await _client.get('/admin/analysis-settings') as Map));
+
+  Future<AnalysisSettings> saveAnalysisSettings({
+    required int uploadMaxDurationSeconds,
+    required String asrModel,
+    required int hookDurationSeconds,
+  }) async =>
+      AnalysisSettings.fromJson(Map<String, dynamic>.from(
+          await _client.put('/admin/analysis-settings', {
+        'upload_max_duration_seconds': uploadMaxDurationSeconds,
+        'asr_model': asrModel,
+        'hook_duration_seconds': hookDurationSeconds,
+      }) as Map));
 
   Future<PaginatedResult<DatasetItem>> listDatasets({
     required int limit,

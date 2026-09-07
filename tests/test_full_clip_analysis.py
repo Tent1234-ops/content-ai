@@ -97,7 +97,9 @@ class FullClipAnalysisTests(unittest.TestCase):
             "clip.mp4",
             display_name="clip.mp4",
             hook_duration_seconds=60,
+            asr_model_size="small",
         )
+        self.assertEqual(transcribe.call_args.kwargs["model_size"], "small")
 
         self.assertIn("conclusion", result["transcript"])
         self.assertEqual(result["raw_transcript"], result["transcript"])
@@ -118,6 +120,16 @@ class FullClipAnalysisTests(unittest.TestCase):
             result["analysis"]["stt_meta"]["hook_segment_count"],
             2,
         )
+        shorter_hook = analyze_video("clip.mp4", hook_duration_seconds=30, asr_model_size="base")
+        self.assertEqual(transcribe.call_args.kwargs["model_size"], "base")
+        self.assertEqual(shorter_hook["analysis"]["hook_transcript"], "opening phone review")
+        self.assertIn("conclusion", shorter_hook["transcript"])
+
+    @patch("models.speech_to_text.transcribe_with_meta", side_effect=RuntimeError("unavailable"))
+    @patch("app.services.pipeline.core.extract_audio", return_value=True)
+    def test_explicit_whisper_failure_does_not_silently_change_model(self, _extract, _transcribe):
+        with self.assertRaisesRegex(RuntimeError, "Whisper base"):
+            analyze_video("clip.mp4", asr_model_size="base")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../models/recommendation_result.dart';
+import '../models/analysis_settings.dart';
 import '../repositories/analysis_repository.dart';
 import '../services/video_metadata_reader.dart';
 import '../state/auth_scope.dart';
@@ -11,16 +12,18 @@ import '../widgets/state_widgets.dart';
 import 'result_screen.dart';
 
 class UploadScreen extends StatefulWidget {
-  const UploadScreen({super.key});
+  const UploadScreen({super.key, this.repository});
+  final AnalysisRepository? repository;
 
   @override
   State<UploadScreen> createState() => _UploadScreenState();
 }
 
 class _UploadScreenState extends State<UploadScreen> {
-  static const _maximumVideoDuration = Duration(minutes: 5);
-
-  final _repository = AnalysisRepository();
+  late final AnalysisRepository _repository;
+  AnalysisSettings? _settings;
+  String? _settingsError;
+  bool _settingsLoading = true;
   String? _error;
   bool _loading = false;
   String? _selectedFileName;
@@ -34,8 +37,44 @@ class _UploadScreenState extends State<UploadScreen> {
   String? _suggestedTopic;
   bool _hasReadRouteArgs = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _repository = widget.repository ?? AnalysisRepository();
+    _loadSettings();
+  }
+
+  Future<bool> _loadSettings() async {
+    setState(() {
+      _settingsLoading = true;
+      _settingsError = null;
+    });
+    try {
+      final settings = await _repository.getSettings();
+      if (!mounted) return false;
+      setState(() {
+        _settings = settings;
+        if (!settings.asrReady) {
+          _settingsError = 'โมเดลถอดเสียงยังไม่พร้อม กรุณาติดต่อผู้ดูแลระบบ';
+        }
+      });
+      return settings.asrReady;
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _settings = null;
+          _settingsError = 'โหลดการตั้งค่าการวิเคราะห์ไม่สำเร็จ: $error';
+        });
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _settingsLoading = false);
+    }
+  }
+
   Future<void> _pickFile() async {
     try {
+      if (!await _loadSettings()) return;
       final file = await FilePicker.platform.pickFiles(
         type: FileType.video,
         allowMultiple: false,
@@ -84,7 +123,7 @@ class _UploadScreenState extends State<UploadScreen> {
         await _showMetadataErrorDialog();
         return;
       }
-      if (selectedDuration > _maximumVideoDuration) {
+      if (!_settings!.acceptsDuration(selectedDuration)) {
         await _showVideoTooLongDialog(selectedDuration);
         return;
       }
@@ -135,6 +174,12 @@ class _UploadScreenState extends State<UploadScreen> {
     });
 
     try {
+      if (!await _loadSettings()) return;
+      if (_selectedDuration == null ||
+          !_settings!.acceptsDuration(_selectedDuration!)) {
+        await _showVideoTooLongDialog(_selectedDuration);
+        return;
+      }
       final jobId = await _repository.startAnalyzeAndSaveVideo(
         fileName: _selectedFileName!,
         filePath: _selectedFilePath,
@@ -170,6 +215,8 @@ class _UploadScreenState extends State<UploadScreen> {
     } catch (error) {
       if (!mounted) return;
       if (_isDurationLimitError(error)) {
+        await _loadSettings();
+        if (!mounted) return;
         await _showVideoTooLongDialog(_selectedDuration);
         if (mounted) _clearSelection();
         return;
@@ -287,11 +334,23 @@ class _UploadScreenState extends State<UploadScreen> {
       child: RefreshIndicator(
         onRefresh: () async {
           _clearSelection();
+          await _loadSettings();
         },
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: ListView(
             children: [
+              if (_settingsLoading) const LinearProgressIndicator(),
+              if (_settingsError != null)
+                ErrorStateView(
+                    message: _settingsError!, onRetry: _loadSettings),
+              if (_settings != null)
+                Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Text(
+                      'อัปโหลดสูงสุด ${_settings!.uploadMaxDurationSeconds} วินาที · '
+                      'Whisper ${_settings!.asrModel} · ช่วงเปิดคลิป ${_settings!.hookDurationSeconds} วินาที',
+                    )),
               // Header Card
               Card(
                 child: Padding(
@@ -401,7 +460,11 @@ class _UploadScreenState extends State<UploadScreen> {
               // Upload Section
               if (!hasFile) ...[
                 FilledButton.icon(
-                  onPressed: _loading ? null : _pickFile,
+                  onPressed: _loading ||
+                          _settingsLoading ||
+                          _settings?.asrReady != true
+                      ? null
+                      : _pickFile,
                   icon: const Icon(Icons.upload_file),
                   label: const Text('Pick a Video File'),
                   style: FilledButton.styleFrom(
@@ -410,7 +473,11 @@ class _UploadScreenState extends State<UploadScreen> {
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: _loading ? null : _pickFile,
+                  onPressed: _loading ||
+                          _settingsLoading ||
+                          _settings?.asrReady != true
+                      ? null
+                      : _pickFile,
                   icon: const Icon(Icons.cloud_upload_outlined),
                   label: const Text('Or tap to browse'),
                 ),
@@ -544,10 +611,6 @@ class _UploadScreenState extends State<UploadScreen> {
                             text: 'Use clear audio for better transcription'),
                         const SizedBox(height: 8),
                         const _TipRow(
-                          text: 'Videos must be no longer than 5 minutes',
-                        ),
-                        const SizedBox(height: 8),
-                        const _TipRow(
                           text: 'MP4, WebM, or MOV formats work best',
                         ),
                       ],
@@ -571,7 +634,9 @@ extension on _UploadScreenState {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('วิดีโอยาวเกินกำหนด'),
-        content: Text('อัปโหลดวิดีโอได้สูงสุด 5 นาที$detail'),
+        content: Text(_settings == null
+            ? 'ความยาวเกินขีดจำกัดที่เซิร์ฟเวอร์กำหนด$detail'
+            : 'อัปโหลดวิดีโอได้สูงสุด ${_settings!.uploadMaxDurationSeconds} วินาที$detail'),
         actions: [
           FilledButton(
             onPressed: () => Navigator.pop(context),
@@ -602,9 +667,7 @@ extension on _UploadScreenState {
 
   bool _isDurationLimitError(Object error) {
     final message = error.toString().toLowerCase();
-    return message.contains('5-minute upload limit') ||
-        message.contains('maximum video duration') ||
-        message.contains('300 seconds');
+    return message.contains('maximum video duration');
   }
 
   String _formatDuration(Duration duration) {

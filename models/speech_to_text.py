@@ -1,6 +1,7 @@
 import importlib
 import os
 from pathlib import Path
+from threading import RLock
 from typing import Dict
 
 # Lazy model manager that loads WhisperModel per requested size
@@ -14,6 +15,7 @@ except Exception:
 from app.runtime import get as runtime_get
 
 _MODEL_STORE: Dict[str, Dict] = {}
+_MODEL_LOAD_LOCK = RLock()
 _REQUIRED_MODEL_FILES = ("config.json", "model.bin", "tokenizer.json")
 
 
@@ -68,6 +70,11 @@ class ModelManager:
     @staticmethod
     def get_model(size: str):
         """Return a WhisperModel instance for given size; load lazily and cache."""
+        with _MODEL_LOAD_LOCK:
+            return ModelManager._load_model(size)
+
+    @staticmethod
+    def _load_model(size: str):
         size = (size or configured_model_size()).lower()
         if size in _MODEL_STORE:
             return _MODEL_STORE[size]["model"]
@@ -102,6 +109,7 @@ class ModelManager:
             model = WhisperModel(model_source, device=device, compute_type=compute)
         except Exception:
             # fallback to CPU int8
+            device, compute = "cpu", "int8"
             fallback_kwargs = {"device": "cpu", "compute_type": "int8"}
             if "local_files_only" in model_kwargs:
                 fallback_kwargs["local_files_only"] = True
@@ -162,6 +170,9 @@ def transcribe_with_meta(audio_path, language=None, model_size: str = None):
 
     return {
         "text": " ".join(text_parts).strip(),
+        "model_size": model_size,
+        "device": _MODEL_STORE.get(model_size, {}).get("device"),
+        "compute_type": _MODEL_STORE.get(model_size, {}).get("compute_type"),
         "language": getattr(info, "language", None),
         "language_probability": getattr(info, "language_probability", None),
         "segment_count": len(text_parts),

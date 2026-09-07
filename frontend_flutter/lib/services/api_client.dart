@@ -60,10 +60,11 @@ class ApiClient {
     return _decode(response);
   }
 
-  Future<dynamic> delete(String path) async {
+  Future<dynamic> delete(String path, {Map<String, dynamic>? body}) async {
     final response = await http.delete(
       Uri.parse(baseUrl + path),
-      headers: await _headers(json: false),
+      headers: await _headers(json: body != null),
+      body: body == null ? null : jsonEncode(body),
     );
     return _decode(response);
   }

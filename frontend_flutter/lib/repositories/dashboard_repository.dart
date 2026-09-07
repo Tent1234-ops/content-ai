@@ -6,6 +6,14 @@ class DashboardRepository {
 
   final ApiClient _client;
 
+  Future<LiveTrendSnapshot> getPublicTrendSnapshot({int limit = 50}) async {
+    final response =
+        await _client.get('/dashboard/public/trends?trend_limit=$limit');
+    return LiveTrendSnapshot.fromJson(
+      Map<String, dynamic>.from(response as Map),
+    );
+  }
+
   Future<DashboardOverview> getOverview() async {
     final response =
         await _client.get('/dashboard/summary?trend_mode=live&trend_limit=50');
@@ -30,7 +38,7 @@ class DashboardRepository {
         ? ''
         : '&video_category_id=${Uri.encodeQueryComponent(categoryId)}';
     final response = await _client.get(
-      '/dashboard/live-trends/youtube/categories?trend_limit=$limit$categoryQuery',
+      '/dashboard/public/youtube/categories?trend_limit=$limit$categoryQuery',
     );
     return YouTubeCategoryTrendSnapshot.fromJson(
       Map<String, dynamic>.from(response as Map),
