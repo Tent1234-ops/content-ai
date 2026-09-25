@@ -9,6 +9,7 @@ from app.schemas.contents import (
     UserContentHistoryResponse,
 )
 from app.services.contents import get_user_content_detail, list_user_contents
+from app.services.usage_statistics import usage_statistics
 
 router = APIRouter(prefix="/contents", tags=["contents"])
 
@@ -22,6 +23,19 @@ def my_contents(
 ):
     total, items = list_user_contents(db, user_id=current_user.user_id, limit=limit, offset=offset)
     return UserContentHistoryResponse(total=total, items=items)
+
+
+@router.get("/statistics")
+def content_statistics(
+    year: int = Query(ge=2000, le=9999),
+    month: int | None = Query(default=None, ge=1, le=12),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return usage_statistics(db, user_id=current_user.user_id, year=year, month=month)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/{content_id}", response_model=UserContentDetailResponse)

@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
-from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.mysql import LONGTEXT, VARCHAR
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -250,9 +250,10 @@ class DatasetContent(Base):
         default=False,
     )
     is_active = Column(Boolean, nullable=False, default=True)
-    views = Column(Integer, nullable=False, default=0)
-    likes = Column(Integer, nullable=False, default=0)
-    comments = Column(Integer, nullable=False, default=0)
+    views = Column(BigInteger, nullable=False, default=0)
+    deleted_at = Column(DateTime)
+    likes = Column(BigInteger, nullable=False, default=0)
+    comments = Column(BigInteger, nullable=False, default=0)
     trend_score = Column(Float, nullable=False, default=0.0)
     duration_seconds = Column(Integer)
     published_at = Column(DateTime)
@@ -477,6 +478,15 @@ class SystemConfig(Base):
     enable_google_trends = Column(Boolean, nullable=False, default=True)
     enable_tiktok_trending = Column(Boolean, nullable=False, default=True)
     auto_scan_interval_hours = Column(Integer, nullable=False, default=6)
+    trend_refresh_enabled = Column(Boolean, nullable=False, default=True)
+    trend_refresh_seconds = Column(Integer)
+    trend_schedule_mode = Column(String(20), nullable=False, default="interval")
+    trend_window_start_hour = Column(Integer, nullable=False, default=14)
+    trend_window_end_hour = Column(Integer, nullable=False, default=23)
+    trend_worker_seen_at = Column(DateTime)
+    trend_worker_status = Column(String(40))
+    youtube_category_refresh_seconds = Column(Integer)
+    trend_notification_mode = Column(String(20), nullable=False, default="all")
     # New runtime/admin-configurable fields
     asr_model_default = Column(String(20), nullable=False, default="small")
     upload_max_duration_seconds = Column(Integer, nullable=False, default=300)
@@ -540,7 +550,8 @@ class FollowedTopic(Base):
 
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-    match_type = Column(String(20), nullable=False)  # 'domain' or 'keyword'
+    match_type = Column(String(20), nullable=False)
+    platform = Column(String(20), nullable=False, default="all")
     value = Column(String(255), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -561,6 +572,7 @@ class UserTrendWatchSession(Base):
         Integer,
         ForeignKey("trend_snapshot_runs.run_id", ondelete="SET NULL"),
     )
+    last_seen_category_run_id = Column(Integer)
     is_active = Column(Boolean, nullable=False, default=True)
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -591,6 +603,40 @@ class TrendSnapshotRun(Base):
         back_populates="run",
         cascade="all, delete-orphan",
     )
+
+
+class TrendCollectionSlot(Base):
+    __tablename__ = "trend_collection_slots"
+    __table_args__ = (
+        UniqueConstraint("region", "scheduled_for", name="uq_trend_collection_region_slot"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    region = Column(String(10), nullable=False)
+    scheduled_for = Column(DateTime, nullable=False, index=True)
+    actor = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default="running")
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime)
+    result_json = Column(Text, nullable=False, default="{}")
+
+
+class TrendHistoryBucket(Base):
+    __tablename__ = "trend_history_buckets"
+    __table_args__ = (
+        UniqueConstraint("region", "platform", "ranking_scope", "bucket_at",
+                         name="uq_trend_history_scope_hour"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    region = Column(String(10), nullable=False)
+    platform = Column(String(20), nullable=False)
+    ranking_scope = Column(String(64), nullable=False)
+    bucket_at = Column(DateTime, nullable=False, index=True)
+    first_at = Column(DateTime, nullable=False)
+    last_at = Column(DateTime, nullable=False)
+    first_sample = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=False)
+    last_sample = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=False)
 
 
 class TrendSnapshotItem(Base):
@@ -643,3 +689,163 @@ class TrendSnapshotItem(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     run = relationship("TrendSnapshotRun", back_populates="items")
+
+
+class ReferenceStatisticsConfig(Base):
+    __tablename__ = "reference_statistics_configs"
+    config_id = Column(Integer, primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=True)
+    interval_seconds = Column(Integer, nullable=False, default=3600)
+    daily_request_budget = Column(Integer, nullable=False, default=100)
+    blocked_until = Column(DateTime)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ReferenceStatisticsRun(Base):
+    __tablename__ = "reference_statistics_runs"
+    run_id = Column(Integer, primary_key=True)
+    status = Column(String(32), nullable=False, default="running")
+    actor = Column(String(32), nullable=False)
+    started_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime)
+    requests_used = Column(Integer, nullable=False, default=0)
+    candidate_count = Column(Integer, nullable=False, default=0)
+    error_code = Column(String(64))
+
+
+class ReferenceVideoStatistic(Base):
+    __tablename__ = "reference_video_statistics"
+    __table_args__ = (
+        UniqueConstraint("run_id", "dataset_id", name="uq_reference_stats_run_dataset"),
+        Index("ix_reference_stats_dataset_time", "dataset_id", "observed_at"),
+    )
+    observation_id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("reference_statistics_runs.run_id"), nullable=False)
+    dataset_id = Column(Integer, ForeignKey("dataset_contents.dataset_id"), nullable=False)
+    video_id = Column(String(32), nullable=False)
+    source_url = Column(String(1024), nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+    status = Column(String(32), nullable=False)
+    error_code = Column(String(64))
+    views = Column(BigInteger)
+    likes = Column(BigInteger)
+    comments = Column(BigInteger)
+    view_metric_version = Column(String(64), nullable=False)
+
+
+class TrendHistoryAttempt(Base):
+    __tablename__ = "trend_history_attempts"
+    __table_args__ = (
+        UniqueConstraint("run_id", "platform", "ranking_scope", name="uq_trend_history_attempt_scope"),
+        Index("ix_trend_attempt_scope_time", "region", "platform", "ranking_scope", "observed_at"),
+    )
+    id = Column(Integer, primary_key=True)
+    # No FK: this audit record must survive raw snapshot pruning.
+    run_id = Column(Integer, nullable=False)
+    region = Column(String(10), nullable=False)
+    platform = Column(String(20), nullable=False)
+    ranking_scope = Column(String(64), nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+    status = Column(String(32), nullable=False)
+    sample_count = Column(Integer)
+
+
+class TrendTopic(Base):
+    __tablename__ = "trend_topics"
+    topic_id = Column(String(64), primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class TrendTopicVersion(Base):
+    __tablename__ = "trend_topic_versions"
+    version_id = Column(String(64), primary_key=True)
+    extractor_version = Column(String(100), nullable=False)
+    alias_version = Column(String(100), nullable=False)
+    catalog_json = Column(AnalysisPayloadText, nullable=False)
+    manifest_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class TrendTopicDefinition(Base):
+    __tablename__ = "trend_topic_definitions"
+    version_id = Column(String(64), ForeignKey("trend_topic_versions.version_id"), primary_key=True)
+    topic_id = Column(String(64), ForeignKey("trend_topics.topic_id"), primary_key=True)
+    label = Column(String(255), nullable=False)
+    kind = Column(String(64), nullable=False)
+
+
+class TrendTopicAlias(Base):
+    __tablename__ = "trend_topic_aliases"
+    __table_args__ = (UniqueConstraint("version_id", "alias_hash", name="uq_topic_version_alias"),)
+    id = Column(Integer, primary_key=True)
+    version_id = Column(String(64), ForeignKey("trend_topic_versions.version_id"), nullable=False)
+    topic_id = Column(String(64), ForeignKey("trend_topics.topic_id"), nullable=False)
+    alias_hash = Column(String(64), nullable=False)
+    text = Column(String(255), nullable=False)
+    rules_json = Column(Text, nullable=False)
+
+
+class TrendTopicConfig(Base):
+    __tablename__ = "trend_topic_configs"
+    config_id = Column(Integer, primary_key=True)
+    active_version_id = Column(String(64), ForeignKey("trend_topic_versions.version_id"), nullable=False)
+
+
+class TrendTopicObservation(Base):
+    __tablename__ = "trend_topic_observations"
+    __table_args__ = (
+        UniqueConstraint("region", "platform", "ranking_scope", "source_run_id", name="uq_topic_source_scope"),
+        Index("ix_topic_observation_scope_time", "region", "platform", "ranking_scope", "observed_at"),
+    )
+    observation_id = Column(Integer, primary_key=True)
+    # Deliberately not a FK: evidence survives deletion of raw snapshots.
+    source_run_id = Column(Integer, nullable=False)
+    region = Column(String(10), nullable=False)
+    platform = Column(String(20), nullable=False)
+    ranking_scope = Column(String(64), nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+    source_kind = Column(String(32), nullable=False)
+    status = Column(String(32), nullable=False)
+    input_sha256 = Column(String(64), nullable=False)
+    payload_json = Column(AnalysisPayloadText, nullable=False)
+
+
+class TrendTopicJob(Base):
+    __tablename__ = "trend_topic_jobs"
+    __table_args__ = (
+        UniqueConstraint("observation_id", "version_id", name="uq_topic_job_observation_version"),
+        Index("ix_topic_job_queue", "status", "available_at"),
+    )
+    job_id = Column(Integer, primary_key=True)
+    observation_id = Column(Integer, ForeignKey("trend_topic_observations.observation_id"), nullable=False)
+    version_id = Column(String(64), ForeignKey("trend_topic_versions.version_id"), nullable=False)
+    status = Column(String(24), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    available_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    lease_until = Column(DateTime)
+    claim_token = Column(String(36))
+    error_code = Column(String(80))
+    result_json = Column(Text)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime)
+
+
+class TrendTopicEvidence(Base):
+    __tablename__ = "trend_topic_evidence"
+    __table_args__ = (UniqueConstraint("job_id", "video_id", name="uq_topic_job_video"),)
+    evidence_id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("trend_topic_jobs.job_id"), nullable=False, index=True)
+    video_id = Column(String(11).with_variant(VARCHAR(11, charset="ascii", collation="ascii_bin"), "mysql"), nullable=False)
+    title = Column(Text, nullable=False)
+    video_url = Column(String(1024), nullable=False)
+    rank = Column(Integer, nullable=False)
+    status = Column(String(24), nullable=False)
+    matches_json = Column(AnalysisPayloadText, nullable=False)
+
+
+class TrendTopicCount(Base):
+    __tablename__ = "trend_topic_counts"
+    job_id = Column(Integer, ForeignKey("trend_topic_jobs.job_id"), primary_key=True)
+    topic_id = Column(String(64), ForeignKey("trend_topics.topic_id"), primary_key=True)
+    video_count = Column(Integer, nullable=False)
+    eligible_videos = Column(Integer, nullable=False)

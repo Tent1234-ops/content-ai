@@ -282,17 +282,20 @@ class FollowedTopicItem {
     required this.matchType,
     required this.value,
     required this.createdAt,
+    this.platform = 'all',
   });
 
   final int id;
   final String matchType;
   final String value;
   final String createdAt;
+  final String platform;
 
   factory FollowedTopicItem.fromJson(Map<String, dynamic> json) {
     return FollowedTopicItem(
       id: (json['id'] as num?)?.toInt() ?? 0,
       matchType: json['match_type']?.toString() ?? 'keyword',
+      platform: json['platform']?.toString() ?? 'all',
       value: json['value']?.toString() ?? '',
       createdAt: json['created_at']?.toString() ?? '',
     );

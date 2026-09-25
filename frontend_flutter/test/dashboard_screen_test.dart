@@ -1,4 +1,5 @@
 import 'package:content_ai_web/models/dashboard_overview.dart';
+import 'package:content_ai_web/models/trend_history.dart';
 import 'package:content_ai_web/repositories/dashboard_repository.dart';
 import 'package:content_ai_web/repositories/auth_repository.dart';
 import 'package:content_ai_web/models/app_user.dart';
@@ -339,6 +340,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(find.text('YouTube video 1'), 250,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('YouTube video 1'));
     await tester.pumpAndSettle();
 
@@ -376,6 +380,9 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
 
+    await Scrollable.ensureVisible(tester.element(find.text('YouTube video 2')),
+        alignment: 0.5);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('YouTube video 2'));
     await tester.pumpAndSettle();
 
@@ -466,8 +473,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await Scrollable.ensureVisible(tester.element(find.text('YouTube video 1')),
-        alignment: 0.5);
+    await tester.scrollUntilVisible(find.text('YouTube video 1'), 250,
+        scrollable: find.byType(Scrollable).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('YouTube video 1'));
     await tester.pumpAndSettle();
@@ -482,6 +489,11 @@ void main() {
 }
 
 class _FakeDashboardRepository extends DashboardRepository {
+  @override
+  Future<TrendHistory> getTrendHistory(
+          {required String platform, int days = 5, String? categoryId}) async =>
+      TrendHistory.fromJson({});
+
   _FakeDashboardRepository({Map<String, dynamic>? snapshotJson})
       : _snapshot = LiveTrendSnapshot.fromJson(snapshotJson ?? _snapshotJson()),
         _overview = DashboardOverview.fromJson(_overviewJson());

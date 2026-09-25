@@ -2682,6 +2682,8 @@ def import_reviewed_youtube_cc_dataset(
             .filter(DatasetContent.source_youtube_id == video_id)
             .first()
         )
+        if dataset is not None and dataset.deleted_at is not None:
+            raise YouTubeCCDatasetError(f"Dataset #{dataset.dataset_id} has been deleted from use")
         if decision == "reject":
             if (
                 dataset is not None
@@ -2843,9 +2845,10 @@ def import_reviewed_youtube_cc_dataset(
             "average_views_per_day": performance_metrics["average_views_per_day"],
             "engagement_rate": performance_metrics["engagement_rate"],
             "is_training_eligible": not is_out_of_scope,
-            "is_keyword_recommendation_eligible": not is_out_of_scope,
+            "is_keyword_recommendation_eligible": not is_out_of_scope and split == "train",
             "is_duration_recommendation_eligible": (
                 not is_out_of_scope
+                and split == "train"
                 and 0
                 < int(candidate.get("duration_seconds") or 0)
                 <= RECOMMENDATION_DURATION_MAX_SECONDS

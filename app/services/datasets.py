@@ -13,7 +13,9 @@ def list_dataset_contents(
     category: str | None = None,
     search: str | None = None,
 ):
-    query = db.query(DatasetContent).filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
+    query = db.query(DatasetContent).filter(
+        DatasetContent.source_platform.like(f"{source_prefix}%"), DatasetContent.deleted_at.is_(None),
+    )
 
     if category:
         query = query.filter(DatasetContent.category == category)

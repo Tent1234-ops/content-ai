@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.database.models import (
     Notification,
+    FollowedTopic,
     TrendSnapshotItem,
     TrendSnapshotRun,
     User,
@@ -24,6 +25,8 @@ from app.services.live_trend_snapshots import (
 )
 from app.services.notifications import create_live_trend_notification
 from app.services.view_metrics import view_metrics_are_comparable
+from app.services.follows import notification_mode, matched_interests
+from app.services.category_interest_notifications import compare_category_interests
 
 
 SUCCESS_PROVIDER_STATES = {"ok", "empty"}
@@ -394,6 +397,12 @@ def compare_live_trend_snapshot(
 ) -> Dict[str, object]:
     region = region.upper()
     platforms = tuple(platforms)
+    watch_session = db.query(UserTrendWatchSession).filter(
+        UserTrendWatchSession.watch_session_id == watch_session.watch_session_id,
+        UserTrendWatchSession.user_id == user.user_id,
+    ).populate_existing().with_for_update().one()
+    mode = notification_mode(db, user.user_id)
+    topics = db.query(FollowedTopic).filter(FollowedTopic.user_id == user.user_id).all()
     snapshot = load_latest_live_snapshot(db, region=region, limit=limit)
     latest_run = (
         db.query(TrendSnapshotRun)
@@ -405,14 +414,16 @@ def compare_live_trend_snapshot(
         .order_by(TrendSnapshotRun.run_id.desc())
         .first()
     )
-    new_notifications: List[Notification] = []
+    new_notifications = compare_category_interests(
+        db, watch_session=watch_session, region=region, topics=topics, mode=mode)
 
     if latest_run is None:
+        db.commit()
         _apply_session_and_engagement_status(db, snapshot=snapshot, watch_session=watch_session)
         return {
             **snapshot,
-            "new_count": 0,
-            "new_notifications": [],
+            "new_count": len(new_notifications),
+            "new_notifications": new_notifications,
         }
 
     if watch_session.baseline_run_id is None or watch_session.last_seen_run_id is None:
@@ -423,8 +434,8 @@ def compare_live_trend_snapshot(
         _apply_session_and_engagement_status(db, snapshot=snapshot, watch_session=watch_session)
         return {
             **snapshot,
-            "new_count": 0,
-            "new_notifications": [],
+            "new_count": len(new_notifications),
+            "new_notifications": new_notifications,
         }
 
     last_seen_run_id = int(watch_session.last_seen_run_id)
@@ -469,12 +480,16 @@ def compare_live_trend_snapshot(
                     for item in current_items:
                         if item.trend_key in previous_keys:
                             continue
+                        interests = matched_interests(item, topics, detected_at=detected_at)
+                        if mode == 'off' or (mode == 'following' and not interests):
+                            continue
                         notification = create_live_trend_notification(
                             db,
                             user_id=user.user_id,
                             watch_session_id=watch_session.watch_session_id,
                             item=item,
                             detected_at=detected_at,
+                            matched_interests=interests,
                         )
                         if notification is not None:
                             new_notifications.append(notification)
@@ -484,6 +499,7 @@ def compare_live_trend_snapshot(
         watch_session.last_seen_at = datetime.utcnow()
         db.commit()
 
+    db.commit()
     _apply_session_and_engagement_status(db, snapshot=snapshot, watch_session=watch_session)
     return {
         **snapshot,

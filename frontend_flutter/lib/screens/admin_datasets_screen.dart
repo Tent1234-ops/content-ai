@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import '../widgets/reference_statistics_panel.dart';
 
 import '../models/dataset_item.dart';
 import '../models/dataset_review.dart';
 import '../repositories/admin_repository.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
+import '../widgets/dataset_readiness_panel.dart';
 
 class AdminDatasetsScreen extends StatefulWidget {
   const AdminDatasetsScreen({super.key, this.repository});
@@ -23,9 +25,11 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
   String _category = 'all';
   String? _error;
   bool _loading = false;
+  bool _deleting = false;
   int _offset = 0;
   final int _limit = 12;
   int _total = 0;
+  int _tab = 0;
 
   @override
   void initState() {
@@ -49,6 +53,12 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
         category: _category,
       );
       if (!mounted) return;
+      if (response.items.isEmpty && _offset > 0) {
+        _offset =
+            response.total == 0 ? 0 : ((response.total - 1) ~/ _limit) * _limit;
+        await _load();
+        return;
+      }
       final discoveredCategories = <String>{
         'all',
         ...taxonomyLeaves.map((item) => item.leafKey),
@@ -110,6 +120,46 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
     }
   }
 
+  Future<void> _delete(DatasetItem item) async {
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+              title: const Text('ลบ Dataset ออกจากการใช้งาน?'),
+              content: SizedBox(
+                  width: 520,
+                  child: Text('#${item.datasetId} ${item.title}\n\n'
+                      'จะไม่นำรายการนี้ไปฝึกหรือแนะนำในงานใหม่ แต่เก็บหลักฐานของผลเก่าไว้ '
+                      'โมเดลที่ใช้งานอยู่ต้องฝึกใหม่จึงจะตัดข้อมูลนี้ออกจากสิ่งที่เรียนรู้แล้ว')),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('ยกเลิก')),
+                FilledButton.icon(
+                    onPressed: () => Navigator.pop(context, true),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('ยืนยันลบ Dataset')),
+              ],
+            ));
+    if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
+    try {
+      await _repository.deleteDataset(item.datasetId);
+      if (!mounted) return;
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('ลบ Dataset ออกจากการใช้งานแล้ว')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('ลบไม่สำเร็จ: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AppShell(
@@ -125,88 +175,113 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
       ],
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: DropdownButtonFormField<String>(
-              key: const ValueKey('dataset-category-filter'),
-              initialValue: _category,
-              decoration: const InputDecoration(labelText: 'Category'),
-              items: _categories
-                  .map(
-                    (value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(
-                        _categoryLabel(value),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => _category = value);
-                _applyFilters();
-              },
-            ),
+          DefaultTabController(
+            length: 3,
+            initialIndex: _tab,
+            child: TabBar(
+                onTap: (index) => setState(() => _tab = index),
+                tabs: const [
+                  Tab(text: 'รายการข้อมูล'),
+                  Tab(text: 'คุณภาพและแผนเก็บข้อมูล'),
+                  Tab(text: 'สถิติและการเติบโต'),
+                ]),
           ),
-          if (_loading) const LinearProgressIndicator(),
-          Expanded(
-            child: _error != null
-                ? ErrorStateView(message: _error!, onRetry: _load)
-                : _items.isEmpty
-                    ? const EmptyStateView(
-                        title: 'No datasets found',
-                        message: 'No approved datasets match these filters.',
-                        icon: Icons.storage_outlined,
-                      )
-                    : RefreshIndicator(
-                        onRefresh: _load,
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: _items.length + 1,
-                          itemBuilder: (context, index) {
-                            if (index == _items.length) {
-                              return PaginationBar(
-                                offset: _offset,
-                                limit: _limit,
-                                total: _total,
-                                onPrevious: _offset <= 0
-                                    ? null
-                                    : () {
-                                        setState(() => _offset =
-                                            (_offset - _limit)
-                                                .clamp(0, _offset));
-                                        _load();
-                                      },
-                                onNext: _offset + _limit >= _total
-                                    ? null
-                                    : () {
-                                        setState(() => _offset += _limit);
-                                        _load();
-                                      },
-                              );
-                            }
-                            final item = _items[index];
-                            final categoryLabel = item.taxonomyPath.isNotEmpty
-                                ? item.taxonomyPath
-                                : item.category;
-                            return Card(
-                              child: ListTile(
-                                leading: const Icon(Icons.dataset_outlined),
-                                title: Text(item.title),
-                                subtitle: Text(
-                                  '${item.sourcePlatform} | $categoryLabel\n'
-                                  'views ${item.views} likes ${item.likes} comments ${item.comments} | '
-                                  'duration ${item.durationSeconds ?? 0}s',
-                                ),
-                                isThreeLine: true,
-                                onTap: () => _openEditor(item),
-                              ),
-                            );
-                          },
+          if (_tab == 1)
+            Expanded(child: DatasetReadinessPanel(repository: _repository))
+          else if (_tab == 2)
+            Expanded(child: ReferenceStatisticsPanel(repository: _repository))
+          else ...[
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: DropdownButtonFormField<String>(
+                key: const ValueKey('dataset-category-filter'),
+                initialValue: _category,
+                decoration: const InputDecoration(labelText: 'Category'),
+                items: _categories
+                    .map(
+                      (value) => DropdownMenuItem(
+                        value: value,
+                        child: Text(
+                          _categoryLabel(value),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-          ),
+                    )
+                    .toList(),
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _category = value);
+                  _applyFilters();
+                },
+              ),
+            ),
+            if (_loading) const LinearProgressIndicator(),
+            Expanded(
+              child: _error != null
+                  ? ErrorStateView(message: _error!, onRetry: _load)
+                  : _items.isEmpty
+                      ? const EmptyStateView(
+                          title: 'No datasets found',
+                          message: 'No approved datasets match these filters.',
+                          icon: Icons.storage_outlined,
+                        )
+                      : RefreshIndicator(
+                          onRefresh: _load,
+                          child: ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            itemCount: _items.length + 1,
+                            itemBuilder: (context, index) {
+                              if (index == _items.length) {
+                                return PaginationBar(
+                                  offset: _offset,
+                                  limit: _limit,
+                                  total: _total,
+                                  onPrevious: _offset <= 0
+                                      ? null
+                                      : () {
+                                          setState(() => _offset =
+                                              (_offset - _limit)
+                                                  .clamp(0, _offset));
+                                          _load();
+                                        },
+                                  onNext: _offset + _limit >= _total
+                                      ? null
+                                      : () {
+                                          setState(() => _offset += _limit);
+                                          _load();
+                                        },
+                                );
+                              }
+                              final item = _items[index];
+                              final categoryLabel = item.taxonomyPath.isNotEmpty
+                                  ? item.taxonomyPath
+                                  : item.category;
+                              return Card(
+                                child: ListTile(
+                                  leading: const Icon(Icons.dataset_outlined),
+                                  title: Text(item.title),
+                                  subtitle: Text(
+                                    '${item.sourcePlatform} | $categoryLabel\n'
+                                    'views ${item.views} likes ${item.likes} comments ${item.comments} | '
+                                    'duration ${item.durationSeconds ?? 0}s',
+                                  ),
+                                  isThreeLine: true,
+                                  trailing: IconButton(
+                                      tooltip: 'ลบ Dataset #${item.datasetId}',
+                                      onPressed: _deleting || _loading
+                                          ? null
+                                          : () => _delete(item),
+                                      icon: const Icon(Icons.delete_outline)),
+                                  onTap: _deleting
+                                      ? null
+                                      : () => _openEditor(item),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+            ),
+          ],
         ],
       ),
     );

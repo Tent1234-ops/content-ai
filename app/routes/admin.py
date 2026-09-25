@@ -6,6 +6,13 @@ from app.database.db import get_db
 from app.database.models import User
 from app.schemas.analysis_settings import AnalysisParameters
 from app.services.analysis_settings import get_analysis_settings, save_analysis_settings
+from app.services.trend_settings import TrendScheduleParameters, trend_schedule, save_trend_schedule
+from app.services.usage_statistics import usage_statistics
+from app.services.dataset_readiness import dataset_readiness
+from app.services.reference_statistics import (
+    ReferenceStatisticsParameters, statistics_overview, statistics_settings,
+    save_statistics_settings, video_statistics_history, refresh_reference_statistics,
+)
 from app.schemas.admin_report import (
     AdminClusterRunListResponse,
     AdminClusterRunDetailResponse,
@@ -40,6 +47,7 @@ from app.services.admin_report import (
     list_admin_datasets,
     list_admin_logs,
     update_admin_dataset,
+    delete_admin_dataset,
 )
 from app.services.admin_settings import (
     get_admin_config,
@@ -55,12 +63,86 @@ from app.services.admin_settings import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+@router.get("/reference-statistics")
+def admin_reference_statistics(offset: int = Query(default=0, ge=0),
+                               limit: int = Query(default=20, ge=1, le=100),
+                               _user: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    return statistics_overview(db, offset=offset, limit=limit)
+
+
+@router.get("/reference-statistics/settings")
+def read_reference_statistics_settings(_user: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    return statistics_settings(db)
+
+
+@router.put("/reference-statistics/settings")
+def update_reference_statistics_settings(values: ReferenceStatisticsParameters,
+        user: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    return save_statistics_settings(db, values, user_id=user.user_id)
+
+
+@router.post("/reference-statistics/refresh", status_code=202)
+def start_reference_statistics_refresh(_user: User = Depends(require_roles("admin"))):
+    from app.services.jobs import enqueue
+    return {"job_id": enqueue(refresh_reference_statistics, actor="admin", force=True), "status": "queued"}
+
+
+@router.get("/datasets/{dataset_id}/statistics")
+def read_dataset_statistics(dataset_id: int, _user: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    try:
+        return video_statistics_history(db, dataset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/usage-statistics")
+def admin_usage_statistics(
+    year: int = Query(ge=2000, le=9999),
+    month: int | None = Query(default=None, ge=1, le=12),
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    try:
+        return usage_statistics(db, user_id=None, year=year, month=month)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/trend-settings")
+def read_trend_settings(
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    return trend_schedule(db)
+
+
+@router.put("/trend-settings")
+def update_trend_settings(
+    parameters: TrendScheduleParameters,
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    return save_trend_schedule(db, parameters, user_id=current_user.user_id)
+
+
 @router.get("/me")
 def admin_profile(current_user: User = Depends(require_roles("admin"))):
     return {
         "message": "Admin access granted",
         "user": UserResponse.model_validate(current_user),
     }
+
+
+@router.get("/datasets/readiness")
+def admin_dataset_readiness(
+    category: str | None = Query(default=None),
+    role: str = Query(default="all", pattern="^(all|classification|evaluation|reference|current_trend|trend_archive|needs_attention)$"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    _current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    return dataset_readiness(db, category=category, role=role, offset=offset, limit=limit)
 
 
 @router.get("/datasets", response_model=AdminDatasetListResponse)
@@ -120,6 +202,23 @@ def admin_dataset_update(
     if item is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return AdminDatasetItem.model_validate(item, from_attributes=True)
+
+
+@router.delete("/datasets/{dataset_id}")
+def admin_dataset_delete(
+    dataset_id: int,
+    confirmation_id: int = Query(ge=1),
+    current_user: User = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    try:
+        deleted = delete_admin_dataset(db, dataset_id=dataset_id,
+                                       user_id=current_user.user_id, confirmation_id=confirmation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return {"deleted": True, "dataset_id": dataset_id, "archived": True}
 
 
 @router.get("/clusters/runs", response_model=AdminClusterRunListResponse)

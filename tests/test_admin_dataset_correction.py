@@ -9,7 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from app.database.db import Base
 from app.database.models import DatasetCollectionRun, DatasetContent, SystemLog
 from app.schemas.admin_report import AdminDatasetUpdate
-from app.services.admin_report import update_admin_dataset
+from app.services.admin_report import update_admin_dataset, delete_admin_dataset
+from app.services.dataset_eligibility import production_transcript_query
 from app.services.dataset_contract import (
     NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
     NOTEBOOKLM_TRANSCRIPT_SOURCE,
@@ -116,6 +117,19 @@ class AdminDatasetCorrectionTests(unittest.TestCase):
         self.db.commit()
         self.db.refresh(row)
         return row
+
+    def test_deleted_training_row_is_excluded_even_if_legacy_code_resets_flags(self):
+        row = self._add_dataset(video_id="archive0001", leaf_key="phone",
+                                transcript="phone battery camera display performance " * 8)
+        self.assertEqual(production_transcript_query(self.db).count(), 1)
+        delete_admin_dataset(self.db, dataset_id=row.dataset_id, confirmation_id=row.dataset_id, user_id=9)
+        self.assertEqual(production_transcript_query(self.db).count(), 0)
+        row.is_active = True
+        row.is_training_eligible = True
+        row.is_keyword_recommendation_eligible = True
+        row.is_duration_recommendation_eligible = True
+        self.db.commit()
+        self.assertEqual(production_transcript_query(self.db).count(), 0)
 
     def test_transcript_and_leaf_correction_updates_all_derived_fields(self):
         old_transcript = "phone battery display camera " * 8

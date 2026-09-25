@@ -13,7 +13,10 @@ from app.database.migrations import (
     archive_phase10_notification_tables,
     migrate_analysis_payload_schema,
     migrate_analysis_settings_schema,
+    migrate_scope_completion_schema,
+    migrate_trend_scheduler_schema,
     migrate_training_requestor_schema,
+    migrate_reference_statistics_schema,
     migrate_classification_split_strategy,
     migrate_phase13_taxonomy_schema,
     migrate_phase19_transcript_schema,
@@ -24,8 +27,12 @@ from app.database.migrations import (
 from app.routes import admin, admin_scanner, analyze, auth, classification, clustering, contents, dashboard, dataset_review, datasets, nlp, recommendation, trends, notifications, follows
 from app.routes import model_management
 from app.routes import user_management
+from app.routes import trend_topics
 from app.services.trending_fetcher import start_trending_fetcher, stop_trending_fetcher
 from app.services.live_trend_snapshots import get_live_provider_health
+from app.services.trend_history import backfill_retained_history
+from app.services.trend_topic_processing import start_topic_worker, stop_topic_worker
+from app.services.trend_topic_store import active_version
 from app.services.taxonomy import sync_taxonomy_registry
 from app.services.admin_settings import get_or_create_admin_config
 from app.services.youtube_cc_dataset import repair_quota_waiting_run_statuses
@@ -34,6 +41,7 @@ from models.speech_to_text import check_model_readiness
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.include_router(model_management.router)
 app.include_router(user_management.router)
+app.include_router(trend_topics.router)
 asr_model_status = check_model_readiness()
 
 def preload_ai_models():
@@ -61,6 +69,8 @@ async def startup_event():
     global asr_model_status
     with SessionLocal() as db:
         asr_model_status = check_model_readiness(get_or_create_admin_config(db).asr_model_default)
+        active_version(db)
+        backfill_retained_history(db)
     if not asr_model_status["ready"]:
         message = (
             "Faster Whisper model is not ready. Run "
@@ -71,11 +81,13 @@ async def startup_event():
         if require_ready not in {"0", "false", "no", "off"}:
             raise RuntimeError(message)
     start_trending_fetcher()
+    start_topic_worker(SessionLocal)
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     stop_trending_fetcher()
+    stop_topic_worker()
 
 
 # Configure CORS for the Flutter Web client.
@@ -121,7 +133,10 @@ try:
     phase19_transcript_migration_status = migrate_phase19_transcript_schema(engine)
     analysis_payload_migration_status = migrate_analysis_payload_schema(engine)
     analysis_settings_migration_status = migrate_analysis_settings_schema(engine)
+    migrate_scope_completion_schema(engine)
+    migrate_trend_scheduler_schema(engine)
     migrate_training_requestor_schema(engine)
+    migrate_reference_statistics_schema(engine)
     taxonomy_db = SessionLocal()
     try:
         taxonomy_seed_status = sync_taxonomy_registry(taxonomy_db)

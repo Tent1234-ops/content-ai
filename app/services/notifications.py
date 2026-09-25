@@ -15,6 +15,7 @@ def create_live_trend_notification(
     watch_session_id: int,
     item: TrendSnapshotItem,
     detected_at: datetime,
+    matched_interests: list[str] | None = None,
 ) -> Notification | None:
     existing = (
         db.query(Notification)
@@ -49,6 +50,8 @@ def create_live_trend_notification(
                 "likes": item.likes,
                 "comments": item.comments,
                 "published_at": item.published_at,
+                "matched_interests": matched_interests or [],
+                "ranking_scope": item.ranking_scope,
             },
             ensure_ascii=False,
         ),

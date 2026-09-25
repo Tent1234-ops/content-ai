@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../widgets/usage_statistics_panel.dart';
 
 import '../models/managed_user.dart';
 import '../repositories/admin_repository.dart';
@@ -161,6 +162,28 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
       currentRoute: '/admin-users',
       isAdmin: true,
       actions: [
+        IconButton(
+            tooltip: 'สถิติการวิเคราะห์ทั้งหมด',
+            icon: const Icon(Icons.bar_chart),
+            onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (context) => Dialog(
+                      child: SizedBox(
+                          width: 880,
+                          child: SingleChildScrollView(
+                              child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Align(
+                                  alignment: Alignment.centerRight,
+                                  child: IconButton(
+                                      tooltip: 'ปิดสถิติ',
+                                      onPressed: () => Navigator.pop(context),
+                                      icon: const Icon(Icons.close))),
+                              const UsageStatisticsPanel(admin: true),
+                            ],
+                          )))),
+                )),
         IconButton(
             tooltip: 'โหลดผู้ใช้ล่าสุด',
             onPressed: _loading || _busy ? null : _load,

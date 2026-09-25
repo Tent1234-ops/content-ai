@@ -28,6 +28,7 @@ from app.services.dataset_eligibility import (
     production_transcript_query,
     validate_training_eligibility_values,
 )
+from app.services.dataset_contract import channel_dataset_split
 from app.services.taxonomy import (
     TAXONOMY_VERSION,
     UNKNOWN_LEAF_KEY,
@@ -109,6 +110,30 @@ def _transcript(video_id, _languages):
 
 
 class YouTubeCCDatasetTests(unittest.TestCase):
+    def test_new_notebooklm_holdouts_have_reference_permissions_disabled_at_import(self):
+        for index, expected_split in enumerate(('validation', 'test')):
+            with self.subTest(split=expected_split), tempfile.TemporaryDirectory() as temp_dir:
+                video_id = f'guard{index:06d}'
+                channel = next(f'held-channel-{i}' for i in range(1000)
+                               if channel_dataset_split(f'held-channel-{i}')[0] == expected_split)
+                video = _video(video_id)
+                video['snippet']['channelId'] = channel
+                created = create_notebooklm_transcript_candidate(self.db, api_key='test-key',
+                    video_url=f'https://youtube.com/watch?v={video_id}',
+                    transcript=(f'รีวิวมือถือ {video_id} กล้อง แบตเตอรี่ หน้าจอ ประสิทธิภาพ ' * 8),
+                    proposed_leaf_key='phone', transcript_language='th', caption_type='unspecified',
+                    youtube_getter=lambda *_a, **_k: {'items': [video]},
+                    artifact_root=Path(temp_dir) / 'raw')
+                review_youtube_cc_candidate(self.db, collection_run_id=created['collection_run_id'],
+                    source_youtube_id=video_id, decision='approve', reviewer='admin',
+                    reviewed_leaf_key='phone', transcript_quality='good', notes='Checked source',
+                    review_root=Path(temp_dir) / 'reviews')
+                row = self.db.query(DatasetContent).filter_by(source_youtube_id=video_id).one()
+                self.assertEqual(row.data_split, expected_split)
+                self.assertTrue(row.is_training_eligible)
+                self.assertFalse(row.is_keyword_recommendation_eligible)
+                self.assertFalse(row.is_duration_recommendation_eligible)
+
     def test_large_text_columns_use_longtext_on_mysql(self):
         for model in (DatasetContent, UserContent):
             column_type = model.__table__.c.transcript.type
@@ -267,7 +292,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
             source_youtube_id=video_id
         ).one()
         self.assertTrue(dataset.is_training_eligible)
-        self.assertTrue(dataset.is_keyword_recommendation_eligible)
+        self.assertEqual(dataset.is_keyword_recommendation_eligible, dataset.data_split == "train")
         self.assertFalse(dataset.is_duration_recommendation_eligible)
         self.assertEqual(dataset.transcript_scope, "full_video")
         self.assertEqual(dataset.transcript_window_seconds, 720)
@@ -553,7 +578,7 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         row = self.db.query(DatasetContent).one()
         self.assertEqual(row.duration_seconds, 3723)
         self.assertTrue(row.is_training_eligible)
-        self.assertTrue(row.is_keyword_recommendation_eligible)
+        self.assertEqual(row.is_keyword_recommendation_eligible, row.data_split == "train")
         self.assertFalse(row.is_duration_recommendation_eligible)
         self.assertEqual(production_transcript_query(self.db).count(), 1)
 
@@ -1531,8 +1556,8 @@ class YouTubeCCDatasetTests(unittest.TestCase):
         self.assertEqual(row.verification_status, "human_verified")
         self.assertEqual(row.label_source, "human_review")
         self.assertTrue(row.is_training_eligible)
-        self.assertTrue(row.is_keyword_recommendation_eligible)
-        self.assertTrue(row.is_duration_recommendation_eligible)
+        self.assertEqual(row.is_keyword_recommendation_eligible, row.data_split == "train")
+        self.assertEqual(row.is_duration_recommendation_eligible, row.data_split == "train")
         self.assertEqual(production_transcript_query(self.db).count(), 1)
 
     def test_import_is_atomic_when_any_review_is_invalid(self):

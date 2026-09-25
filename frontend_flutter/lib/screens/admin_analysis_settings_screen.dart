@@ -5,6 +5,7 @@ import '../models/analysis_settings.dart';
 import '../repositories/admin_repository.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
+import '../widgets/trend_settings_panel.dart';
 
 class AdminAnalysisSettingsScreen extends StatefulWidget {
   const AdminAnalysisSettingsScreen({super.key, this.repository});
@@ -122,123 +123,167 @@ class _AdminAnalysisSettingsScreenState
             tooltip: 'โหลดค่าล่าสุด',
             icon: const Icon(Icons.refresh))
       ],
-      child: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : settings == null
-              ? ErrorStateView(
-                  message: _error ?? 'โหลดการตั้งค่าไม่สำเร็จ', onRetry: _load)
-              : SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
-                  child: Center(
-                      child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1100),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (_error != null)
-                            Padding(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                child: Text(_error!,
-                                    style: TextStyle(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .error))),
-                          LayoutBuilder(builder: (context, constraints) {
-                            final width = constraints.maxWidth >= 900
-                                ? (constraints.maxWidth - 48) / 2
-                                : constraints.maxWidth;
-                            return Wrap(spacing: 48, runSpacing: 32, children: [
-                              SizedBox(
-                                  width: width,
-                                  child: Form(
-                                      key: _form,
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.stretch,
+      child: DefaultTabController(
+          length: 2,
+          child: Column(children: [
+            const TabBar(
+                tabs: [Tab(text: 'วิเคราะห์คลิป'), Tab(text: 'อัปเดตเทรนด์')]),
+            Expanded(
+                child: TabBarView(children: [
+              _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : settings == null
+                      ? ErrorStateView(
+                          message: _error ?? 'โหลดการตั้งค่าไม่สำเร็จ',
+                          onRetry: _load)
+                      : SingleChildScrollView(
+                          padding: const EdgeInsets.all(24),
+                          child: Center(
+                              child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 1100),
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (_error != null)
+                                    Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 16),
+                                        child: Text(_error!,
+                                            style: TextStyle(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .error))),
+                                  LayoutBuilder(
+                                      builder: (context, constraints) {
+                                    final width = constraints.maxWidth >= 900
+                                        ? (constraints.maxWidth - 48) / 2
+                                        : constraints.maxWidth;
+                                    return Wrap(
+                                        spacing: 48,
+                                        runSpacing: 32,
                                         children: [
-                                          Text('วิดีโอและการถอดเสียง',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .titleLarge),
-                                          const SizedBox(height: 24),
-                                          _numberField(_maximum,
-                                              'ความยาวอัปโหลดสูงสุด', 30, 1800),
-                                          const SizedBox(height: 24),
-                                          DropdownButtonFormField<String>(
-                                            key: ValueKey(settings),
-                                            initialValue: _asr,
-                                            isExpanded: true,
-                                            decoration: const InputDecoration(
-                                                labelText:
-                                                    'โมเดลถอดเสียง Whisper',
-                                                border: OutlineInputBorder()),
-                                            items: settings.whisperModels
-                                                .map(
-                                                    (model) => DropdownMenuItem(
-                                                          value: model.name,
-                                                          enabled: model.ready,
-                                                          child: Text(
-                                                              model.ready
-                                                                  ? model.name
-                                                                  : '${model.name} (ยังไม่พร้อม)',
-                                                              style: model.ready
-                                                                  ? null
-                                                                  : TextStyle(
-                                                                      color: Theme.of(
-                                                                              context)
-                                                                          .disabledColor)),
-                                                        ))
-                                                .toList(),
-                                            onChanged: _saving
-                                                ? null
-                                                : (value) => setState(
-                                                    () => _asr = value),
-                                            validator: (value) => settings
-                                                    .whisperModels
-                                                    .any((m) =>
-                                                        m.name == value &&
-                                                        m.ready)
-                                                ? null
-                                                : 'เลือกโมเดลที่พร้อมใช้งาน',
-                                          ),
-                                          const SizedBox(height: 24),
-                                          _numberField(_hook,
-                                              'ช่วงเปิดคลิป (Hook)', 5, 300),
-                                          const SizedBox(height: 24),
-                                          Align(
-                                              alignment: Alignment.centerLeft,
-                                              child: FilledButton.icon(
-                                                onPressed:
-                                                    _saving ? null : _save,
-                                                icon: _saving
-                                                    ? const SizedBox(
-                                                        width: 18,
-                                                        height: 18,
-                                                        child:
-                                                            CircularProgressIndicator(
-                                                                strokeWidth: 2))
-                                                    : const Icon(
-                                                        Icons.save_outlined),
-                                                label: Text(_saving
-                                                    ? 'กำลังตรวจสอบและบันทึก'
-                                                    : 'บันทึกการตั้งค่า'),
-                                              )),
-                                          const SizedBox(height: 16),
-                                          Text(
-                                              'อัปเดตล่าสุด: ${_localTime(settings.updatedAt)}',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodySmall),
-                                        ],
-                                      ))),
-                              SizedBox(
-                                  width: width,
-                                  child: _ClassifierSummary(
-                                      model: settings.classificationModel)),
-                            ]);
-                          }),
-                        ]),
-                  ))),
+                                          SizedBox(
+                                              width: width,
+                                              child: Form(
+                                                  key: _form,
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .stretch,
+                                                    children: [
+                                                      Text(
+                                                          'วิดีโอและการถอดเสียง',
+                                                          style:
+                                                              Theme.of(context)
+                                                                  .textTheme
+                                                                  .titleLarge),
+                                                      const SizedBox(
+                                                          height: 24),
+                                                      _numberField(
+                                                          _maximum,
+                                                          'ความยาวอัปโหลดสูงสุด',
+                                                          30,
+                                                          1800),
+                                                      const SizedBox(
+                                                          height: 24),
+                                                      DropdownButtonFormField<
+                                                          String>(
+                                                        key: ValueKey(settings),
+                                                        initialValue: _asr,
+                                                        isExpanded: true,
+                                                        decoration: const InputDecoration(
+                                                            labelText:
+                                                                'โมเดลถอดเสียง Whisper',
+                                                            border:
+                                                                OutlineInputBorder()),
+                                                        items: settings
+                                                            .whisperModels
+                                                            .map((model) =>
+                                                                DropdownMenuItem(
+                                                                  value: model
+                                                                      .name,
+                                                                  enabled: model
+                                                                      .ready,
+                                                                  child: Text(
+                                                                      model.ready
+                                                                          ? model
+                                                                              .name
+                                                                          : '${model.name} (ยังไม่พร้อม)',
+                                                                      style: model
+                                                                              .ready
+                                                                          ? null
+                                                                          : TextStyle(
+                                                                              color: Theme.of(context).disabledColor)),
+                                                                ))
+                                                            .toList(),
+                                                        onChanged: _saving
+                                                            ? null
+                                                            : (value) =>
+                                                                setState(() =>
+                                                                    _asr =
+                                                                        value),
+                                                        validator: (value) => settings
+                                                                .whisperModels
+                                                                .any((m) =>
+                                                                    m.name ==
+                                                                        value &&
+                                                                    m.ready)
+                                                            ? null
+                                                            : 'เลือกโมเดลที่พร้อมใช้งาน',
+                                                      ),
+                                                      const SizedBox(
+                                                          height: 24),
+                                                      _numberField(
+                                                          _hook,
+                                                          'ช่วงเปิดคลิป (Hook)',
+                                                          5,
+                                                          300),
+                                                      const SizedBox(
+                                                          height: 24),
+                                                      Align(
+                                                          alignment: Alignment
+                                                              .centerLeft,
+                                                          child:
+                                                              FilledButton.icon(
+                                                            onPressed: _saving
+                                                                ? null
+                                                                : _save,
+                                                            icon: _saving
+                                                                ? const SizedBox(
+                                                                    width: 18,
+                                                                    height: 18,
+                                                                    child: CircularProgressIndicator(
+                                                                        strokeWidth:
+                                                                            2))
+                                                                : const Icon(Icons
+                                                                    .save_outlined),
+                                                            label: Text(_saving
+                                                                ? 'กำลังตรวจสอบและบันทึก'
+                                                                : 'บันทึกการตั้งค่า'),
+                                                          )),
+                                                      const SizedBox(
+                                                          height: 16),
+                                                      Text(
+                                                          'อัปเดตล่าสุด: ${_localTime(settings.updatedAt)}',
+                                                          style:
+                                                              Theme.of(context)
+                                                                  .textTheme
+                                                                  .bodySmall),
+                                                    ],
+                                                  ))),
+                                          SizedBox(
+                                              width: width,
+                                              child: _ClassifierSummary(
+                                                  model: settings
+                                                      .classificationModel)),
+                                        ]);
+                                  }),
+                                ]),
+                          ))),
+              SingleChildScrollView(
+                  child: TrendSettingsPanel(repository: _repository)),
+            ])),
+          ])),
     );
   }
 }

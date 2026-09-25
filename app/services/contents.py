@@ -93,7 +93,7 @@ def get_user_content_detail(db: Session, *, user_id: int, content_id: int) -> di
         recommendation_payload = build_recommendation_from_text(
             db,
             title=content.title,
-            text=content.cleaned_transcript or content.transcript or content.title,
+            text=content.cleaned_transcript or content.transcript or "",
             source_prefix="youtube",
             profile_limit=150,
         )

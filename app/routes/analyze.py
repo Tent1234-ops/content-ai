@@ -139,6 +139,7 @@ def _build_recommendation(db, *, filename: str, result: dict, settings_snapshot:
         user_keywords=user_keywords,
         dimension_status=list(user_signals["dimension_status"]),
         hook_terms=hook_terms,
+        transcript=classification_transcript,
         source_prefix="youtube",
         profile_limit=80,
     )

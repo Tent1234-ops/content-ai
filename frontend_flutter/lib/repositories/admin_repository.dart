@@ -13,6 +13,53 @@ class AdminRepository {
 
   final ApiClient _client;
 
+  Future<Map<String, dynamic>> referenceStatistics({int offset = 0}) async =>
+      Map<String, dynamic>.from(await _client
+          .get('/admin/reference-statistics?offset=$offset&limit=20') as Map);
+
+  Future<Map<String, dynamic>> referenceStatisticsHistory(int id) async =>
+      Map<String, dynamic>.from(
+          await _client.get('/admin/datasets/$id/statistics') as Map);
+
+  Future<String> refreshReferenceStatistics() async {
+    final result =
+        await _client.post('/admin/reference-statistics/refresh', {}) as Map;
+    return result['job_id'] as String;
+  }
+
+  Future<Map<String, dynamic>> referenceStatisticsJob(String id) async =>
+      Map<String, dynamic>.from(await _client.get('/jobs/$id') as Map);
+
+  Future<void> saveReferenceStatisticsSettings(
+      Map<String, dynamic> values) async {
+    await _client.put('/admin/reference-statistics/settings', values);
+  }
+
+  Future<Map<String, dynamic>> datasetReadiness(
+      {String category = 'all', String role = 'all', int offset = 0}) async {
+    final query = Uri(queryParameters: {
+      if (category != 'all') 'category': category,
+      'role': role,
+      'offset': '$offset',
+      'limit': '20',
+    }).query;
+    return Map<String, dynamic>.from(
+        await _client.get('/admin/datasets/readiness?$query') as Map);
+  }
+
+  Future<Map<String, dynamic>> trendSettings() async =>
+      Map<String, dynamic>.from(
+          await _client.get('/admin/trend-settings') as Map);
+
+  Future<Map<String, dynamic>> saveTrendSettings(
+          Map<String, dynamic> values) async =>
+      Map<String, dynamic>.from(
+          await _client.put('/admin/trend-settings', values) as Map);
+
+  Future<void> deleteDataset(int id) async {
+    await _client.delete('/admin/datasets/$id?confirmation_id=$id');
+  }
+
   Future<ManagedUsersPage> listUsers(
       {String query = '',
       String role = 'all',

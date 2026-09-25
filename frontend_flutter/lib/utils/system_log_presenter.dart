@@ -35,6 +35,16 @@ String systemLogActionLabel(String action) {
       return 'เพิ่มข้อมูล Dataset โดยผู้ดูแล';
     case 'admin_dataset_update':
       return 'แก้ไขข้อมูล Dataset';
+    case 'admin_dataset_delete':
+      return 'ลบ Dataset ออกจากการใช้งาน โดยเก็บหลักฐานเดิม';
+    case 'admin_trend_schedule_update':
+      return 'เปลี่ยนรอบอัปเดตเทรนด์อัตโนมัติ';
+    case 'trend_scheduled_collection':
+      return 'เก็บเทรนด์ตามตารางเวลารายวัน';
+    case 'reference_statistics_refresh':
+      return 'อัปเดตสถิติคลิปอ้างอิงและเก็บประวัติ';
+    case 'reference_statistics_settings_update':
+      return 'เปลี่ยนรอบเก็บสถิติและงบคำขอคลิปอ้างอิง';
     case 'admin_dataset_training_content_corrected':
       return 'แก้ไข Transcript หรือหมวดข้อมูลฝึกที่อนุมัติแล้ว';
     case 'admin_settings_update':

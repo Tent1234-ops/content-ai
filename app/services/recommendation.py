@@ -13,7 +13,8 @@ from app.database.models import DatasetContent, UserContent
 from app.services.admin_settings import get_admin_config
 from app.services.classification import classify_text_domain
 from app.services.dataset_contract import RECOMMENDATION_DURATION_MAX_SECONDS
-from app.services.dataset_eligibility import production_transcript_query
+from app.services.dataset_eligibility import production_transcript_query, reference_transcript_rows
+from app.core.datetime_utils import utc_isoformat
 from app.services.nlp import (
     extract_comparable_keyword_candidates,
     extract_keyword_candidates,
@@ -288,6 +289,10 @@ def _build_keyword_evidence(
                     "source_record_id": str(row.source_record_id or ""),
                     "title": str(row.title or "Untitled"),
                     "video_url": str(row.video_url or row.source_release_url or ""),
+                    "published_at": utc_isoformat(row.published_at),
+                    "statistics_captured_at": utc_isoformat(row.statistics_captured_at),
+                    "source_channel_id": str(row.source_channel_id or ""),
+                    "data_split": row.data_split,
                     "platform": _platform_key(row.source_platform, "youtube"),
                     "frequency": frequency,
                     "matched_terms": list(occurrence["matched_terms"]),
@@ -793,6 +798,9 @@ def _build_evidence(profile: Dict[str, object], *, source_prefix: str) -> Dict[s
         "language_counts": profile.get("language_counts") or {},
         "collection_strategy_counts": profile.get("collection_strategy_counts") or {},
         "selection_rule": profile.get("selection_rule") or "none",
+        "reference_policy": "train_only_no_evaluation_channel_overlap_v1",
+        "reference_period": profile.get("reference_period") or {},
+        "reference_records": profile.get("reference_records") or [],
         "license_name": profile.get("license_name") or "",
         "verification_status": profile.get("verification_status") or "",
         "duration_source": duration_source,
@@ -985,14 +993,8 @@ def build_dataset_profile_for_domain(
     admin_config = get_admin_config(db)
     eligible_rows: List[DatasetContent] = []
     if canonical_domain in ready_leaf_keys(db):
-        eligible_rows = (
-            production_transcript_query(db, train_only=False)
-            .filter(DatasetContent.is_keyword_recommendation_eligible.is_(True))
-            .filter(DatasetContent.source_platform.like(f"{source_prefix}%"))
-            .filter(DatasetContent.taxonomy_leaf_key == canonical_domain)
-            .order_by(DatasetContent.dataset_id.asc())
-            .all()
-        )
+        eligible_rows = [row for row in reference_transcript_rows(db, domain=canonical_domain)
+                         if row.source_platform.startswith(source_prefix)]
     metric_cohort, view_metric_version, excluded_metric_rows = (
         _single_view_metric_cohort(eligible_rows)
     )
@@ -1065,10 +1067,24 @@ def build_dataset_profile_for_domain(
     if sum(platform_counts.values()) != sample_size:
         raise RuntimeError("Recommendation evidence platform counts do not match sample size")
 
+    evidence_rows = list({row.dataset_id: row for row in [*rows, *duration_rows]}.values())
     return {
         "domain": canonical_domain,
         "sample_size": sample_size,
         "eligible_pool_size": len(eligible_rows),
+        "reference_period": {
+            "published_from": utc_isoformat(min(row.published_at for row in evidence_rows)) if evidence_rows else None,
+            "published_to": utc_isoformat(max(row.published_at for row in evidence_rows)) if evidence_rows else None,
+            "statistics_from": utc_isoformat(min(row.statistics_captured_at for row in evidence_rows)) if evidence_rows else None,
+            "statistics_to": utc_isoformat(max(row.statistics_captured_at for row in evidence_rows)) if evidence_rows else None,
+        },
+        "reference_records": [
+            {"dataset_id": row.dataset_id, "video_url": row.video_url or row.source_release_url,
+             "source_channel_id": row.source_channel_id, "data_split": row.data_split,
+             "published_at": utc_isoformat(row.published_at),
+             "statistics_captured_at": utc_isoformat(row.statistics_captured_at)}
+            for row in evidence_rows
+        ],
         "view_metric_version": view_metric_version,
         "view_metric_cohort_size": len(metric_cohort),
         "performance_eligible_pool_size": sum(
@@ -1193,6 +1209,7 @@ def build_recommendation_from_text(
         user_keywords=list(user_snapshot["user_keywords"]),
         dimension_status=user_snapshot["dimension_status"],
         hook_terms=user_snapshot["hook_terms"],
+        transcript=text,
         source_prefix=source_prefix,
         profile_limit=profile_limit,
     )
@@ -1207,6 +1224,7 @@ def build_recommendation_from_analysis_data(
     user_keywords: List[str],
     dimension_status: List[Dict[str, object]],
     hook_terms: List[str],
+    transcript: str = "",
     source_prefix: str = "youtube",
     profile_limit: int = 150,
 ) -> Dict[str, object]:
@@ -1305,9 +1323,12 @@ def build_recommendation_from_analysis_data(
         seen.add(low)
         deduped_user_keywords.append(keyword)
 
+    from app.services.current_trend_ideas import build_current_trend_ideas
+    current_ideas = build_current_trend_ideas(db, transcript=transcript, domain=domain)
     return {
         "domain": domain,
         "user_keywords": deduped_user_keywords[:12],
+        "current_trend_ideas": current_ideas,
         "missing_keywords": missing_keywords,
         "hook_keywords": hook_keywords,
         "missing_dimensions": missing_dimensions,
@@ -1336,7 +1357,7 @@ def build_recommendation_from_saved_content(
     return build_recommendation_from_text(
         db,
         title=content.title,
-        text=content.transcript or content.title,
+        text=content.transcript or "",
         source_prefix=source_prefix,
         profile_limit=profile_limit,
     )

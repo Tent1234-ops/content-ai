@@ -4,15 +4,15 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from sqlalchemy import func
-from sqlalchemy.orm import Query, Session
+from datetime import datetime
+from sqlalchemy import func, or_, and_
+from sqlalchemy.orm import Query, Session, aliased
 
 from app.database.models import DatasetContent
 from app.services.dataset_contract import (
     ACCEPTED_TRANSCRIPT_QUALITIES,
     PRIMARY_CONTENT_LANGUAGE,
     PRODUCTION_SPLITS,
-    RECOMMENDATION_DURATION_MAX_SECONDS,
     SUPPORTED_CAPTION_TYPES,
     SUPPORTED_TRANSCRIPT_SOURCES,
     SUPPORTED_TRANSCRIPT_ACQUISITION_METHODS,
@@ -29,10 +29,10 @@ from app.services.taxonomy import (
 )
 
 
-def production_transcript_conditions(*, train_only: bool = False):
+def production_transcript_conditions(*, train_only: bool = False, require_training: bool = True):
     conditions = [
+        DatasetContent.deleted_at.is_(None),
         DatasetContent.is_active.is_(True),
-        DatasetContent.is_training_eligible.is_(True),
         DatasetContent.dataset_source.in_(SUPPORTED_YOUTUBE_DATASET_SOURCES),
         DatasetContent.dataset_version != "legacy-v1",
         DatasetContent.taxonomy_version == TAXONOMY_VERSION,
@@ -93,6 +93,8 @@ def production_transcript_conditions(*, train_only: bool = False):
         DatasetContent.transcript_end_seconds <= DatasetContent.duration_seconds,
         DatasetContent.duration_seconds > 0,
     ]
+    if require_training:
+        conditions.append(DatasetContent.is_training_eligible.is_(True))
     if train_only:
         conditions.append(DatasetContent.data_split == "train")
     else:
@@ -103,6 +105,7 @@ def production_transcript_conditions(*, train_only: bool = False):
 def out_of_scope_evaluation_conditions():
     """Return auditable human-reviewed rows used only to evaluate rejection."""
     return (
+        DatasetContent.deleted_at.is_(None),
         DatasetContent.is_active.is_(True),
         DatasetContent.is_training_eligible.is_(False),
         DatasetContent.is_keyword_recommendation_eligible.is_(False),
@@ -248,14 +251,6 @@ def validate_training_eligibility_values(values: Mapping[str, Any] | object) -> 
         errors.append("duration_seconds")
     elif transcript_end is not None and float(transcript_end) > int(duration):
         errors.append("transcript_end_seconds")
-    if not bool(value("is_keyword_recommendation_eligible")):
-        errors.append("is_keyword_recommendation_eligible")
-    expected_duration_eligibility = bool(
-        duration is not None
-        and 0 < int(duration) <= RECOMMENDATION_DURATION_MAX_SECONDS
-    )
-    if bool(value("is_duration_recommendation_eligible")) != expected_duration_eligibility:
-        errors.append("is_duration_recommendation_eligible")
     if not bool(value("is_active")):
         errors.append("is_active")
 
@@ -274,3 +269,45 @@ def production_transcript_query(
     return db.query(DatasetContent).filter(
         *production_transcript_conditions(train_only=train_only)
     )
+
+
+def reference_transcript_query(db: Session, *, now: datetime | None = None) -> Query:
+    """Reference evidence never uses evaluation clips or their channel/content duplicates."""
+    holdout = aliased(DatasetContent)
+    overlap = db.query(holdout.dataset_id).filter(
+        holdout.data_split.in_(("validation", "test")),
+        or_(*(
+            and_(getattr(DatasetContent, key) != "",
+                 getattr(holdout, key) == getattr(DatasetContent, key))
+            for key in ("source_channel_id", "creator_group_key", "source_youtube_id", "transcript_sha256")
+        )),
+    ).exists()
+    return db.query(DatasetContent).filter(
+        *production_transcript_conditions(train_only=True, require_training=False),
+        DatasetContent.is_keyword_recommendation_eligible.is_(True),
+        DatasetContent.published_at.is_not(None),
+        DatasetContent.statistics_captured_at >= DatasetContent.published_at,
+        DatasetContent.statistics_captured_at <= (now or datetime.utcnow()),
+        DatasetContent.views >= 0, DatasetContent.likes >= 0, DatasetContent.comments >= 0,
+        ~overlap,
+    )
+
+
+def reference_source_matches(row: DatasetContent) -> bool:
+    from app.services.youtube_cc_dataset import extract_youtube_video_id, YouTubeCCDatasetError
+    url = str(row.video_url or row.source_release_url or "")
+    if not url.startswith(("https://", "http://")):
+        return False
+    try:
+        return extract_youtube_video_id(url) == row.source_youtube_id
+    except YouTubeCCDatasetError:
+        return False
+
+
+def reference_transcript_rows(db: Session, *, now: datetime | None = None,
+                              domain: str | None = None) -> list[DatasetContent]:
+    query = reference_transcript_query(db, now=now)
+    if domain is not None:
+        query = query.filter(DatasetContent.taxonomy_leaf_key == domain)
+    return [row for row in query.order_by(DatasetContent.dataset_id).all()
+            if reference_source_matches(row)]

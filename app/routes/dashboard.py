@@ -23,8 +23,24 @@ from app.services.live_trend_snapshots import (
     load_youtube_category_snapshot,
 )
 from app.services.trending_fetcher import RateLimitedError, trigger_trending_refresh
+from app.services.trend_history import load_trend_history
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+@router.get("/public/history")
+def public_trend_history(
+    platform: str = Query(pattern="^(youtube|google)$"),
+    region: str = Query(default=settings.youtube_region, pattern="^[a-zA-Z]{2}$"),
+    days: int = Query(default=5, ge=1, le=90),
+    video_category_id: str | None = Query(default=None, pattern=r"^\d{1,3}$"),
+    db: Session = Depends(get_db),
+):
+    try:
+        return load_trend_history(db, region=region.upper(), platform=platform,
+                                  days=days, category_id=video_category_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/public/trends")

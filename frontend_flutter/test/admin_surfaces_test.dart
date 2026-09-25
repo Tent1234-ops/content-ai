@@ -10,6 +10,29 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+      'dataset delete requires confirmation and removes the item after success',
+      (tester) async {
+    final repository = _DatasetsRepository();
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+        MaterialApp(home: AdminDatasetsScreen(repository: repository)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('ลบ Dataset #42'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ยกเลิก'));
+    await tester.pumpAndSettle();
+    expect(repository.deleted, false);
+    await tester.tap(find.byTooltip('ลบ Dataset #42'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ยืนยันลบ Dataset'));
+    await tester.pumpAndSettle();
+    expect(repository.deleted, true);
+    expect(find.text('Phone review'), findsNothing);
+    expect(find.text('No datasets found'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   test('system log parses backend audit fields and exposes Thai labels', () {
     final item = SystemLogItem.fromJson({
       'log_id': 9,
@@ -143,6 +166,13 @@ class _LogsRepository extends AdminRepository {
 }
 
 class _DatasetsRepository extends AdminRepository {
+  bool deleted = false;
+  @override
+  Future<void> deleteDataset(int id) async {
+    expect(id, 42);
+    deleted = true;
+  }
+
   int? updatedDatasetId;
   Map<String, dynamic>? updatedPayload;
 
@@ -197,7 +227,8 @@ class _DatasetsRepository extends AdminRepository {
     String category = 'all',
     String search = '',
   }) async {
-    return PaginatedResult(total: 1, items: [item]);
+    return PaginatedResult(
+        total: deleted ? 0 : 1, items: deleted ? [] : [item]);
   }
 
   @override

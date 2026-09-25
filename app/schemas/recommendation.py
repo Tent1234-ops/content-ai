@@ -10,6 +10,10 @@ class RecommendationKeywordExample(BaseModel):
     source_record_id: str = ""
     title: str
     video_url: str = ""
+    published_at: Optional[str] = None
+    statistics_captured_at: Optional[str] = None
+    source_channel_id: str = ""
+    data_split: str = ""
     platform: str = "youtube"
     frequency: int = 0
     matched_terms: list[str] = Field(default_factory=list)
@@ -62,6 +66,8 @@ class DatasetProfileResponseItem(BaseModel):
     domain: str
     sample_size: int
     eligible_pool_size: int = 0
+    reference_period: dict[str, Optional[str]] = Field(default_factory=dict)
+    reference_records: list[dict[str, object]] = Field(default_factory=list)
     view_metric_version: str = ""
     view_metric_cohort_size: int = 0
     performance_eligible_pool_size: int = 0
@@ -106,6 +112,7 @@ class RecommendationAnalysisResponse(BaseModel):
     recommended_duration: DurationRecommendation
     dataset_profile: DatasetProfileResponseItem
     evidence: dict[str, object] = Field(default_factory=dict)
+    current_trend_ideas: dict[str, object] = Field(default_factory=dict)
 
 
 class ProfileComparisonItem(BaseModel):

@@ -226,14 +226,15 @@ DATABASE_URL = _build_database_url()
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
 USING_MYSQL = settings.db_driver.lower() == "mysql" and MYSQL_DRIVER is not None
 DB_BOOTSTRAP_ERROR = None
+SKIP_DB_BOOTSTRAP = os.getenv("CONTENT_AI_SKIP_DB_BOOTSTRAP", "0") == "1"
 
-if USING_MYSQL:
+if USING_MYSQL and not SKIP_DB_BOOTSTRAP:
     try:
         _ensure_mysql_database()
         _ensure_mysql_schema_compat()
     except Exception as exc:
         DB_BOOTSTRAP_ERROR = f"{exc.__class__.__name__}: {exc}"
-elif IS_SQLITE:
+elif IS_SQLITE and not SKIP_DB_BOOTSTRAP:
     try:
         _ensure_sqlite_schema_compat()
     except Exception as exc:

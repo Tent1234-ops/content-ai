@@ -6,6 +6,7 @@ import '../repositories/content_repository.dart';
 import '../state/auth_scope.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/analysis_settings_audit.dart';
+import '../widgets/current_trend_ideas_panel.dart';
 import '../widgets/state_widgets.dart';
 
 class ResultScreenArgs {
@@ -241,7 +242,7 @@ class _ResultScreenState extends State<ResultScreen> {
                       ),
                       const SizedBox(height: 24),
                       const _SectionHeader(
-                        title: 'หัวข้อที่ควรเพิ่มในคลิป',
+                        title: 'ประเด็นจากคลิปอ้างอิง',
                         icon: Icons.auto_awesome_outlined,
                       ),
                       if (missingKeywords.isNotEmpty) ...[
@@ -265,6 +266,11 @@ class _ResultScreenState extends State<ResultScreen> {
                         emptyMessage: missingKeywordsEmptyMessage,
                       ),
                       const SizedBox(height: 24),
+                      if (recommendation != null) ...[
+                        CurrentTrendIdeasPanel(
+                            data: recommendation.currentTrendIdeas),
+                        const SizedBox(height: 24),
+                      ],
                       if (duration != null) ...[
                         const _SectionHeader(
                           title: 'ความยาวคลิปที่แนะนำ',
@@ -666,7 +672,9 @@ class _ScoredKeywordCard extends StatelessWidget {
                                   Expanded(
                                     child: Text(
                                       '${example.title} '
-                                      '(ข้อมูล #${example.datasetId}, กล่าวถึง ${example.frequency} ครั้ง)',
+                                      '(ข้อมูล #${example.datasetId}, กล่าวถึง ${example.frequency} ครั้ง)\n'
+                                      '${example.platform} | เผยแพร่ ${trendIdeaTime(example.publishedAt)}\n'
+                                      'เก็บสถิติ ${trendIdeaTime(example.statisticsCapturedAt)}',
                                       style:
                                           Theme.of(context).textTheme.bodySmall,
                                     ),

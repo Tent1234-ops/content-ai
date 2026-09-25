@@ -4,10 +4,24 @@ from sqlalchemy.orm import Session
 from app.api.deps import require_roles
 from app.database.db import get_db
 from app.database.models import User
-from app.schemas.follows import FollowTopicRequest, FollowedTopicItem, FollowedTopicsResponse
-from app.services.follows import follow_topic, unfollow_topic, list_followed_topics
+from app.schemas.follows import FollowTopicRequest, FollowedTopicItem, FollowedTopicsResponse, FollowPreferences
+from app.services.follows import (follow_topic, unfollow_topic, list_followed_topics,
+                                  follow_preferences, save_follow_preferences)
 
 router = APIRouter(prefix="/follows", tags=["follows"])
+
+
+@router.get('/preferences')
+def preferences(current_user: User = Depends(require_roles('user', 'admin')),
+                db: Session = Depends(get_db)):
+    return follow_preferences(db, user_id=current_user.user_id)
+
+
+@router.put('/preferences')
+def update_preferences(request: FollowPreferences,
+                       current_user: User = Depends(require_roles('user', 'admin')),
+                       db: Session = Depends(get_db)):
+    return save_follow_preferences(db, user_id=current_user.user_id, mode=request.notification_mode)
 
 
 @router.post("/topic", response_model=FollowedTopicItem)
@@ -17,7 +31,8 @@ def follow_topic_endpoint(
     db: Session = Depends(get_db),
 ):
     try:
-        ft = follow_topic(db=db, user_id=current_user.user_id, match_type=request.match_type, value=request.value)
+        ft = follow_topic(db=db, user_id=current_user.user_id, match_type=request.match_type,
+                          value=request.value, platform=request.platform)
         return ft
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

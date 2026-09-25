@@ -1,6 +1,6 @@
 import json
+import logging
 import threading
-import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -14,6 +14,8 @@ from app.services.live_trend_snapshots import (
 from app.services.persistence import log_system_event, save_trending_items
 from app.services.simple_cache import get as cache_get, set as cache_set
 from app.services.trends import get_google_trending, get_tiktok_trending, get_youtube_trending
+from app.services.trend_settings import trend_schedule
+from app.services.trend_scheduler import collect_due
 
 
 _RATE_LIMIT_SECONDS = {
@@ -28,7 +30,6 @@ _last_fetch: Dict[str, datetime] = {}
 _lock = threading.Lock()
 _fetch_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
-_last_category_refresh_monotonic: Optional[float] = None
 
 
 class RateLimitedError(Exception):
@@ -217,62 +218,68 @@ def trigger_trending_refresh(
     return {"job_id": job_id, "status": "queued", "rate_limited": False}
 
 
-def _fetch_loop() -> None:
-    global _last_category_refresh_monotonic
-    while not _stop_event.is_set():
-        loop_started = time.monotonic()
+def run_scheduled_refreshes(*, session_factory=SessionLocal, now=None,
+                            global_fetch=None, category_fetch=None) -> list[str]:
+    from app.services.reference_statistics import refresh_reference_statistics
+    result = collect_due(
+        session_factory=session_factory, now=now,
+        global_fetch=global_fetch or (lambda: refresh_global_live_trends_job(sources=["youtube", "google"])),
+        category_fetch=category_fetch or refresh_youtube_category_live_trends_job,
+        reference_fetch=(lambda: refresh_reference_statistics(session_factory=session_factory, now=now))
+            if global_fetch is None and category_fetch is None else None,
+        interval_runner=lambda: _run_interval_refreshes(session_factory=session_factory, now=now,
+                                                       global_fetch=global_fetch, category_fetch=category_fetch),
+    )
+    return result["executed"]
+
+
+def _run_interval_refreshes(*, session_factory=SessionLocal, now=None,
+                            global_fetch=None, category_fetch=None) -> list[str]:
+    executed = []
+    failures = []
+    for kind, fetch in (
+        ("global", global_fetch or refresh_global_live_trends_job),
+        ("youtube_categories", category_fetch or refresh_youtube_category_live_trends_job),
+    ):
+        # A provider call can be slow; apply a newly saved pause before the next job.
+        with session_factory() as db:
+            schedule = trend_schedule(db, now=now)
+        if not schedule["runs"][kind]["due"]:
+            continue
         try:
-            refresh_global_live_trends_job(
-                limit=settings.live_trend_limit,
-                sources=_DEFAULT_SOURCES,
-            )
+            fetch()
+            executed.append(kind)
         except Exception as exc:
-            db = SessionLocal()
+            failures.append(f"{kind}: {exc}")
+    if failures:
+        raise RuntimeError("; ".join(failures))
+    return executed
+
+
+def _fetch_loop() -> None:
+    while not _stop_event.is_set():
+        try:
+            run_scheduled_refreshes()
+        except Exception as exc:
             try:
-                log_system_event(
-                    db=db,
-                    user_id=None,
-                    action="trending_fetcher_loop",
-                    status="failed",
-                    detail=str(exc),
-                )
-                db.commit()
-            finally:
-                db.close()
-        now_monotonic = time.monotonic()
-        category_due = (
-            _last_category_refresh_monotonic is None
-            or now_monotonic - _last_category_refresh_monotonic
-            >= settings.youtube_category_trend_refresh_seconds
-        )
-        if category_due and not _stop_event.is_set():
-            _last_category_refresh_monotonic = now_monotonic
-            try:
-                refresh_youtube_category_live_trends_job()
-            except Exception as exc:
-                db = SessionLocal()
-                try:
-                    log_system_event(
-                        db=db,
-                        user_id=None,
-                        action="youtube_category_trend_fetcher_loop",
-                        status="failed",
-                        detail=str(exc),
-                    )
+                with SessionLocal() as db:
+                    log_system_event(db=db, user_id=None, action="trending_fetcher_loop",
+                                     status="failed", detail=str(exc))
                     db.commit()
-                finally:
-                    db.close()
-        elapsed = time.monotonic() - loop_started
-        wait_seconds = max(1.0, settings.live_trend_refresh_seconds - elapsed)
-        _stop_event.wait(wait_seconds)
+            except Exception:
+                logging.exception("Unable to persist trend scheduler error")
+            finally:
+                # Also back off when an error occurred before a run could be saved.
+                _stop_event.wait(60)
+        # Reload database configuration without requesting provider data on every tick.
+        _stop_event.wait(5)
 
 
 def start_trending_fetcher() -> None:
-    global _fetch_thread, _last_category_refresh_monotonic
+    global _fetch_thread
     if _fetch_thread and _fetch_thread.is_alive():
         return
     _stop_event.clear()
-    _last_category_refresh_monotonic = None
     _fetch_thread = threading.Thread(target=_fetch_loop, daemon=True)
     _fetch_thread.start()
 

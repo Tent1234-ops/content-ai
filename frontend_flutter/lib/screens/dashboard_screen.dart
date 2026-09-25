@@ -11,6 +11,8 @@ import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
 import '../widgets/trend_detail_panel.dart';
 import '../widgets/trend_catalog.dart';
+import '../widgets/interest_preferences_panel.dart';
+import '../widgets/trend_history_panel.dart';
 import 'login_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -591,6 +593,22 @@ class _DashboardScreenState extends State<DashboardScreen>
                                       ? 'การอัปเดตรอบล่าสุดไม่สำเร็จ กำลังแสดงข้อมูลที่เก็บไว้ล่าสุด'
                                       : 'ยังโหลดข้อมูลจาก ${_formatPlatformName(_selectedPlatform)} ไม่สำเร็จ กรุณาลองรีเฟรชภายหลัง'),
                                 ),
+                              if (_selectedPlatform != 'tiktok') ...[
+                                TrendHistoryPanel(
+                                  repository: _repository,
+                                  platform: _selectedPlatform,
+                                  categoryId: _selectedPlatform == 'youtube' &&
+                                          _categoryFilter != 'All'
+                                      ? _categoryFilter
+                                      : null,
+                                  categoryLabel: _selectedYoutubeCategoryLabel,
+                                  categoryName: (c) =>
+                                      _formatTrendCategory('youtube', c),
+                                  revision:
+                                      '${_snapshot?.generatedAt}:${_youtubeCategorySnapshot?.generatedAt}',
+                                ),
+                                const SizedBox(height: 16),
+                              ],
                               _TrendDashboardSections(
                                 platform: _selectedPlatform,
                                 categoryLabel: _selectedYoutubeCategoryLabel,
@@ -608,13 +626,21 @@ class _DashboardScreenState extends State<DashboardScreen>
                               ),
                               const SizedBox(height: 16),
                               if (auth.isAuthenticated) ...[
+                                InterestPreferencesPanel(
+                                  repository: _repository,
+                                  topics: _followedTopics,
+                                  onChanged: _loadFollowStateOnly,
+                                ),
+                                const Divider(),
                                 _NotificationPanel(
                                   notifications: _notifications,
                                   onMarkAllRead: _markAllRead,
                                 ),
                                 const SizedBox(height: 16),
                                 _FollowedTopicsPanel(
-                                  topics: _followedTopics,
+                                  topics: _followedTopics
+                                      .where((t) => t.matchType != 'category')
+                                      .toList(),
                                   onDelete: (topic) async {
                                     await _repository.unfollowTopic(topic.id);
                                     await _loadFollowStateOnly();
@@ -1703,7 +1729,7 @@ String _topTrendsSubtitle(
     return 'เรียงตามลำดับคำค้นจาก Google ในข้อมูลรอบล่าสุด โดยไม่เทียบกับแพลตฟอร์มอื่น';
   }
   if (_platformFamily(platform) == 'youtube' && categoryLabel != null) {
-    return 'YouTube ส่งกลับ $itemCount รายการในรอบล่าสุดของหมวด$categoryLabel (สูงสุด 50) อัปเดตทุก 1 นาที';
+    return 'YouTube ส่งกลับ $itemCount รายการในรอบล่าสุดของหมวด$categoryLabel (สูงสุด 50)';
   }
   final name = _formatPlatformName(platform);
   return 'เรียงตามลำดับวิดีโอจาก $name ในข้อมูลรอบล่าสุด โดยไม่เทียบกับแพลตฟอร์มอื่น';

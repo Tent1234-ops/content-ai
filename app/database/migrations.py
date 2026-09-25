@@ -5,6 +5,17 @@ from typing import Dict
 from sqlalchemy import bindparam, inspect, text
 from sqlalchemy.engine import Engine
 
+
+def migrate_reference_statistics_schema(engine: Engine) -> None:
+    """Widen counters without rewriting observations or transcript data."""
+    if engine.dialect.name != "mysql":
+        return
+    with engine.begin() as connection:
+        columns = {column["name"]: column for column in inspect(connection).get_columns("dataset_contents")}
+        for name in ("views", "likes", "comments"):
+            if "BIGINT" not in str(columns[name]["type"]).upper():
+                connection.execute(text(f"ALTER TABLE dataset_contents MODIFY COLUMN {name} BIGINT NOT NULL DEFAULT 0"))
+
 from app.services.dataset_contract import (
     SPLIT_STRATEGY,
     SUPPORTED_YOUTUBE_DATASET_SOURCES,
@@ -372,6 +383,60 @@ def migrate_phase19_transcript_schema(engine: Engine) -> Dict[str, object]:
         "added_columns": added_columns,
         "backfilled_rows": backfilled_rows,
     }
+
+
+def migrate_scope_completion_schema(engine: Engine) -> Dict[str, object]:
+    definitions = {
+        "dataset_contents": {"deleted_at": "DATETIME NULL"},
+        "system_configs": {
+            "trend_refresh_enabled": "BOOLEAN NOT NULL DEFAULT TRUE",
+            "trend_refresh_seconds": "INT NULL",
+            "youtube_category_refresh_seconds": "INT NULL",
+            "trend_notification_mode": "VARCHAR(20) NOT NULL DEFAULT 'all'",
+        },
+        "followed_topics": {"platform": "VARCHAR(20) NOT NULL DEFAULT 'all'"},
+        # This is a cursor, not evidence. A missing retained run is re-baselined.
+        "user_trend_watch_sessions": {"last_seen_category_run_id": "INT NULL"},
+    }
+    added = []
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        tables = set(inspector.get_table_names())
+        for table, columns in definitions.items():
+            if table not in tables:
+                continue
+            existing = {column["name"] for column in inspector.get_columns(table)}
+            for name, definition in columns.items():
+                if name in existing:
+                    continue
+                if connection.dialect.name == "postgresql":
+                    definition = definition.replace("DATETIME", "TIMESTAMP")
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+                added.append(f"{table}.{name}")
+    return {"added_columns": added}
+
+
+def migrate_trend_scheduler_schema(engine: Engine) -> Dict[str, object]:
+    definitions = {
+        "trend_schedule_mode": "VARCHAR(20) NOT NULL DEFAULT 'interval'",
+        "trend_window_start_hour": "INT NOT NULL DEFAULT 14",
+        "trend_window_end_hour": "INT NOT NULL DEFAULT 23",
+        "trend_worker_seen_at": "DATETIME NULL",
+        "trend_worker_status": "VARCHAR(40) NULL",
+    }
+    added = []
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "system_configs" not in inspector.get_table_names():
+            return {"added_columns": []}
+        existing = {c["name"] for c in inspector.get_columns("system_configs")}
+        for name, definition in definitions.items():
+            if name not in existing:
+                if connection.dialect.name == "postgresql":
+                    definition = definition.replace("DATETIME", "TIMESTAMP")
+                connection.execute(text(f"ALTER TABLE system_configs ADD COLUMN {name} {definition}"))
+                added.append(name)
+    return {"added_columns": added}
 
 
 def migrate_analysis_settings_schema(engine: Engine) -> Dict[str, object]:

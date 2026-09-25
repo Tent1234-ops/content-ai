@@ -1,4 +1,5 @@
 import 'common_models.dart';
+import 'current_trend_ideas.dart';
 
 class DurationRecommendation {
   const DurationRecommendation({
@@ -185,6 +186,7 @@ class RecommendationResult {
     required this.datasetProfile,
     required this.evidence,
     this.classification,
+    this.currentTrendIdeas = const CurrentTrendIdeas(),
   });
 
   final String domain;
@@ -199,6 +201,7 @@ class RecommendationResult {
   final DatasetProfile datasetProfile;
   final RecommendationEvidence evidence;
   final ClassificationResult? classification;
+  final CurrentTrendIdeas currentTrendIdeas;
 
   factory RecommendationResult.fromJson(Map<String, dynamic> json) {
     return RecommendationResult(
@@ -240,6 +243,8 @@ class RecommendationResult {
       evidence: RecommendationEvidence.fromJson(
         Map<String, dynamic>.from((json['evidence'] as Map?) ?? const {}),
       ),
+      currentTrendIdeas: CurrentTrendIdeas.fromJson(Map<String, dynamic>.from(
+          (json['current_trend_ideas'] as Map?) ?? const {})),
       classification: json['classification'] is Map
           ? ClassificationResult.fromJson(
               Map<String, dynamic>.from(json['classification'] as Map),

@@ -28,7 +28,7 @@ def list_admin_datasets(
     category: str | None = None,
     search: str | None = None,
 ):
-    query = db.query(DatasetContent)
+    query = db.query(DatasetContent).filter(DatasetContent.deleted_at.is_(None))
     if source:
         query = query.filter(DatasetContent.source_platform.like(f"{source}%"))
     if category:
@@ -84,10 +84,17 @@ def update_admin_dataset(
     user_id: int | None = None,
     reviewer: str | None = None,
 ) -> DatasetContent | None:
-    item = db.query(DatasetContent).filter(DatasetContent.dataset_id == dataset_id).first()
-    if item is None:
+    item = db.query(DatasetContent).filter(
+        DatasetContent.dataset_id == dataset_id,
+    ).populate_existing().with_for_update().first()
+    if item is None or item.deleted_at is not None:
         return None
     update_data = payload.model_dump(exclude_unset=True)
+    # Once assigned, evaluation membership cannot be repurposed as reference data.
+    for field in ("data_split", "split_strategy", "creator_group_key"):
+        if (item.data_split in {"train", "validation", "test"}
+                and field in update_data and update_data[field] != getattr(item, field)):
+            raise ValueError("Assigned channel split is locked; import a new independent channel instead")
 
     old_leaf_key = str(item.taxonomy_leaf_key or "")
     old_transcript_hash = str(item.transcript_sha256 or "")
@@ -234,6 +241,26 @@ def update_admin_dataset(
     db.commit()
     db.refresh(item)
     return item
+
+
+def delete_admin_dataset(db: Session, *, dataset_id: int, user_id: int,
+                         confirmation_id: int) -> bool:
+    if confirmation_id != dataset_id:
+        raise ValueError("Dataset confirmation does not match")
+    item = db.query(DatasetContent).filter(
+        DatasetContent.dataset_id == dataset_id,
+    ).with_for_update().first()
+    if item is None or item.deleted_at is not None:
+        return False
+    item.deleted_at = datetime.utcnow()
+    item.is_active = False
+    item.is_training_eligible = False
+    item.is_keyword_recommendation_eligible = False
+    item.is_duration_recommendation_eligible = False
+    log_system_event(db, user_id=user_id, action="admin_dataset_delete", status="success",
+                     detail=f"dataset_id={dataset_id}, archived=true, model_retrain_required=true")
+    db.commit()
+    return True
 
 
 def list_admin_cluster_runs(

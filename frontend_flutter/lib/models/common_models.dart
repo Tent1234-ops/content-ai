@@ -56,6 +56,8 @@ class KeywordEvidenceExample {
     this.sourceRecordId = '',
     this.videoUrl = '',
     this.platform = 'youtube',
+    this.publishedAt,
+    this.statisticsCapturedAt,
   });
 
   final int datasetId;
@@ -64,6 +66,8 @@ class KeywordEvidenceExample {
   final String videoUrl;
   final String platform;
   final int frequency;
+  final DateTime? publishedAt;
+  final DateTime? statisticsCapturedAt;
 
   factory KeywordEvidenceExample.fromJson(Map<String, dynamic> json) {
     return KeywordEvidenceExample(
@@ -73,6 +77,9 @@ class KeywordEvidenceExample {
       videoUrl: json['video_url']?.toString() ?? '',
       platform: json['platform']?.toString() ?? 'youtube',
       frequency: (json['frequency'] as num?)?.toInt() ?? 0,
+      publishedAt: DateTime.tryParse(json['published_at']?.toString() ?? ''),
+      statisticsCapturedAt:
+          DateTime.tryParse(json['statistics_captured_at']?.toString() ?? ''),
     );
   }
 }

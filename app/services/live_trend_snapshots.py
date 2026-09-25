@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.datetime_utils import utc_isoformat
 from app.database.db import SessionLocal
-from app.database.models import TrendSnapshotItem, TrendSnapshotRun
+from app.database.models import TrendSnapshotItem, TrendSnapshotRun, SystemConfig
 from app.services.trends import (
     get_google_trending,
     get_tiktok_trending,
@@ -24,6 +24,7 @@ from app.services.view_metrics import (
     resolve_view_metric_version,
     view_metrics_are_comparable,
 )
+from app.services.trend_history import archive_snapshot_run, prune_trend_history
 
 
 PLATFORMS = ("youtube", "google", "tiktok")
@@ -242,6 +243,7 @@ def _cleanup_old_runs(
         .all()
     )
     for run in old_runs:
+        archive_snapshot_run(db, run)
         db.delete(run)
 
 
@@ -398,11 +400,13 @@ def refresh_global_live_trends(
         run.provider_status = json.dumps(provider_results, ensure_ascii=False, default=str)
         run.total_items = total_items
         run.completed_at = completed_at
+        archive_snapshot_run(session, run)
         _cleanup_old_runs(
             session,
             region=region,
             snapshot_kind=GLOBAL_SNAPSHOT_KIND,
         )
+        prune_trend_history(session)
         session.commit()
 
         return {
@@ -420,14 +424,21 @@ def refresh_global_live_trends(
             run = session.get(TrendSnapshotRun, run.run_id)
             if run is not None:
                 run.status = "failed"
-                run.provider_status = json.dumps({"scheduler": {"status": "error", "error": str(exc)}})
+                run.provider_status = json.dumps({platform: {"status": "error", "mode": "live_error"}
+                                                  for platform in selected_platforms})
                 run.completed_at = datetime.utcnow()
+                archive_snapshot_run(session, run)
                 session.commit()
         raise
     finally:
         if owns_db:
             session.close()
         _refresh_lock.release()
+
+
+def _category_refresh_interval(db: Session) -> int:
+    config = db.query(SystemConfig).filter(SystemConfig.user_id.is_(None)).first()
+    return (config.youtube_category_refresh_seconds if config else None) or settings.youtube_category_trend_refresh_seconds
 
 
 def _youtube_category_scope(category_id: str) -> str:
@@ -704,11 +715,13 @@ def refresh_youtube_category_live_trends(
         )
         run.total_items = total_items
         run.completed_at = completed_at
+        archive_snapshot_run(session, run)
         _cleanup_old_runs(
             session,
             region=region,
             snapshot_kind=YOUTUBE_CATEGORY_SNAPSHOT_KIND,
         )
+        prune_trend_history(session)
         session.commit()
 
         return {
@@ -732,6 +745,7 @@ def refresh_youtube_category_live_trends(
                     ensure_ascii=False,
                 )
                 failed_run.completed_at = datetime.utcnow()
+                archive_snapshot_run(session, failed_run)
                 session.commit()
         raise
     finally:
@@ -997,7 +1011,7 @@ def load_youtube_category_snapshot(
             (latest.completed_at or latest.started_at) if latest is not None else None
         ),
         "region": region,
-        "refresh_interval_seconds": settings.youtube_category_trend_refresh_seconds,
+        "refresh_interval_seconds": _category_refresh_interval(db),
         "categories": categories,
         "selected_category": None,
     }
