@@ -2738,6 +2738,8 @@ def import_reviewed_youtube_cc_dataset(
             str(candidate.get("youtube_license_code") or "")
         )
         raw_metadata = dict(candidate.get("raw_metadata") or {})
+        if candidate.get("transcript_timestamps_available") is True:
+            raw_metadata["transcript_segments"] = candidate.get("transcript_segments") or []
         raw_metadata["collection"] = {
             "strategy": str(candidate.get("collection_strategy") or ""),
             "search_order": str(candidate.get("search_order") or ""),
@@ -3686,6 +3688,8 @@ def review_youtube_cc_candidate(
     transcript_quality: str | None = None,
     notes: str | None = None,
     review_root: str | Path | None = None,
+    expected_candidate_sha256: str | None = None,
+    require_pending: bool = False,
 ) -> dict[str, Any]:
     normalized_decision = str(decision or "").strip().lower()
     if normalized_decision not in {"approve", "reject"}:
@@ -3694,11 +3698,12 @@ def review_youtube_cc_candidate(
     if not reviewer:
         raise YouTubeCCDatasetError("reviewer is required")
 
-    collection_run = (
-        db.query(DatasetCollectionRun)
-        .filter(DatasetCollectionRun.collection_run_id == collection_run_id)
-        .first()
+    run_query = db.query(DatasetCollectionRun).filter(
+        DatasetCollectionRun.collection_run_id == collection_run_id
     )
+    # Single-item and bulk reviewers must acquire the same lock before checking state.
+    run_query = run_query.with_for_update()
+    collection_run = run_query.first()
     if collection_run is None:
         raise YouTubeCCDatasetError(f"Collection run {collection_run_id} not found")
     candidate_path = _candidate_artifact_for_run(collection_run)
@@ -3708,6 +3713,11 @@ def review_youtube_cc_candidate(
         raise YouTubeCCDatasetError(
             f"YouTube candidate {source_youtube_id} not found in run {collection_run_id}"
         )
+
+    if require_pending and not expected_candidate_sha256:
+        raise YouTubeCCDatasetError("Pending-only review requires a candidate hash")
+    if expected_candidate_sha256 and candidate.get("candidate_sha256") != expected_candidate_sha256:
+        raise YouTubeCCDatasetError("Candidate changed since preview; refresh and review it again")
 
     normalized_leaf = normalize_taxonomy_leaf(
         reviewed_leaf_key or candidate.get("proposed_leaf_key")
@@ -3735,6 +3745,8 @@ def review_youtube_cc_candidate(
         .order_by(DatasetReviewEvent.review_event_id.desc())
         .first()
     )
+    if require_pending and latest_event is not None:
+        raise YouTubeCCDatasetError("Candidate was already reviewed; refresh the queue")
     if (
         latest_event is not None
         and latest_event.decision == normalized_decision

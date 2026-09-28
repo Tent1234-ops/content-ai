@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../repositories/admin_repository.dart';
+import 'source_health_panel.dart';
 
 class TrendSettingsPanel extends StatefulWidget {
   const TrendSettingsPanel({super.key, required this.repository});
@@ -155,6 +156,8 @@ class _TrendSettingsPanelState extends State<TrendSettingsPanel> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    SourceHealthPanel(repository: widget.repository),
+                    const Divider(height: 32),
                     Row(children: [
                       Expanded(
                           child: Text('รอบอัปเดตเทรนด์',

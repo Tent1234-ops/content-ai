@@ -9,12 +9,13 @@ from typing import Any, Dict, Iterable, List
 
 from sqlalchemy.orm import Session
 
-from app.database.models import DatasetContent, UserContent
+from app.database.models import AnalysisResult, DatasetContent, UserContent
 from app.services.admin_settings import get_admin_config
 from app.services.classification import classify_text_domain
 from app.services.dataset_contract import RECOMMENDATION_DURATION_MAX_SECONDS
 from app.services.dataset_eligibility import production_transcript_query, reference_transcript_rows
 from app.core.datetime_utils import utc_isoformat
+from app.services.recommendation_evidence import attach_evidence, freeze_reference, locate_terms, user_context
 from app.services.nlp import (
     extract_comparable_keyword_candidates,
     extract_keyword_candidates,
@@ -207,8 +208,8 @@ def _dataset_keyword_occurrences(
     domain: str,
 ) -> Dict[str, Dict[str, Any]]:
     """Extract per-document term frequency from spoken transcript evidence only."""
-    transcript = str(row.transcript or "").strip()
-    if not transcript:
+    transcript = str(row.transcript or "")
+    if not transcript.strip():
         return {}
 
     occurrences: Dict[str, Dict[str, Any]] = {}
@@ -238,6 +239,15 @@ def _dataset_keyword_occurrences(
             "frequency": max(1, int(item.get("frequency") or 1)),
             "matched_terms": [surface_keyword],
         }
+    segments = freeze_reference(row)["segments"] if getattr(row, "transcript_timestamps_available", False) else []
+    for identity, item in list(occurrences.items()):
+        proof = locate_terms(transcript, [item["keyword"], *item["matched_terms"]], segments=segments)
+        if not proof:
+            del occurrences[identity]
+            continue
+        item["frequency"] = len(proof)
+        item["occurrences"] = proof[:3]
+        item["matched_terms"] = sorted({match["matched_text"] for match in proof})
     return occurrences
 
 
@@ -261,6 +271,7 @@ def _build_keyword_evidence(
     for row in rows:
         dataset_id = int(row.dataset_id)
         performance_weight = row_weights.get(dataset_id, 1.0)
+        statistics = freeze_reference(row)["statistics"]
         for identity, occurrence in _dataset_keyword_occurrences(
             row,
             domain=domain,
@@ -295,10 +306,9 @@ def _build_keyword_evidence(
                     "data_split": row.data_split,
                     "platform": _platform_key(row.source_platform, "youtube"),
                     "frequency": frequency,
+                    "occurrences": occurrence["occurrences"],
                     "matched_terms": list(occurrence["matched_terms"]),
-                    "views": max(0, int(row.views or 0)),
-                    "likes": max(0, int(row.likes or 0)),
-                    "comments": max(0, int(row.comments or 0)),
+                    **statistics,
                     "average_views_per_day": round(
                         max(0.0, float(row.average_views_per_day or 0.0)),
                         3,
@@ -355,6 +365,8 @@ def _build_keyword_evidence(
                     int(item["dataset_id"]) for item in examples
                 ],
                 "supporting_examples": examples[:KEYWORD_EVIDENCE_EXAMPLE_LIMIT],
+                "supporting_records": examples,
+                "channel_count": len({item["source_channel_id"] for item in examples if item["source_channel_id"]}),
                 "score_components": {
                     "document_coverage": round(document_component, 4),
                     "frequency": round(frequency_component, 4),
@@ -995,6 +1007,8 @@ def build_dataset_profile_for_domain(
     if canonical_domain in ready_leaf_keys(db):
         eligible_rows = [row for row in reference_transcript_rows(db, domain=canonical_domain)
                          if row.source_platform.startswith(source_prefix)]
+    # A video imported in multiple versions remains one supporting clip.
+    eligible_rows = list({row.source_youtube_id or f"row:{row.dataset_id}": row for row in eligible_rows}.values())
     metric_cohort, view_metric_version, excluded_metric_rows = (
         _single_view_metric_cohort(eligible_rows)
     )
@@ -1003,35 +1017,12 @@ def build_dataset_profile_for_domain(
     durations = [int(row.duration_seconds) for row in duration_rows]
     duration_summary = _duration_summary(durations, canonical_domain)
 
-    dimension_scores: Dict[str, float] = {}
-    hook_scores: Dict[str, float] = {}
     platform_counts: Counter[str] = Counter()
     transcript_source_counts: Counter[str] = Counter()
     language_counts: Counter[str] = Counter()
     collection_strategy_counts: Counter[str] = Counter()
 
     for row in rows:
-        base_text = str(row.transcript or "").strip()
-        weight = row_weights.get(int(row.dataset_id), 1.0)
-        comparable_items = extract_comparable_keyword_candidates(
-            base_text,
-            keyword_domain,
-        )
-        if keyword_domain == "smartphone":
-            for item in comparable_items:
-                _weighted_increment(
-                    dimension_scores,
-                    str(item["keyword"]),
-                    weight * float(item["score"]),
-                )
-        else:
-            for name in DOMAIN_DIMENSIONS_ORDER.get(keyword_domain, [])[:8]:
-                if _keyword_is_domain_relevant(name, keyword_domain):
-                    confidence = 1.0 if name.lower() in base_text.lower() else 0.35
-                    _weighted_increment(dimension_scores, name, weight * confidence)
-        hook_limit = min(12, max(4, int(admin_config.hook_analysis_duration / 15)))
-        for term in _fast_dataset_tokens(base_text)[:hook_limit]:
-            _weighted_increment(hook_scores, term, weight)
         platform_counts[_platform_key(row.source_platform, source_prefix)] += 1
         transcript_source_counts[str(row.transcript_source or "unknown")] += 1
         language_counts[str(row.language or "und")] += 1
@@ -1045,23 +1036,9 @@ def build_dataset_profile_for_domain(
         domain=keyword_domain,
         max_items=max(10, admin_config.max_keywords_display),
     )
-    top_dimensions = [
-        {"keyword": name, "score": round(score, 3)}
-        for name, score in sorted(
-            dimension_scores.items(), key=lambda item: (-item[1], item[0])
-        )[:8]
-    ]
-    raw_hook_keywords = [
-        {"keyword": keyword, "score": round(score, 3)}
-        for keyword, score in sorted(
-            hook_scores.items(), key=lambda item: (-item[1], item[0])
-        )[:20]
-    ]
-    hook_keywords = _clean_profile_keywords(
-        raw_hook_keywords,
-        keyword_domain,
-        max_items=8,
-    )
+    top_dimensions = [dict(item) for item in top_keywords[:8]]
+    # No timing claim can be made from the beginning of an untimed transcript.
+    hook_keywords = []
 
     sample_size = len(rows)
     if sum(platform_counts.values()) != sample_size:
@@ -1070,6 +1047,7 @@ def build_dataset_profile_for_domain(
     evidence_rows = list({row.dataset_id: row for row in [*rows, *duration_rows]}.values())
     return {
         "domain": canonical_domain,
+        "_reference_documents": [freeze_reference(row) for row in evidence_rows],
         "sample_size": sample_size,
         "eligible_pool_size": len(eligible_rows),
         "reference_period": {
@@ -1199,7 +1177,7 @@ def build_recommendation_from_text(
     )
     user_snapshot = build_classified_user_signal_snapshot(
         text=text,
-        hook_text=text,
+        hook_text="",
         taxonomy_leaf_key=selected_domain,
         max_keywords=admin_config.max_keywords_display,
     )
@@ -1212,6 +1190,7 @@ def build_recommendation_from_text(
         transcript=text,
         source_prefix=source_prefix,
         profile_limit=profile_limit,
+        evidence_context=user_context(transcript=text, classification=classification),
     )
     recommendation["classification"] = classification
     return recommendation
@@ -1227,8 +1206,20 @@ def build_recommendation_from_analysis_data(
     transcript: str = "",
     source_prefix: str = "youtube",
     profile_limit: int = 150,
+    evidence_context: dict | None = None,
 ) -> Dict[str, object]:
     domain = normalize_taxonomy_leaf(domain)
+    context = evidence_context or user_context(transcript=transcript)
+    if domain == "unknown":
+        profile = _find_profile([], domain)
+        profile["top_dimensions"] = []
+        return attach_evidence({
+            "domain": domain, "status": "withheld_unknown", "user_keywords": list(user_keywords),
+            "missing_keywords": [], "hook_keywords": [], "missing_dimensions": [],
+            "current_trend_ideas": {"status": "unsupported_category", "ideas": []},
+            "recommended_duration": profile["recommended_duration"], "dataset_profile": profile,
+            "evidence": _build_evidence(profile, source_prefix=source_prefix),
+        }, context, keyword_domain="unknown")
     keyword_domain = _keyword_domain(domain)
     profile = build_dataset_profile_for_domain(
         db,
@@ -1251,6 +1242,17 @@ def build_recommendation_from_analysis_data(
         for row in dimension_status
         if str(row.get("status") or "").lower() == "present"
     )
+    # Display limits must not turn an observed topic into a recommendation gap.
+    observed_terms = [*hook_terms]
+    if transcript.strip():
+        observed_terms.extend(str(item["keyword"]) for item in (
+            extract_comparable_keyword_candidates(transcript, keyword_domain)
+            + extract_keyword_candidates(transcript)
+        ))
+    for term in observed_terms:
+        normalized_user_keywords.update((
+            _normalize_keyword(term), _keyword_identity(term, keyword_domain),
+        ))
     missing_keywords = []
     for item in profile["top_keywords"]:
         keyword = str(item["keyword"]).strip()
@@ -1267,35 +1269,9 @@ def build_recommendation_from_analysis_data(
         if len(missing_keywords) >= 6:
             break
 
-    seen_hook_terms: set[str] = set()
-    hook_keywords = []
-    for term in hook_terms:
-        normalized_term = str(term or "").strip().lower()
-        if not normalized_term or normalized_term in seen_hook_terms or normalized_term in normalized_user_keywords:
-            continue
-        if normalized_term in GENERIC_RECOMMENDATION_BLACKLIST:
-            continue
-        if keyword_domain != "general" and not _keyword_is_domain_relevant(normalized_term, keyword_domain):
-            continue
-        seen_hook_terms.add(normalized_term)
-        hook_keywords.append({"keyword": term, "score": 0.0})
-        if len(hook_keywords) >= 5:
-            break
-
-    if not hook_keywords:
-        for item in profile["hook_keywords"]:
-            keyword = str(item["keyword"]).strip()
-            if not keyword:
-                continue
-            lower_keyword = keyword.lower()
-            if lower_keyword in normalized_user_keywords or lower_keyword in seen_hook_terms:
-                continue
-            if lower_keyword in GENERIC_RECOMMENDATION_BLACKLIST:
-                continue
-            seen_hook_terms.add(lower_keyword)
-            hook_keywords.append({"keyword": keyword, "score": round(float(item["score"]), 3)})
-            if len(hook_keywords) >= 5:
-                break
+    # Propose supported missing concepts for the opening, preserving their evidence.
+    # Untimed reference transcripts cannot prove these were successful opening words.
+    hook_keywords = [dict(item) for item in missing_keywords[:5]]
 
     user_dimensions = {row["name"]: row for row in dimension_status}
     missing_dimensions = []
@@ -1325,7 +1301,7 @@ def build_recommendation_from_analysis_data(
 
     from app.services.current_trend_ideas import build_current_trend_ideas
     current_ideas = build_current_trend_ideas(db, transcript=transcript, domain=domain)
-    return {
+    return attach_evidence({
         "domain": domain,
         "user_keywords": deduped_user_keywords[:12],
         "current_trend_ideas": current_ideas,
@@ -1335,7 +1311,7 @@ def build_recommendation_from_analysis_data(
         "recommended_duration": profile["recommended_duration"],
         "dataset_profile": profile,
         "evidence": _build_evidence(profile, source_prefix=source_prefix),
-    }
+    }, context, keyword_domain=keyword_domain)
 
 
 def build_recommendation_from_saved_content(
@@ -1354,13 +1330,24 @@ def build_recommendation_from_saved_content(
     content = query.first()
     if content is None:
         return None
-    return build_recommendation_from_text(
+    saved = db.query(AnalysisResult).filter(AnalysisResult.content_id == content_id).order_by(
+        AnalysisResult.created_at.desc(), AnalysisResult.result_id.desc()).first()
+    if saved:
+        try:
+            stored = json.loads(saved.summary or "{}").get("recommendation", {})
+        except (ValueError, TypeError):
+            stored = {}
+        if isinstance(stored, dict) and stored:
+            return stored
+    rebuilt = build_recommendation_from_text(
         db,
         title=content.title,
         text=content.transcript or "",
         source_prefix=source_prefix,
         profile_limit=profile_limit,
     )
+    rebuilt["evidence_bundle"]["origin"] = "recomputed_legacy_not_original"
+    return rebuilt
 
 
 def compare_dataset_profiles(

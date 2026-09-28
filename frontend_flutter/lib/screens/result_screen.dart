@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-
+import 'package:url_launcher/url_launcher.dart';
 import '../models/common_models.dart';
 import '../models/recommendation_result.dart';
 import '../repositories/content_repository.dart';
@@ -7,831 +7,445 @@ import '../state/auth_scope.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/analysis_settings_audit.dart';
 import '../widgets/current_trend_ideas_panel.dart';
+import '../widgets/recommendation_evidence_panel.dart';
 import '../widgets/state_widgets.dart';
 
 class ResultScreenArgs {
   const ResultScreenArgs({this.initialData, this.contentId});
-
   final AnalysisResultViewData? initialData;
   final int? contentId;
 }
 
 class ResultScreen extends StatefulWidget {
-  const ResultScreen({super.key});
-
+  const ResultScreen({super.key, this.repository});
+  final ContentRepository? repository;
   @override
   State<ResultScreen> createState() => _ResultScreenState();
 }
 
 class _ResultScreenState extends State<ResultScreen> {
-  final _repository = ContentRepository();
+  late final ContentRepository _repository =
+      widget.repository ?? ContentRepository();
   AnalysisResultViewData? _data;
   String? _error;
+  int? _contentId;
   bool _initialized = false;
-  bool _saveLoading = false;
-  bool _saved = false;
+  bool _loading = false;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_initialized) return;
     _initialized = true;
-
     final args =
         ModalRoute.of(context)?.settings.arguments as ResultScreenArgs?;
-    if (args?.initialData != null) {
-      _data = args!.initialData;
-      _saved = _data?.saved ?? false;
-    } else if (args?.contentId != null) {
-      _loadContent(args!.contentId!);
-    }
+    _data = args?.initialData;
+    _contentId = args?.contentId ?? _data?.contentId;
+    if (_data == null && _contentId != null) _loadContent();
   }
 
-  Future<void> _loadContent(int contentId) async {
+  Future<void> _loadContent() async {
+    if (_contentId == null || _loading) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final response = await _repository.getContentResult(contentId);
-      if (!mounted) return;
-      setState(() {
-        _data = response;
-        _saved = response.saved;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _error = error.toString());
-    }
-  }
-
-  Future<void> _saveToIdeas() async {
-    if (_saved || _data?.contentId != null) {
-      setState(() => _saved = true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('This analysis is already saved in My Ideas.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
-    setState(() => _saveLoading = true);
-    try {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Use Analyze & Save to store this result in My Ideas.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    } catch (e) {
+      final response = await _repository.getContentResult(_contentId!);
+      if (mounted) setState(() => _data = response);
+    } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}')),
-        );
+        setState(() => _error = 'โหลดผลวิเคราะห์ไม่สำเร็จ กรุณาลองอีกครั้ง');
       }
     } finally {
-      if (mounted) {
-        setState(() => _saveLoading = false);
-      }
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final data = _data;
-    final recommendation = data?.recommendation;
-    final classification = recommendation?.classification;
-    final classifierConfidence = (classification?.confidence ?? 0) * 100;
-    final domain = classification?.displayCategory ??
-        recommendation?.domain ??
-        data?.fallbackDomain ??
-        '-';
-    final contentKeywords = recommendation?.contentKeywords ?? const <String>[];
-    final comparableKeywords =
-        recommendation?.comparableKeywords ?? const <String>[];
-    final userKeywords = comparableKeywords.isNotEmpty
-        ? comparableKeywords
-        : recommendation?.userKeywords ?? const <String>[];
-    final hookTerms = recommendation?.hookTerms ?? const <String>[];
-    final missingKeywords =
-        recommendation?.missingKeywords ?? const <KeywordScore>[];
-    final hookKeywords = recommendation?.hookKeywords ?? const <KeywordScore>[];
-    final duration = recommendation?.duration;
-    final evidence = recommendation?.evidence;
-    final hasReferenceEvidence =
-        (recommendation?.datasetProfile.sampleSize ?? 0) > 0;
-    final missingKeywordsEmptyMessage = hasReferenceEvidence
-        ? 'ยังไม่พบหัวข้อเพิ่มเติมที่มีหลักฐานสนับสนุนเพียงพอจากคลิปอ้างอิง'
-        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับสร้างคำแนะนำ';
-    final hookKeywordsEmptyMessage = hasReferenceEvidence
-        ? 'ยังไม่พบคำแนะนำเพิ่มเติมสำหรับช่วงเปิดคลิปจากข้อมูลอ้างอิง'
-        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับแนะนำช่วงเปิดคลิป';
-    final isSaved = _saved || data?.contentId != null;
-
     return AppShell(
-      title: 'Analysis Result',
+      title: 'ผลวิเคราะห์คลิป',
       isAdmin: AuthScope.of(context).isAdmin,
       actions: [
-        if (isSaved)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Chip(
-              avatar: Icon(Icons.bookmark_added_outlined, size: 18),
-              label: Text('Saved'),
-            ),
-          )
-        else if (!_saveLoading)
+        if (_contentId != null)
           IconButton(
-            onPressed: _saveToIdeas,
-            icon: const Icon(Icons.bookmark_outline),
-            tooltip: 'Save to My Ideas',
-          )
-        else
-          const Center(
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
+              onPressed: _loading ? null : _loadContent,
+              icon: const Icon(Icons.refresh),
+              tooltip: 'โหลดผลวิเคราะห์ใหม่'),
       ],
-      child: _error != null
-          ? ErrorStateView(message: _error!)
-          : data == null
-              ? const Center(child: CircularProgressIndicator())
-              : RefreshIndicator(
-                  onRefresh: () async {
-                    final contentId = data.contentId;
-                    if (contentId != null) {
-                      await _loadContent(contentId);
-                    }
-                  },
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      Text(
-                        data.title,
-                        style: Theme.of(context).textTheme.headlineSmall,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 24),
-                      _ScopeSummaryCard(
-                        domain: domain,
-                        confidence: classifierConfidence,
-                        userKeywords: userKeywords,
-                        missingKeywords: missingKeywords,
-                        duration: duration,
-                        hasReferenceEvidence: hasReferenceEvidence,
-                      ),
-                      const SizedBox(height: 24),
-                      if (data.transcript.isNotEmpty) ...[
-                        const _SectionHeader(
-                          title: 'ตัวอย่างข้อความถอดเสียง',
-                          icon: Icons.subtitles_outlined,
-                        ),
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Text(
-                              data.transcript,
-                              maxLines: 5,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.bodyMedium,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                      ],
-                      const _SectionHeader(
-                        title: 'หมวดหมู่ของคลิป',
-                        icon: Icons.account_tree_outlined,
-                      ),
-                      _ClassificationCard(
-                        domain: domain,
-                        confidence: classifierConfidence,
-                        classification: classification,
-                      ),
-                      const SizedBox(height: 24),
-                      const _SectionHeader(
-                        title: 'คำสำคัญที่พบทั้งคลิป',
-                        icon: Icons.article_outlined,
-                      ),
-                      _StringKeywordCard(
-                        keywords: contentKeywords,
-                        emptyMessage: 'ยังไม่พบคำสำคัญจากเนื้อหาในคลิปนี้',
-                      ),
-                      const SizedBox(height: 24),
-                      const _SectionHeader(
-                        title: 'หัวข้อหลักที่ใช้เปรียบเทียบ',
-                        icon: Icons.compare_arrows_outlined,
-                      ),
-                      _StringKeywordCard(
-                        keywords: comparableKeywords,
-                        emptyMessage:
-                            'ยังไม่พบหัวข้อที่ระบบรู้จักสำหรับใช้เปรียบเทียบ',
-                      ),
-                      const SizedBox(height: 24),
-                      const _SectionHeader(
-                        title: 'คำสำคัญที่พบในช่วงเปิดคลิป',
-                        icon: Icons.bolt_outlined,
-                      ),
-                      _StringKeywordCard(
-                        keywords: hookTerms,
-                        emptyMessage:
-                            'ยังไม่พบคำสำคัญจากเสียงพูดในช่วงเปิดคลิป',
-                      ),
-                      const SizedBox(height: 24),
-                      const _SectionHeader(
-                        title: 'ประเด็นจากคลิปอ้างอิง',
-                        icon: Icons.auto_awesome_outlined,
-                      ),
-                      if (missingKeywords.isNotEmpty) ...[
-                        Text(
-                          'หัวข้อเหล่านี้พบในคลิปตัวอย่างหมวด $domain ที่มีผลตอบรับสูง '
-                          'แต่ยังไม่พบในเนื้อหาของคุณหรือคำที่มีความหมายใกล้กัน',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: Colors.grey),
-                        ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'เรียงลำดับจากจำนวนคลิปอ้างอิงที่พูดถึง ความถี่ '
-                          'และผลตอบรับของคลิป',
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                      _ScoredKeywordCard(
-                        keywords: missingKeywords,
-                        emptyMessage: missingKeywordsEmptyMessage,
-                      ),
-                      const SizedBox(height: 24),
-                      if (recommendation != null) ...[
-                        CurrentTrendIdeasPanel(
-                            data: recommendation.currentTrendIdeas),
-                        const SizedBox(height: 24),
-                      ],
-                      if (duration != null) ...[
-                        const _SectionHeader(
-                          title: 'ความยาวคลิปที่แนะนำ',
-                          icon: Icons.schedule_outlined,
-                        ),
-                        _DurationCard(duration: duration),
-                        if (evidence != null &&
-                            evidence.durationExplanation.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            evidence.durationExplanation,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
-                        const SizedBox(height: 24),
-                      ],
-                      const _SectionHeader(
-                        title: 'คำแนะนำสำหรับช่วงเปิดคลิป',
-                        icon: Icons.lightbulb_outline,
-                      ),
-                      _ScoredKeywordCard(
-                        keywords: hookKeywords,
-                        emptyMessage: hookKeywordsEmptyMessage,
-                        showScore: false,
-                      ),
-                      const SizedBox(height: 24),
-                      AnalysisSettingsAudit(snapshot: data.analysisSettings),
-                      const SizedBox(height: 24),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton.icon(
-                              onPressed: isSaved ? null : _saveToIdeas,
-                              icon: Icon(isSaved
-                                  ? Icons.bookmark_added_outlined
-                                  : Icons.bookmark_outline),
-                              label: Text(isSaved ? 'Saved' : 'Save Idea'),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: () =>
-                                  Navigator.pushNamed(context, '/dashboard'),
-                              icon: const Icon(Icons.home),
-                              label: const Text('Back to Dashboard'),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                  ),
-                ),
-    );
-  }
-}
-
-class _ScopeSummaryCard extends StatelessWidget {
-  const _ScopeSummaryCard({
-    required this.domain,
-    required this.confidence,
-    required this.userKeywords,
-    required this.missingKeywords,
-    required this.duration,
-    required this.hasReferenceEvidence,
-  });
-
-  final String domain;
-  final double confidence;
-  final List<String> userKeywords;
-  final List<KeywordScore> missingKeywords;
-  final DurationRecommendation? duration;
-  final bool hasReferenceEvidence;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            _SummaryRow(
-              icon: Icons.category_outlined,
-              label: 'หมวดหมู่คลิป',
-              value: '$domain (${confidence.toStringAsFixed(0)}%)',
-            ),
-            const Divider(height: 20),
-            _SummaryRow(
-              icon: Icons.key_outlined,
-              label: 'หัวข้อที่พบในคลิป',
-              value:
-                  userKeywords.isEmpty ? '-' : userKeywords.take(6).join(', '),
-            ),
-            const Divider(height: 20),
-            _SummaryRow(
-              icon: Icons.auto_awesome_outlined,
-              label: 'หัวข้อที่ควรเพิ่ม',
-              value: missingKeywords.isEmpty
-                  ? hasReferenceEvidence
-                      ? 'ยังไม่พบหัวข้อเพิ่มเติมที่มีหลักฐานเพียงพอ'
-                      : 'ข้อมูลอ้างอิงยังไม่เพียงพอ'
-                  : missingKeywords
-                      .take(6)
-                      .map((item) => item.keyword)
-                      .join(', '),
-            ),
-            const Divider(height: 20),
-            _SummaryRow(
-              icon: Icons.schedule_outlined,
-              label: 'ความยาวที่แนะนำ',
-              value: duration?.recommendedRange ?? '-',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SummaryRow extends StatelessWidget {
-  const _SummaryRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 20),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: Theme.of(context).textTheme.labelMedium),
-              const SizedBox(height: 4),
-              Text(value, style: Theme.of(context).textTheme.bodyMedium),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ClassificationCard extends StatelessWidget {
-  const _ClassificationCard({
-    required this.domain,
-    required this.confidence,
-    required this.classification,
-  });
-
-  final String domain;
-  final double confidence;
-  final ClassificationResult? classification;
-
-  @override
-  Widget build(BuildContext context) {
-    final candidates =
-        classification?.candidates ?? const <ClassificationCandidate>[];
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'หมวดหมู่ที่โมเดลคาดการณ์',
-                        style: Theme.of(context).textTheme.labelMedium,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        domain,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ],
-                  ),
-                ),
-                Column(
-                  children: [
-                    Text(
-                      '${confidence.toStringAsFixed(0)}%',
-                      style:
-                          Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                color: Theme.of(context).primaryColor,
-                              ),
-                    ),
-                    Text(
-                      'ความมั่นใจ',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            if ((classification?.warning ?? '').isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    size: 18,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      classification!.warning,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-            if (candidates.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              const Divider(height: 1),
-              const SizedBox(height: 12),
-              Text(
-                'หมวดหมู่อื่นที่เป็นไปได้',
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-              const SizedBox(height: 8),
-              ...candidates.take(3).map((candidate) {
-                final value = candidate.score.clamp(0.0, 1.0).toDouble();
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(candidate.domain),
-                          Text(
-                            '${(candidate.score * 100).toStringAsFixed(0)}%',
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: value,
-                          minHeight: 4,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StringKeywordCard extends StatelessWidget {
-  const _StringKeywordCard({
-    required this.keywords,
-    required this.emptyMessage,
-  });
-
-  final List<String> keywords;
-  final String emptyMessage;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: keywords.isEmpty
-            ? Text(emptyMessage)
-            : Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final keyword in keywords.take(16))
-                    Chip(label: Text(keyword)),
-                ],
-              ),
-      ),
-    );
-  }
-}
-
-class _ScoredKeywordCard extends StatelessWidget {
-  const _ScoredKeywordCard({
-    required this.keywords,
-    required this.emptyMessage,
-    this.showScore = true,
-  });
-
-  final List<KeywordScore> keywords;
-  final String emptyMessage;
-  final bool showScore;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: keywords.isEmpty
-            ? Text(emptyMessage)
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (var index = 0; index < keywords.length; index++) ...[
-                    if (index > 0) const Divider(height: 24),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      keywords[index].keyword,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleSmall,
-                                    ),
-                                    if (keywords[index].hasDatasetEvidence) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'พบหัวข้อนี้ในคลิปตัวอย่างที่มีผลตอบรับสูง '
-                                        '${keywords[index].supportCount} จาก ${keywords[index].sampleSize} คลิป '
-                                        '(กล่าวถึงรวม ${keywords[index].totalFrequency} ครั้ง)',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                              if (showScore) ...[
-                                const SizedBox(width: 12),
-                                Chip(
-                                  label: Text(
-                                    keywords[index].hasDatasetEvidence
-                                        ? 'คะแนนสนับสนุน ${(keywords[index].score.clamp(0.0, 1.0) * 100).toStringAsFixed(0)}%'
-                                        : keywords[index]
-                                            .score
-                                            .toStringAsFixed(2),
-                                  ),
-                                  side: const BorderSide(
-                                      color: Color(0xFFE0E0E0)),
-                                  backgroundColor: Colors.transparent,
-                                ),
-                              ],
-                            ],
-                          ),
-                          if (keywords[index]
-                              .supportingExamples
-                              .isNotEmpty) ...[
-                            const SizedBox(height: 10),
+      child: _loading && data == null
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? ErrorStateView(message: _error!, onRetry: _loadContent)
+              : data == null
+                  ? const EmptyStateView(
+                      title: 'ยังไม่มีผลวิเคราะห์',
+                      message: 'ไม่พบรายการผลวิเคราะห์นี้',
+                      icon: Icons.analytics_outlined)
+                  : RefreshIndicator(
+                      onRefresh: _loadContent,
+                      child: ListView(
+                          padding: const EdgeInsets.all(24),
+                          children: [
+                            if (_loading) const LinearProgressIndicator(),
+                            Text(data.title,
+                                style:
+                                    Theme.of(context).textTheme.headlineSmall),
+                            const SizedBox(height: 8),
                             Text(
-                              'ตัวอย่างคลิปอ้างอิง',
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
-                            const SizedBox(height: 6),
-                            for (final example
-                                in keywords[index].supportingExamples) ...[
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 2),
-                                    child: Icon(Icons.ondemand_video_outlined,
-                                        size: 16),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      '${example.title} '
-                                      '(ข้อมูล #${example.datasetId}, กล่าวถึง ${example.frequency} ครั้ง)\n'
-                                      '${example.platform} | เผยแพร่ ${trendIdeaTime(example.publishedAt)}\n'
-                                      'เก็บสถิติ ${trendIdeaTime(example.statisticsCapturedAt)}',
-                                      style:
-                                          Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                            ],
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-      ),
+                                data.saved && data.contentId != null
+                                    ? 'บันทึกในรายการไอเดียแล้ว · #${data.contentId}'
+                                    : 'ผลนี้ยังไม่มีรายการที่ยืนยันว่าบันทึกแล้ว',
+                                style: Theme.of(context).textTheme.bodySmall),
+                            const SizedBox(height: 24),
+                            AnalysisReport(data: data),
+                            const SizedBox(height: 24),
+                            Wrap(spacing: 12, runSpacing: 12, children: [
+                              FilledButton.icon(
+                                  onPressed: () =>
+                                      Navigator.pushNamed(context, '/upload'),
+                                  icon: const Icon(Icons.upload_file_outlined),
+                                  label: const Text('วิเคราะห์คลิปใหม่')),
+                              OutlinedButton.icon(
+                                  onPressed: () =>
+                                      Navigator.pushNamed(context, '/history'),
+                                  icon: const Icon(Icons.bookmarks_outlined),
+                                  label: const Text('รายการไอเดียของฉัน')),
+                              OutlinedButton.icon(
+                                  onPressed: () => Navigator.pushNamed(
+                                      context, '/dashboard'),
+                                  icon: const Icon(Icons.home_outlined),
+                                  label: const Text('กลับ Dashboard')),
+                            ]),
+                          ])),
     );
   }
 }
 
-class _DurationCard extends StatelessWidget {
-  const _DurationCard({required this.duration});
-
-  final DurationRecommendation duration;
+class AnalysisReport extends StatelessWidget {
+  const AnalysisReport({super.key, required this.data});
+  final AnalysisResultViewData data;
 
   @override
   Widget build(BuildContext context) {
-    final isSufficient = duration.hasSufficientEvidence;
-    final median = duration.medianSeconds ?? duration.recommendedSeconds;
-    final headline = isSufficient && median != null
-        ? 'ค่ากลาง $median วินาที'
-        : 'ข้อมูลอ้างอิงยังไม่เพียงพอ';
-    final detail = isSufficient
-        ? 'ช่วงกลางของข้อมูลอ้างอิง: ${duration.recommendedRange} '
-            '(เปอร์เซ็นไทล์ ${duration.percentileLow}-${duration.percentileHigh})'
-        : 'ขณะนี้มีข้อมูลความยาว ${duration.sampleSize} คลิป '
-            'จากขั้นต่ำ ${duration.minimumSampleSize} คลิป';
-    return Card(
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final recommendation = data.recommendation;
+    final classification = recommendation.classification;
+    final withheld = classification?.isUnknown == true;
+    final bundle = recommendation.evidenceBundle;
+    final input = bundle['input'] as Map? ?? const {};
+    final inputUnassessable =
+        input.isNotEmpty && input['availability'] != 'available';
+    final hookUnassessable = inputUnassessable ||
+        (bundle.isNotEmpty &&
+            ((input['segments'] as List? ?? []).isEmpty ||
+                input['hook_seconds'] == null));
+    final domain = classification?.displayCategory ?? recommendation.domain;
+    final evidence = recommendation.evidence;
+    final duration = recommendation.duration;
+    final hasReference = recommendation.datasetProfile.sampleSize > 0;
+    final supported = <String, KeywordScore>{
+      for (final item in [
+        ...recommendation.missingKeywords,
+        ...recommendation.hookKeywords
+      ])
+        if (item.hasDatasetEvidence) item.keyword: item,
+    };
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      _Band(
+          title: '1. พบอะไรในคลิป',
+          icon: Icons.fact_check_outlined,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  isSufficient ? Icons.analytics_outlined : Icons.info_outline,
-                  color: isSufficient
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.error,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        headline,
-                        style: Theme.of(context).textTheme.headlineSmall,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(detail),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 32,
-              runSpacing: 12,
-              children: [
-                _DurationFact(
-                  label: 'แหล่งข้อมูล',
-                  value: _durationSourceLabel(duration.source),
-                ),
-                _DurationFact(
-                  label: 'จำนวนตัวอย่าง',
-                  value: '${duration.sampleSize} คลิป '
-                      '(เป้าหมาย ${duration.targetSampleSize})',
-                ),
-                _DurationFact(
-                  label: 'กลุ่มเปรียบเทียบ',
-                  value: _durationCohortLabel(duration.cohort),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
+            Text('หมวดหมู่ของคลิป: $domain',
+                style: Theme.of(context).textTheme.titleMedium),
+            if (classification != null)
+              Text(
+                  classification.isUnknown
+                      ? 'ยังไม่ยืนยันหมวดหมู่สำหรับสร้างคำแนะนำ'
+                      : 'ความมั่นใจของโมเดล ${(classification.confidence * 100).toStringAsFixed(0)}% ไม่ใช่คะแนนคุณภาพคลิป',
+                  style: Theme.of(context).textTheme.bodySmall),
+            if (classification?.warning.isNotEmpty == true)
+              Text(classification!.warning),
+            if (classification?.isUnknown == true &&
+                classification!.rawTaxonomyLeafKey.isNotEmpty)
+              ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('ผลทายก่อนตรวจรับ'),
+                  children: [
+                    Text('${classification.rawTaxonomyLeafKey} · '
+                        'ความมั่นใจภายในโมเดล ${(classification.confidence * 100).toStringAsFixed(1)}%'),
+                    const Text(
+                        'ผลนี้ยังไม่ผ่านเกณฑ์ จึงไม่ใช้เลือกคลิปอ้างอิงหรือสร้างคำแนะนำ'),
+                  ]),
+            _Words(
+                title: 'คำสำคัญที่พบทั้งคลิป',
+                words: recommendation.contentKeywords,
+                empty: inputUnassessable
+                    ? 'ตรวจคำสำคัญไม่ได้ เพราะข้อความถอดเสียงไม่สมบูรณ์'
+                    : 'ยังไม่พบคำสำคัญจากเนื้อหาในคลิปนี้'),
+            _Words(
+                title: 'คำสำคัญที่พบในช่วงเปิดคลิป',
+                words: recommendation.hookTerms,
+                empty: hookUnassessable
+                    ? 'ตรวจช่วงเปิดไม่ได้ เพราะไม่มีข้อความถอดเสียงพร้อมเวลาที่เพียงพอ'
+                    : 'ยังไม่พบคำสำคัญจากเสียงพูดในช่วงเปิดคลิป'),
+            _Words(
+                title: 'หัวข้อหลักที่ใช้เปรียบเทียบ',
+                words: recommendation.comparableKeywords,
+                empty: 'ยังไม่พบหัวข้อที่ระบบรู้จักสำหรับใช้เปรียบเทียบ'),
+            ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('ข้อความถอดเสียง'),
+                children: [
+                  _Transcript(
+                      label: 'ข้อความต้นฉบับ',
+                      text: data.rawTranscript.isEmpty
+                          ? data.transcript
+                          : data.rawTranscript),
+                  _Transcript(
+                      label: 'ข้อความหลังปรับศัพท์',
+                      text: data.cleanedTranscript.isEmpty
+                          ? data.transcript
+                          : data.cleanedTranscript),
+                ]),
+          ]),
+      const SizedBox(height: 24),
+      _Band(title: '2. ควรเพิ่มอะไร', icon: Icons.lightbulb_outline, children: [
+        if (inputUnassessable)
+          const Text(
+              'งดข้อเสนอให้เพิ่มหัวข้อ เพราะข้อความถอดเสียงไม่สมบูรณ์ จึงยังสรุปไม่ได้ว่าผู้ใช้ไม่ได้พูดเรื่องนั้น'),
+        if (withheld)
+          const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: Text(
+                  'งดคำแนะนำเฉพาะหมวด เพราะผลจำแนกยังไม่ผ่านเกณฑ์ตรวจรับ')),
+        _Suggestions(
+            title: 'ประเด็นจากคลิปอ้างอิง',
+            words: recommendation.missingKeywords,
+            empty: inputUnassessable
+                ? 'ยังตรวจว่าขาดหัวข้อใดไม่ได้จากข้อความที่มี'
+                : withheld
+                    ? 'ยังไม่เลือกคลิปอ้างอิง เพราะยังยืนยันหมวดหมู่ไม่ได้'
+                    : hasReference
+                        ? 'ยังไม่พบหัวข้อเพิ่มเติมที่มีหลักฐานสนับสนุนเพียงพอจากคลิปอ้างอิง'
+                        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับสร้างคำแนะนำ'),
+        _Suggestions(
+            title: 'คำแนะนำสำหรับช่วงเปิดคลิป',
+            words: recommendation.hookKeywords,
+            empty: inputUnassessable
+                ? 'ยังสร้างคำแนะนำช่วงเปิดไม่ได้จากข้อความที่มี'
+                : withheld
+                    ? 'ยังไม่สร้างคำแนะนำช่วงเปิดคลิปจนกว่าจะยืนยันหมวดหมู่ได้'
+                    : hasReference
+                        ? 'ยังไม่พบคำแนะนำเพิ่มเติมสำหรับช่วงเปิดคลิปจากข้อมูลอ้างอิง'
+                        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับแนะนำช่วงเปิดคลิป'),
+        const Divider(),
+        Text('ความยาวคลิปที่แนะนำ',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text(withheld
+            ? 'งดแนะนำความยาวจนกว่าจะยืนยันหมวดหมู่ได้'
+            : duration.hasSufficientEvidence
+                ? 'ค่ากลาง ${duration.medianSeconds ?? duration.recommendedSeconds} วินาที · ${duration.recommendedRange}'
+                : 'ข้อมูลอ้างอิงยังไม่เพียงพอ'),
+        Text(
+            'มีข้อมูลความยาว ${duration.sampleSize} คลิป · ขั้นต่ำ ${duration.minimumSampleSize} คลิป',
+            style: Theme.of(context).textTheme.bodySmall),
+        const Divider(),
+        CurrentTrendIdeasPanel(data: recommendation.currentTrendIdeas),
+      ]),
+      const SizedBox(height: 24),
+      _Band(
+          title: '3. เพราะอะไรจึงแนะนำ',
+          icon: Icons.manage_search_outlined,
+          children: [
+            Text(withheld
+                ? 'ผลจำแนกยังไม่ผ่านเกณฑ์ ระบบจึงไม่เลือก Dataset มาอ้างอิงในรอบนี้'
+                : hasReference
+                    ? 'เปรียบเทียบกับคลิปอ้างอิงหมวดเดียวกัน ${recommendation.datasetProfile.sampleSize} คลิป '
+                        'โดยดูจำนวนคลิปที่กล่าวถึง ความถี่ และผลตอบรับของคลิป'
+                    : 'ยังไม่มีคลิปอ้างอิงที่ผ่านเกณฑ์เพียงพอ จึงยังสรุปคำแนะนำไม่ได้'),
+            const SizedBox(height: 8),
+            const Text(
+                'ความสัมพันธ์ในคลิปอ้างอิงไม่ยืนยันว่าเพิ่มหัวข้อแล้วจะทำให้ยอดวิวหรือยอดไลก์เพิ่มขึ้น'),
+            if (evidence.warning?.isNotEmpty == true)
+              Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(evidence.warning!)),
+            if (bundle.isNotEmpty)
+              RecommendationEvidencePanel(bundle: bundle)
+            else
+              for (final keyword in supported.values)
+                _KeywordEvidence(item: keyword),
+            if (supported.isEmpty && bundle.isEmpty)
+              const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('ยังไม่มีหลักฐานรายหัวข้อที่เปิดดูได้ในผลนี้')),
+            ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                title: const Text('หลักฐานความยาวคลิป'),
+                children: [
+                  Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Text(
+                              'จำนวนตัวอย่าง ${duration.sampleSize} คลิป\n'
+                              'ช่วงเปอร์เซ็นไทล์ ${duration.percentileLow}–${duration.percentileHigh}\n'
+                              'Dataset IDs: ${evidence.durationDatasetRowIds.isEmpty ? "ยังไม่มี" : evidence.durationDatasetRowIds.join(", ")}\n'
+                              '${evidence.durationExplanation}')))
+                ]),
+            AnalysisSettingsAudit(snapshot: data.analysisSettings),
+          ]),
+    ]);
   }
 }
 
-class _DurationFact extends StatelessWidget {
-  const _DurationFact({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minWidth: 150, maxWidth: 280),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: Theme.of(context).textTheme.labelSmall),
-          Text(value, style: Theme.of(context).textTheme.labelMedium),
-        ],
-      ),
-    );
-  }
-}
-
-String _durationSourceLabel(String source) {
-  if (source == 'youtube_metadata') return 'ข้อมูลความยาวจาก YouTube';
-  if (source == 'none') return 'ยังไม่มีแหล่งข้อมูลที่ตรวจสอบแล้ว';
-  return source.replaceAll('_', ' ');
-}
-
-String _durationCohortLabel(String cohort) {
-  if (cohort == 'upload_compatible_under_5m') {
-    return 'คลิปอ้างอิงที่ยาวไม่เกิน 5 นาที';
-  }
-  return cohort.replaceAll('_', ' ');
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.title,
-    required this.icon,
-  });
-
+class _Band extends StatelessWidget {
+  const _Band(
+      {required this.title, required this.icon, required this.children});
   final String title;
   final IconData icon;
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) => Semantics(
+      container: true,
+      explicitChildNodes: true,
+      child: ColoredBox(
+          color: Theme.of(context).colorScheme.surface,
+          child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(children: [
+                      Icon(icon, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 12),
+                      Expanded(
+                          child: Semantics(
+                              header: true,
+                              child: Text(title,
+                                  style:
+                                      Theme.of(context).textTheme.titleLarge)))
+                    ]),
+                    const Divider(height: 32),
+                    ...children,
+                  ]))));
+}
+
+class _Words extends StatelessWidget {
+  const _Words({required this.title, required this.words, required this.empty});
+  final String title, empty;
+  final List<String> words;
+  @override
+  Widget build(BuildContext context) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(title, style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        if (words.isEmpty)
+          Text(empty)
+        else
+          Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: words
+                  .map((word) => Chip(label: Text(word, softWrap: true)))
+                  .toList()),
+      ]));
+}
+
+class _Suggestions extends StatelessWidget {
+  const _Suggestions(
+      {required this.title, required this.words, required this.empty});
+  final String title, empty;
+  final List<KeywordScore> words;
+  @override
+  Widget build(BuildContext context) => Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        if (words.isEmpty) Text(empty),
+        for (final word in words)
+          Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child:
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.add_circle_outline, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(word.keyword,
+                          style: Theme.of(context).textTheme.titleSmall),
+                      if (word.hasDatasetEvidence)
+                        Text(
+                            'พบใน ${word.supportCount} จาก ${word.sampleSize} คลิปอ้างอิง',
+                            style: Theme.of(context).textTheme.bodySmall),
+                    ])),
+              ])),
+      ]));
+}
+
+class _Transcript extends StatelessWidget {
+  const _Transcript({required this.label, required this.text});
+  final String label, text;
+  @override
+  Widget build(BuildContext context) => Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(label, style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        SelectableText(text.isEmpty ? 'ไม่มีข้อความถอดเสียงในผลนี้' : text),
+      ]));
+}
+
+class _KeywordEvidence extends StatelessWidget {
+  const _KeywordEvidence({required this.item});
+  final KeywordScore item;
+  Future<void> _open(BuildContext context, String url) async {
+    final uri = Uri.tryParse(url);
+    try {
+      if (uri == null ||
+          !['https', 'http'].contains(uri.scheme) ||
+          uri.host.isEmpty ||
+          !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw StateError('invalid source');
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('เปิดต้นทางไม่สำเร็จ')));
+      }
+    }
+  }
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        children: [
-          Icon(icon, color: Theme.of(context).primaryColor),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              title,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: Text('หลักฐาน: ${item.keyword}'),
+          subtitle: Text(
+              '${item.supportCount}/${item.sampleSize} คลิป · กล่าวถึงรวม ${item.totalFrequency} ครั้ง'),
+          children: [
+            Align(
+                alignment: Alignment.centerLeft,
+                child: SelectableText(
+                    'Dataset IDs: ${item.supportingDatasetRowIds.join(", ")}')),
+            for (final source in item.supportingExamples)
+              ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(source.title),
+                  subtitle: Text(
+                      'ข้อมูล #${source.datasetId} · กล่าวถึง ${source.frequency} ครั้ง\n'
+                      'เก็บสถิติ: ${trendIdeaTime(source.statisticsCapturedAt)} · เผยแพร่: ${trendIdeaTime(source.publishedAt)}'),
+                  trailing: source.videoUrl.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'เปิดคลิปอ้างอิง #${source.datasetId}',
+                          onPressed: () => _open(context, source.videoUrl),
+                          icon: const Icon(Icons.open_in_new))),
+          ]);
 }

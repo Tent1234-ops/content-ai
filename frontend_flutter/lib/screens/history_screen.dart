@@ -88,46 +88,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return filtered;
   }
 
-  Future<void> _deleteItem(ContentHistoryItem item) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete Analysis'),
-        content: Text('Delete "${item.title}"? This cannot be undone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true || !mounted) return;
-
-    try {
-      // TODO: Implement delete in repository
-      if (mounted) {
-        setState(() {
-          _items.removeWhere((i) => i.contentId == item.contentId);
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Analysis deleted')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}')),
-        );
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final auth = AuthScope.of(context);
@@ -306,23 +266,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
                                           ),
                                     ),
                                   ],
-                                ],
-                              ),
-                              trailing: PopupMenuButton(
-                                itemBuilder: (context) => [
-                                  PopupMenuItem(
-                                    child: const Text('View Details'),
-                                    onTap: () => Navigator.pushNamed(
-                                      context,
-                                      '/result',
-                                      arguments: ResultScreenArgs(
-                                          contentId: item.contentId),
-                                    ),
-                                  ),
-                                  PopupMenuItem(
-                                    child: const Text('Delete'),
-                                    onTap: () => _deleteItem(item),
-                                  ),
                                 ],
                               ),
                               onTap: () => Navigator.pushNamed(

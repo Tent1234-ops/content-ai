@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 
 class AdminDatasetItem(BaseModel):
+    deleted_at: Optional[datetime] = None
+    quality: dict = Field(default_factory=dict)
     dataset_id: int
     title: str
     video_url: Optional[str] = None

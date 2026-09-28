@@ -69,6 +69,29 @@ class ScopeCompletionTests(unittest.TestCase):
         self.assertEqual(self.client.get('/admin/datasets/readiness?role=made_up').status_code, 422)
         self.assertEqual(self.client.get('/admin/datasets/readiness?limit=101').status_code, 422)
 
+    def test_trash_restore_admin_api_requires_permission_and_confirmation(self):
+        row = DatasetContent(title='Legacy record', source_platform='youtube',
+            deleted_at=datetime.utcnow(), is_active=False, is_training_eligible=False)
+        self.db.add(row)
+        self.db.commit()
+        url = f'/admin/datasets/{row.dataset_id}/restore'
+        self.assertEqual(self.client.post(url, params={'confirmation_id': row.dataset_id}).status_code, 403)
+        self.assertEqual(self.client.get('/admin/sources/health').status_code, 403)
+        self.actor = self.admin
+        self.assertEqual(self.client.get('/admin/datasets').json()['total'], 0)
+        trash = self.client.get('/admin/datasets?trashed=true').json()
+        self.assertEqual(trash['total'], 1)
+        self.assertEqual(trash['items'][0]['quality']['status'], 'archived')
+        self.assertEqual(self.client.post(url, params={'confirmation_id': row.dataset_id + 1}).status_code, 422)
+        result = self.client.post(url, params={'confirmation_id': row.dataset_id})
+        self.assertEqual(result.status_code, 200)
+        self.assertIsNone(result.json()['deleted_at'])
+        self.assertFalse(result.json()['is_training_eligible'])
+        self.assertFalse(row.is_keyword_recommendation_eligible)
+        self.assertEqual(self.client.post(url, params={'confirmation_id': row.dataset_id}).status_code, 404)
+        self.assertEqual(self.client.get('/admin/datasets?trashed=true').json()['total'], 0)
+        self.assertEqual(self.client.get('/admin/sources/health').status_code, 200)
+
     def test_reference_statistics_admin_auth_validation_and_background_job(self):
         self.assertEqual(self.client.get('/admin/reference-statistics').status_code, 403)
         self.assertEqual(self.client.post('/admin/reference-statistics/refresh').status_code, 403)
@@ -330,7 +353,9 @@ class ScopeMigrationTests(unittest.TestCase):
             for table in ('dataset_contents', 'system_configs', 'followed_topics', 'user_trend_watch_sessions'):
                 connection.execute(text(f'CREATE TABLE {table} (id INTEGER PRIMARY KEY)'))
                 connection.execute(text(f'INSERT INTO {table} (id) VALUES (7)'))
-        self.assertEqual(len(migrate_scope_completion_schema(engine)['added_columns']), 7)
+            added = migrate_scope_completion_schema(engine)['added_columns']
+            self.assertEqual(len(added), 8)
+            self.assertIn('dataset_contents.deletion_state_json', added)
         self.assertEqual(migrate_scope_completion_schema(engine)['added_columns'], [])
         with engine.begin() as connection:
             self.assertEqual(connection.execute(text('SELECT trend_notification_mode FROM system_configs')).scalar(), 'all')

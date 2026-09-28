@@ -26,6 +26,9 @@ class Settings:
     jwt_secret: str = os.getenv("JWT_SECRET", "change-this-secret-in-production")
     jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
     admin_invite_code: str = os.getenv("ADMIN_INVITE_CODE", "")
+    classification_require_scope_validation: bool = os.getenv(
+        "CLASSIFICATION_REQUIRE_SCOPE_VALIDATION", "true"
+    ).lower() not in {"false", "0", "no"}
     db_driver: str = os.getenv("DB_DRIVER", "mysql")
     db_host: str = os.getenv("DB_HOST", "127.0.0.1")
     db_port: str = os.getenv("DB_PORT", "3306")

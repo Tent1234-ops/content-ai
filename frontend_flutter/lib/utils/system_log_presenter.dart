@@ -14,6 +14,7 @@ String systemLogActorLabel(int? userId, String detail) {
 }
 
 String systemLogActionLabel(String action) {
+  if (action == 'admin_dataset_restore') return 'กู้คืน Dataset จากถังขยะ';
   switch (action.trim().toLowerCase()) {
     case 'admin_user_create':
       return 'เพิ่มบัญชีผู้ใช้โดยผู้ดูแล';

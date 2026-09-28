@@ -5,6 +5,7 @@ import '../models/dataset_review.dart';
 import '../repositories/admin_repository.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
+import '../widgets/dataset_bulk_approval.dart';
 
 class AdminDatasetReviewScreen extends StatefulWidget {
   const AdminDatasetReviewScreen({super.key, this.repository});
@@ -27,6 +28,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
   String? _reviewingKey;
   int _loadRequestId = 0;
   String? _error;
+  bool _bulkBusy = false;
 
   @override
   void initState() {
@@ -72,15 +74,16 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
 
   void _removeReviewedCandidate(
     DatasetReviewCandidate candidate,
-    String decision,
-  ) {
+    String decision, {
+    bool includeOffPage = false,
+  }) {
     final queue = _queue;
     if (queue == null) return;
     final key = _candidateKey(candidate);
     final remaining = queue.items
         .where((item) => _candidateKey(item) != key)
         .toList(growable: false);
-    if (remaining.length == queue.items.length) return;
+    if (!includeOffPage && remaining.length == queue.items.length) return;
     final summary = queue.summary;
     _queue = DatasetReviewQueueResult(
       total: queue.total > 0 ? queue.total - 1 : 0,
@@ -118,7 +121,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
     DatasetReviewCandidate candidate,
     String decision,
   ) async {
-    if (_reviewingKey != null) return;
+    if (_reviewingKey != null || _bulkBusy) return;
     final queue = _queue;
     if (queue == null) return;
     final result = await showDialog<_ReviewDecision>(
@@ -181,7 +184,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
       isAdmin: true,
       actions: [
         IconButton(
-          onPressed: _loading ? null : _load,
+          onPressed: _loading || _bulkBusy ? null : _load,
           icon: const Icon(Icons.refresh),
           tooltip: 'Refresh review queue',
         ),
@@ -210,16 +213,33 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                   if (queue != null) ...[
                     _ReviewSummaryBand(summary: queue.summary),
                     const SizedBox(height: 16),
-                    _ReviewFilters(
-                      searchController: _searchController,
-                      leafKey: _leafKey,
-                      taxonomy: queue.taxonomy,
-                      onLeafChanged: (value) {
-                        setState(() => _leafKey = value);
-                        _applyFilters();
-                      },
-                      onSearch: _applyFilters,
-                    ),
+                    AbsorbPointer(
+                        absorbing: _bulkBusy,
+                        child: _ReviewFilters(
+                          searchController: _searchController,
+                          leafKey: _leafKey,
+                          taxonomy: queue.taxonomy,
+                          onLeafChanged: (value) {
+                            setState(() => _leafKey = value);
+                            _applyFilters();
+                          },
+                          onSearch: _applyFilters,
+                        )),
+                    const SizedBox(height: 16),
+                    DatasetBulkApproval(
+                        repository: _repository,
+                        leafKey: _leafKey,
+                        search: _searchController.text,
+                        enabled: !_loading && _reviewingKey == null,
+                        onBusyChanged: (busy) =>
+                            setState(() => _bulkBusy = busy),
+                        onReviewed: (candidate) => setState(() =>
+                            _removeReviewedCandidate(candidate, 'approve',
+                                includeOffPage: true)),
+                        onFinished: () {
+                          setState(() => _offset = 0);
+                          _load();
+                        }),
                     const SizedBox(height: 16),
                     _TaxonomyProgress(taxonomy: queue.taxonomy),
                     const SizedBox(height: 16),
@@ -235,7 +255,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                         (candidate) => _CandidateReviewCard(
                           candidate: candidate,
                           reviewing: _reviewingKey == _candidateKey(candidate),
-                          actionsEnabled: _reviewingKey == null,
+                          actionsEnabled: _reviewingKey == null && !_bulkBusy,
                           onOpenVideo: () => _openVideo(candidate),
                           onApprove: () => _review(candidate, 'approve'),
                           onReject: () => _review(candidate, 'reject'),
@@ -245,7 +265,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                       offset: _offset,
                       limit: _limit,
                       total: queue.total,
-                      onPrevious: _offset <= 0
+                      onPrevious: _bulkBusy || _offset <= 0
                           ? null
                           : () {
                               setState(() {
@@ -253,7 +273,7 @@ class _AdminDatasetReviewScreenState extends State<AdminDatasetReviewScreen> {
                               });
                               _load();
                             },
-                      onNext: _offset + _limit >= queue.total
+                      onNext: _bulkBusy || _offset + _limit >= queue.total
                           ? null
                           : () {
                               setState(() => _offset += _limit);

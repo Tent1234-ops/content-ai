@@ -44,6 +44,11 @@ from app.services.dataset_eligibility import (
     out_of_scope_evaluation_query,
     production_transcript_query,
 )
+from app.services.classification_acceptance import (
+    MIN_UNKNOWN_TEST, MIN_UNKNOWN_CHANNELS, acceptance_summary,
+    apply_acceptance_policy, evaluate_acceptance_policy, fit_acceptance_policy,
+    partition_conflicts, is_validated_acceptance_policy,
+)
 from app.services.taxonomy import (
     ACTIVE_LEAF_KEYS,
     MIN_VERIFIED_SAMPLES,
@@ -610,6 +615,31 @@ def prepare_classification_dataset(
         required_leaf_keys=leaves,
         minimum_samples_per_leaf=minimum_samples_per_leaf,
     )
+    invalid_assignments = []
+    for row in [*examples, *out_of_scope_examples]:
+        try:
+            expected_split, expected_group = channel_dataset_split(row.source_channel_id)
+            valid_assignment = row.split == expected_split and row.creator_group_key == expected_group
+        except ValueError:
+            valid_assignment = False
+        if not valid_assignment:
+            invalid_assignments.append(row.dataset_id)
+            readiness["ready"] = False
+            readiness["issues"].append(
+                f"dataset_id={row.dataset_id}: split/group does not match its channel")
+    selected_ids = {r.dataset_id for r in [*examples, *out_of_scope_examples]}
+    # An archived or currently ineligible holdout still reserves its identity.
+    reserved = [_dataset_row_to_example(row) for row in db.query(DatasetContent).filter(
+        DatasetContent.data_split.in_(("validation", "test"))).all()
+        if row.dataset_id not in selected_ids]
+    conflicts = [row for row in partition_conflicts([*examples, *out_of_scope_examples, *reserved])
+                 if selected_ids.intersection(row["dataset_ids"])]
+    if conflicts:
+        readiness["ready"] = False
+        readiness["issues"].append("Identity overlap across train/validation/test (including Unknown)")
+    readiness["partition_conflicts"] = conflicts
+    readiness["invalid_partition_assignments"] = invalid_assignments
+    readiness["partition_integrity_passed"] = not conflicts and not invalid_assignments
     phase22_readiness = _phase22_collection_readiness(
         examples,
         out_of_scope_examples,
@@ -633,10 +663,14 @@ def prepare_classification_dataset(
         "split_strategy": SPLIT_STRATEGY,
         "unknown_support": {
             "leaf_key": UNKNOWN_LEAF_KEY,
-            "strategy": "confidence_rejection_with_out_of_scope_evaluation",
+            "strategy": "validation_selected_confidence_and_train_similarity",
             "uses_synthetic_training_rows": False,
             "training_sample_count": 0,
             "evaluation_sample_count": len(out_of_scope_examples),
+            "split_counts": dict(Counter(r.split for r in out_of_scope_examples)),
+            "channel_counts": {split: len({r.source_channel_id for r in out_of_scope_examples
+                                            if r.split == split and r.source_channel_id})
+                               for split in PRODUCTION_SPLITS},
         },
         "phase22": phase22_readiness,
         "phase22_ready": bool(phase22_readiness["ready"]),
@@ -667,7 +701,7 @@ def prepare_classification_dataset(
                 "path": str(out_of_scope_path.resolve()),
                 "sha256": _sha256_file(out_of_scope_path),
                 "sample_count": len(out_of_scope_examples),
-                "usage": "evaluation_only_not_fitted",
+                "usage": "validation_calibrates_rejection_test_evaluates_train_reserved_not_fitted",
             },
         }
         manifest_path = artifact_dir / "dataset_manifest.json"
@@ -1220,6 +1254,7 @@ def _evaluate_out_of_scope(
     examples: Sequence[TrainingExample],
     *,
     unknown_threshold: float,
+    scope_policy: dict | None = None,
 ) -> dict[str, Any]:
     if not examples:
         return {
@@ -1237,6 +1272,9 @@ def _evaluate_out_of_scope(
         [item.model_text for item in examples],
         unknown_threshold=unknown_threshold,
     )
+    if scope_policy is not None:
+        predictions, _decisions = apply_acceptance_policy(
+            scope_policy, [r.model_text for r in examples], raw_predictions, confidences)
     unknown_count = sum(
         1 for prediction in predictions if prediction == UNKNOWN_LEAF_KEY
     )
@@ -1265,11 +1303,13 @@ def _evaluate_out_of_scope(
     ]
     return {
         "sample_size": len(examples),
-        "unknown_recall": round(unknown_count / len(examples), 6),
+        "status": "evaluated" if scope_policy is None or is_validated_acceptance_policy(scope_policy) else "withheld_unvalidated_policy",
+        "unknown_recall": round(unknown_count / len(examples), 6)
+        if scope_policy is None or is_validated_acceptance_policy(scope_policy) else None,
         "false_accept_rate": round(
             (len(examples) - unknown_count) / len(examples),
             6,
-        ),
+        ) if scope_policy is None or is_validated_acceptance_policy(scope_policy) else None,
         "accepted_as_in_scope_count": len(examples) - unknown_count,
         "mean_confidence": round(float(np.mean(confidences)), 6),
         "accepted_by_leaf": dict(sorted(accepted_by_leaf.items())),
@@ -1553,7 +1593,8 @@ def train_and_evaluate_classification_models(
             "SMOKE TEST ONLY: this run verifies the training machinery with an "
             "incomplete dataset. It is not a final or production model."
         )
-    if prepare_only or (not prepared.report["ready"] and not smoke_test):
+    if (prepare_only or not prepared.report["partition_integrity_passed"]
+            or (not prepared.report["ready"] and not smoke_test)):
         report_path = run_root / "training_report.json"
         base_result["report_path"] = str(report_path.resolve())
         _write_json(report_path, base_result)
@@ -1563,7 +1604,7 @@ def train_and_evaluate_classification_models(
     development_label_counts = Counter(
         item.leaf_key
         for item in prepared.examples
-        if item.split in {"train", "validation"}
+        if item.split == "train"
     )
     labels = (
         tuple(
@@ -1581,8 +1622,12 @@ def train_and_evaluate_classification_models(
     development_rows = [
         item
         for item in prepared.examples
-        if item.split in {"train", "validation"} and item.leaf_key in labels
+        if item.split == "train" and item.leaf_key in labels
     ]
+    validation_rows = [item for item in prepared.examples
+                       if item.split == "validation" and item.leaf_key in labels]
+    unknown_validation = [item for item in prepared.out_of_scope_examples if item.split == "validation"]
+    unknown_test = [item for item in prepared.out_of_scope_examples if item.split == "test"]
     test_rows = [
         item
         for item in prepared.examples
@@ -1598,9 +1643,10 @@ def train_and_evaluate_classification_models(
             "excluded_leaf_keys": [
                 leaf_key for leaf_key in configured_labels if leaf_key not in labels
             ],
-            "dataset_sample_count": len(development_rows) + len(test_rows),
+            "dataset_sample_count": len(development_rows) + len(validation_rows) + len(test_rows),
             "split_counts": {
-                "development_train_plus_validation": len(development_rows),
+                "train": len(development_rows),
+                "validation": len(validation_rows),
                 "test": len(test_rows),
             },
             "promotion_eligible": False,
@@ -1663,6 +1709,7 @@ def train_and_evaluate_classification_models(
 
     trained_results: list[dict[str, Any]] = []
     estimators: dict[str, Any] = {}
+    scope_policies: dict[str, dict] = {}
     for spec in available_specs:
         if progress_callback:
             progress_callback("cross_validation", spec.model_key)
@@ -1746,16 +1793,26 @@ def train_and_evaluate_classification_models(
             )
             if progress_callback:
                 progress_callback("evaluating", spec.model_key)
-            test = _evaluation_by_language(
+            policy = fit_acceptance_policy(
+                estimator, development_rows, validation_rows, unknown_validation,
+                labels=labels, confidence_threshold=unknown_threshold,
+                required_recall=promotion_threshold,
+            )
+            validation_result = evaluate_acceptance_policy(policy, estimator, validation_rows, labels=labels)
+            test_raw = _evaluation_by_language(
                 estimator,
                 test_rows,
                 labels=labels,
                 unknown_threshold=unknown_threshold,
             )
+            test_result = evaluate_acceptance_policy(policy, estimator, test_rows, labels=labels)
+            test = _evaluation_by_language_from_predictions(
+                test_rows, test_result["predictions"], test_result["confidences"], labels=labels)
             out_of_scope = _evaluate_out_of_scope(
                 estimator,
-                prepared.out_of_scope_examples,
+                unknown_test,
                 unknown_threshold=unknown_threshold,
+                scope_policy=policy,
             )
         except Exception as exc:
             failure = {
@@ -1782,6 +1839,18 @@ def train_and_evaluate_classification_models(
             phase22_ready=bool(prepared.report["phase22_ready"]),
             enforce_phase22_gate=enforce_phase22_gate and not smoke_test,
         )
+        if policy["status"] != "validated":
+            gate["blocked_reasons"].append("scope_validation_not_passed")
+        gate["scope_validation_status"] = policy["status"]
+        gate["scope_policy_version"] = policy["version"]
+        if (len(unknown_test) < MIN_UNKNOWN_TEST
+                or len({r.source_channel_id for r in unknown_test if r.source_channel_id}) < MIN_UNKNOWN_CHANNELS):
+            gate["blocked_reasons"].append("insufficient_unknown_test")
+        if out_of_scope["unknown_recall"] is None or out_of_scope["unknown_recall"] < promotion_threshold:
+            gate["blocked_reasons"].append("unknown_test_not_passed")
+        gate["passed"] = not gate["blocked_reasons"]
+        gate["blocked_reason"] = next(iter(gate["blocked_reasons"]), None)
+        gate["activation"] = "manual_after_runtime_integration" if gate["passed"] else "blocked"
         if smoke_test:
             gate.update(
                 {
@@ -1801,13 +1870,19 @@ def train_and_evaluate_classification_models(
                 "description": spec.description,
                 "tuning": tuning_report,
                 "grouped_cv": grouped_cv,
-                "validation": grouped_cv["evaluations"],
+                "validation": _evaluation_by_language_from_predictions(
+                    validation_rows, validation_result["predictions"], validation_result["confidences"],
+                    labels=labels) if validation_rows else {},
+                "scope_policy": acceptance_summary(policy),
+                "scope_validation": validation_result,
+                "test_raw": test_raw,
                 "test": test,
                 "out_of_scope": out_of_scope,
                 "qualification": gate,
             }
         )
         estimators[spec.model_key] = estimator
+        scope_policies[spec.model_key] = policy
 
     if len(trained_results) < 2:
         base_result["status"] = "benchmark_failed"
@@ -1822,7 +1897,7 @@ def train_and_evaluate_classification_models(
     ranked = sorted(
         trained_results,
         key=lambda item: (
-            -int(bool(item["qualification"]["passed"])),
+            -int(item["scope_policy"]["status"] == "validated"),
             -float(
                 item["grouped_cv"]["evaluations"][OVERALL_LANGUAGE]["f1_macro"]
             ),
@@ -1858,7 +1933,7 @@ def train_and_evaluate_classification_models(
             model_dir.mkdir(parents=True, exist_ok=True)
             artifact_path = model_dir / "model.joblib"
             bundle = {
-                "artifact_schema_version": 2,
+                "artifact_schema_version": 3,
                 "model_family": MODEL_FAMILY,
                 "model_key": model_key,
                 "model_version": version,
@@ -1884,6 +1959,9 @@ def train_and_evaluate_classification_models(
                 "evaluation_protocol": result["grouped_cv"]["protocol"],
                 "grouped_cv_fold_count": result["grouped_cv"]["fold_count"],
                 "development_sample_count": len(development_rows),
+                "fit_split": "train",
+                "scope_policy": scope_policies[model_key],
+                "scope_test_passed": bool(result["qualification"]["passed"]),
                 "out_of_scope_evaluation_sample_count": len(
                     prepared.out_of_scope_examples
                 ),
@@ -1977,6 +2055,13 @@ def train_and_evaluate_classification_models(
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
+                )
+            )
+            db.add_all(
+                _metric_rows(
+                    model_id=model.model_id,
+                    dataset_split="validation",
+                    evaluations=result["validation"],
                 )
             )
             db.add_all(
@@ -2104,7 +2189,7 @@ def train_and_evaluate_classification_models(
                 "qualified": bool(best["qualification"]["passed"]),
                 "smoke_test_only": smoke_test,
                 "selection_basis": (
-                    "qualification_then_grouped_cv_macro_f1_then_accuracy_then_"
+                    "scope_validation_then_grouped_cv_macro_f1_then_accuracy_then_"
                     "minimum_class_recall"
                 ),
             },
@@ -2168,6 +2253,7 @@ def classify_with_artifact(
     *,
     text: str,
     title: str | None = None,
+    require_scope_validation: bool = True,
 ) -> dict[str, Any]:
     payload = load_classification_artifact(path)
     # Keep title for API compatibility, but user filenames are never model features.
@@ -2188,6 +2274,12 @@ def classify_with_artifact(
         [merged_text],
         unknown_threshold=float(payload["unknown_threshold"]),
     )
+    policy = payload.get("scope_policy")
+    acceptance_labels = [raw_prediction] if isinstance(policy, dict) and policy.get("status") == "validated" else predictions
+    predictions, acceptance = apply_acceptance_policy(
+        policy, [merged_text], acceptance_labels, confidences,
+        require_validation=require_scope_validation,
+    )
     return {
         "model_key": str(payload["model_key"]),
         "model_version": str(payload["model_version"]),
@@ -2204,6 +2296,7 @@ def classify_with_artifact(
         "is_unknown": predictions[0] == str(payload["unknown_leaf_key"]),
         "unknown_threshold": float(payload["unknown_threshold"]),
         "smoke_test_only": bool(payload.get("smoke_test_only", False)),
+        "acceptance": acceptance[0],
     }
 
 
@@ -2222,6 +2315,9 @@ def activate_classification_model(db: Session, model_id: int, *, user_id: int | 
     payload = load_classification_artifact(str(model.artifact_path or ""))
     if bool(payload.get("smoke_test_only", False)):
         raise ClassificationTrainingError("smoke-test models cannot be activated")
+    if (not is_validated_acceptance_policy(payload.get("scope_policy"))
+            or not payload.get("scope_test_passed")):
+        raise ClassificationTrainingError("model has not passed validation-selected scope rejection and its test gate")
     if str(payload["model_key"]) != str(model.model_key):
         raise ClassificationTrainingError("artifact model key does not match database row")
     if str(payload["model_version"]) != str(model.model_version):

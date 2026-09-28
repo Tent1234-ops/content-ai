@@ -30,11 +30,16 @@ TrendHistory fixture() => TrendHistory.fromJson({
 
 class HistoryRepository extends DashboardRepository {
   final requests = <String>[];
+  final selectedKeys = <String?>[];
   Future<TrendHistory> Function(String)? handler;
   @override
   Future<TrendHistory> getTrendHistory(
-      {required String platform, int days = 5, String? categoryId}) async {
+      {required String platform,
+      int days = 5,
+      String? categoryId,
+      String? itemKey}) async {
     requests.add('$platform:$categoryId:$days');
+    selectedKeys.add(itemKey);
     return handler == null ? fixture() : await handler!(platform);
   }
 }
@@ -55,6 +60,148 @@ Widget panel(HistoryRepository repo,
     )));
 
 void main() {
+  TrendHistory growthFixture({String selected = 'a'}) => TrendHistory.fromJson({
+        'selected_key': selected,
+        'requested_from': '2026-09-19T08:00:00Z',
+        'requested_to': '2026-09-19T12:00:00Z',
+        'coverage': {
+          'hours_observed': 2,
+          'hours_requested': 5,
+          'unobserved_hours': 3,
+          'failed_attempts': 1
+        },
+        'hours': [
+          {
+            'hour': '2026-09-19T08:00:00Z',
+            'status': 'failed',
+            'observed': false,
+            'failed_attempts': 1
+          },
+          {
+            'hour': '2026-09-19T09:00:00Z',
+            'status': 'observed',
+            'observed': true,
+            'failed_attempts': 0
+          },
+        ],
+        'items': [
+          {
+            'key': 'a',
+            'title': 'คลิป A',
+            'latest_rank': 2,
+            'movement': {'status': 'up', 'change': 6}
+          },
+          {'key': 'b', 'title': 'คลิป B', 'latest_rank': 3},
+        ],
+        'points': [
+          {
+            ...point('09:00', {'a': 8, 'b': 3}),
+            'run_id': 1,
+            'views': {selected: 1000}
+          },
+          {
+            ...point('09:30', {'a': 2, 'b': 3}),
+            'views': {selected: 1300},
+            'item_ids': {selected: 22},
+            'view_intervals': {
+              selected: {
+                'status': 'measured',
+                'delta': 300,
+                'per_hour': 600,
+                'from_at': '2026-09-19T09:00:00Z',
+                'elapsed_seconds': 1800,
+                'from_views': 1000,
+                'from_run_id': 1,
+                'from_item_id': 11
+              }
+            }
+          },
+          {
+            ...point('11:00', {'a': 2, 'b': 3}, gap: true),
+            'view_intervals': {
+              selected: {
+                'status': 'collection_gap',
+                'delta': null,
+                'per_hour': null
+              }
+            }
+          },
+        ],
+      });
+
+  test('invalid or unavailable intervals never become measured zero', () {
+    expect(
+        ViewInterval.fromJson({'status': 'measured', 'delta': 0, 'per_hour': 0})
+            .measured,
+        isFalse);
+    expect(ViewInterval.fromJson({'status': 'counter_decreased'}).measured,
+        isFalse);
+    expect(
+        ViewInterval.fromJson({
+          'status': 'measured',
+          'delta': 0,
+          'per_hour': 0,
+          'elapsed_seconds': 60,
+          'from_at': '2026-09-19T09:00:00Z'
+        }).measured,
+        isTrue);
+  });
+
+  testWidgets(
+      'growth chart uses isolated interval bars and keeps requested time bounds',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1440, 1100));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repo = HistoryRepository()..handler = (_) async => growthFixture();
+    await tester.pumpWidget(panel(repo));
+    await tester.pumpAndSettle();
+    expect(find.byType(LineChart), findsNWidgets(3));
+    expect(find.text('ขยับขึ้น 6 อันดับ'), findsOneWidget);
+    final graphs =
+        tester.widgetList<LineChart>(find.byType(LineChart)).toList();
+    final growth = graphs[1].data;
+    expect(growth.lineBarsData.length, 1);
+    expect(growth.lineBarsData.single.spots.last.y, 600);
+    expect(growth.lineBarsData.single.spots.first.x,
+        growth.lineBarsData.single.spots.last.x);
+    expect(
+        graphs.first.data.lineBarsData.single.spots, contains(FlSpot.nullSpot));
+    expect(
+        growth.minX,
+        equals(DateTime.parse('2026-09-19T08:00:00Z').millisecondsSinceEpoch /
+            60000));
+    await tester.ensureVisible(find.byTooltip('ดูตารางข้อมูลกราฟ'));
+    await tester.tap(find.byTooltip('ดูตารางข้อมูลกราฟ'));
+    await tester.pumpAndSettle();
+    expect(find.text('ยอดเพิ่มจริง'), findsOneWidget);
+    expect(find.text('+300'), findsOneWidget);
+    expect(find.text('11 → 22'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'selected item reloads its metrics and coverage details are available',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repo = HistoryRepository();
+    repo.handler =
+        (_) async => growthFixture(selected: repo.selectedKeys.last ?? 'a');
+    await tester.pumpWidget(panel(repo));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('คลิป B').last);
+    await tester.pumpAndSettle();
+    expect(repo.selectedKeys.last, 'b');
+    await tester.ensureVisible(find.byTooltip('ดูความครอบคลุมรายชั่วโมง'));
+    await tester.tap(find.byTooltip('ดูความครอบคลุมรายชั่วโมง'));
+    await tester.pumpAndSettle();
+    expect(find.text('ความครอบคลุมของข้อมูล'), findsOneWidget);
+    expect(find.text('เก็บไม่สำเร็จ (1 ครั้ง)'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   test(
       'rank gaps and absent video never become zero; best rank is above worse rank',
       () {
@@ -89,6 +236,7 @@ void main() {
     await tester.tap(find.text('24 ชั่วโมง'));
     await tester.pumpAndSettle();
     expect(repo.requests.last, 'youtube:null:1');
+    await tester.ensureVisible(find.byTooltip('ดูตารางข้อมูลกราฟ'));
     await tester.tap(find.byTooltip('ดูตารางข้อมูลกราฟ'));
     await tester.pumpAndSettle();
     expect(find.byType(DataTable), findsOneWidget);

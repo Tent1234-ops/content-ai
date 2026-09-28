@@ -104,6 +104,8 @@ class ClassificationResult {
     required this.isUnknown,
     required this.taxonomyReady,
     required this.warning,
+    this.rawTaxonomyLeafKey = '',
+    this.acceptanceReason = '',
   });
 
   final String domain;
@@ -119,6 +121,8 @@ class ClassificationResult {
   final bool isUnknown;
   final bool taxonomyReady;
   final String warning;
+  final String rawTaxonomyLeafKey;
+  final String acceptanceReason;
 
   String get displayCategory {
     if (isUnknown) return 'Unknown/Other';
@@ -144,6 +148,10 @@ class ClassificationResult {
       isUnknown: json['is_unknown'] == true,
       taxonomyReady: json['taxonomy_ready'] == true,
       warning: json['warning']?.toString() ?? '',
+      rawTaxonomyLeafKey: json['raw_taxonomy_leaf_key']?.toString() ?? '',
+      acceptanceReason: json['acceptance'] is Map
+          ? (json['acceptance'] as Map)['reason']?.toString() ?? ''
+          : '',
       candidates: (json['candidates'] as List<dynamic>? ?? const [])
           .map((item) => ClassificationCandidate.fromJson(
               Map<String, dynamic>.from(item as Map)))
@@ -187,6 +195,7 @@ class RecommendationResult {
     required this.evidence,
     this.classification,
     this.currentTrendIdeas = const CurrentTrendIdeas(),
+    this.evidenceBundle = const {},
   });
 
   final String domain;
@@ -202,6 +211,7 @@ class RecommendationResult {
   final RecommendationEvidence evidence;
   final ClassificationResult? classification;
   final CurrentTrendIdeas currentTrendIdeas;
+  final Map<String, dynamic> evidenceBundle;
 
   factory RecommendationResult.fromJson(Map<String, dynamic> json) {
     return RecommendationResult(
@@ -245,6 +255,8 @@ class RecommendationResult {
       ),
       currentTrendIdeas: CurrentTrendIdeas.fromJson(Map<String, dynamic>.from(
           (json['current_trend_ideas'] as Map?) ?? const {})),
+      evidenceBundle: Map<String, dynamic>.from(
+          (json['evidence_bundle'] as Map?) ?? const {}),
       classification: json['classification'] is Map
           ? ClassificationResult.fromJson(
               Map<String, dynamic>.from(json['classification'] as Map),

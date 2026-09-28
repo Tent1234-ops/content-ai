@@ -110,6 +110,31 @@ def _transcript(video_id, _languages):
 
 
 class YouTubeCCDatasetTests(unittest.TestCase):
+    def test_notebooklm_unknown_import_preserves_validation_and_test_roles(self):
+        for index, split in enumerate(('validation', 'test')):
+            with self.subTest(split=split), tempfile.TemporaryDirectory() as temp_dir:
+                video_id = f'unknw{index:06d}'
+                channel = next(f'unknown-channel-{i}' for i in range(1000)
+                               if channel_dataset_split(f'unknown-channel-{i}')[0] == split)
+                video = _video(video_id)
+                video['snippet']['channelId'] = channel
+                created = create_notebooklm_transcript_candidate(self.db, api_key='test-key',
+                    video_url=f'https://youtube.com/watch?v={video_id}',
+                    transcript=(f'Keyboard switches and typing sound {video_id}. ' * 20),
+                    proposed_leaf_key='unknown', transcript_language='th', caption_type='unspecified',
+                    youtube_getter=lambda *_a, **_k: {'items': [video]},
+                    artifact_root=Path(temp_dir) / 'raw')
+                review_youtube_cc_candidate(self.db, collection_run_id=created['collection_run_id'],
+                    source_youtube_id=video_id, decision='approve', reviewer='test-reviewer',
+                    reviewed_leaf_key='unknown', transcript_quality='good', notes='Test fixture only',
+                    review_root=Path(temp_dir) / 'reviews')
+                row = self.db.query(DatasetContent).filter_by(source_youtube_id=video_id).one()
+                self.assertEqual(row.data_split, split)
+                self.assertFalse(row.is_training_eligible)
+                self.assertFalse(row.is_keyword_recommendation_eligible)
+                self.assertFalse(row.is_duration_recommendation_eligible)
+                self.assertEqual(out_of_scope_evaluation_query(self.db).filter_by(dataset_id=row.dataset_id).count(), 1)
+
     def test_new_notebooklm_holdouts_have_reference_permissions_disabled_at_import(self):
         for index, expected_split in enumerate(('validation', 'test')):
             with self.subTest(split=expected_split), tempfile.TemporaryDirectory() as temp_dir:

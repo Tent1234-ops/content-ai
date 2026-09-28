@@ -198,7 +198,7 @@ class ClassificationTrainingTests(unittest.TestCase):
             self.assertTrue(all(len(splits) == 1 for splits in creator_splits.values()))
             self.assertEqual(
                 prepared.report["unknown_support"]["strategy"],
-                "confidence_rejection_with_out_of_scope_evaluation",
+                "validation_selected_confidence_and_train_similarity",
             )
             self.assertFalse(
                 prepared.report["unknown_support"]["uses_synthetic_training_rows"]
@@ -255,7 +255,7 @@ class ClassificationTrainingTests(unittest.TestCase):
         self.assertFalse(result["dataset"]["ready"])
         self.assertEqual(result["smoke_test_scope"]["dataset_sample_count"], 8)
         self.assertFalse(result["smoke_test_scope"]["promotion_eligible"])
-        self.assertEqual(len(models), 3)
+        self.assertEqual(len(models), 2)
         self.assertTrue(all(model.status == "smoke_test_only" for model in models))
         self.assertTrue(all(not model.is_active for model in models))
         self.assertTrue(
@@ -276,11 +276,11 @@ class ClassificationTrainingTests(unittest.TestCase):
             .filter(ModelEvaluationMetric.metric_name == "reload_classify_passed")
             .all()
         )
-        self.assertEqual(len(reload_metrics), 3)
+        self.assertEqual(len(reload_metrics), 2)
         self.assertTrue(all(item.metric_value == 1.0 for item in reload_metrics))
 
     def test_benchmark_persists_all_metrics_but_never_activates_automatically(self):
-        self._seed_ready_two_leaf_dataset()
+        self._seed_covered_two_leaf_dataset()
         with tempfile.TemporaryDirectory() as temp_dir:
             result = train_and_evaluate_classification_models(
                 self.db,
@@ -301,7 +301,11 @@ class ClassificationTrainingTests(unittest.TestCase):
         self.assertEqual(result["database_models_created"], 3)
         self.assertEqual(len(models), 3)
         self.assertTrue(all(not model.is_active for model in models))
-        self.assertTrue(any(model.status == "qualified" for model in models))
+        self.assertTrue(all(model.status == "evaluated_below_threshold" for model in models))
+        self.assertTrue(all("scope_validation_not_passed" in row["qualification"]["blocked_reasons"]
+                            for row in result["models"]))
+        self.assertEqual(artifact["fit_split"], "train")
+        self.assertEqual(artifact["scope_policy"]["unknown_validation_count"], 0)
         self.assertTrue(
             all(
                 model.status in {"qualified", "evaluated_below_threshold"}
@@ -336,7 +340,7 @@ class ClassificationTrainingTests(unittest.TestCase):
             )
         )
         self.assertIn("grouped_cv", {metric.dataset_split for metric in metrics})
-        self.assertNotIn("validation", {metric.dataset_split for metric in metrics})
+        self.assertIn("validation", {metric.dataset_split for metric in metrics})
         self.assertEqual(len(result["model_catalog"]), 4)
         self.assertEqual(len(result["skipped_models"]), 1)
         self.assertEqual(
@@ -421,6 +425,51 @@ class ClassificationTrainingTests(unittest.TestCase):
         self.assertEqual(labels, [UNKNOWN_LEAF_KEY, "phone"])
         self.assertEqual(confidences, [0.55, 0.95])
 
+    def test_deleted_holdout_still_blocks_training_copy(self):
+        self._seed_ready_two_leaf_dataset()
+        reserved = self.db.query(DatasetContent).filter_by(data_split="test", taxonomy_leaf_key="phone").one()
+        reserved.deleted_at = datetime.utcnow()
+        reserved.is_active = False
+        training = self.db.query(DatasetContent).filter_by(data_split="train", taxonomy_leaf_key="phone").first()
+        training.transcript = "\n" + reserved.transcript.upper().replace(" ", "\t")
+        training.transcript_sha256 = hashlib.sha256(training.transcript.encode()).hexdigest()
+        self.db.commit()
+        report = prepare_classification_dataset(self.db, required_leaf_keys=("phone", "camera"),
+                                                minimum_samples_per_leaf=2).report
+        self.assertFalse(report["ready"])
+        self.assertIn("transcript", [r["field"] for r in report["partition_conflicts"]])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = train_and_evaluate_classification_models(
+                self.db, artifact_root=temp_dir, smoke_test=True,
+                required_leaf_keys=("phone", "camera"), minimum_samples_per_leaf=2)
+        self.assertEqual(result["status"], "not_ready")
+        self.assertEqual(result["database_models_created"], 0)
+
+    def test_unknown_validation_cannot_overlap_training_channel(self):
+        self._seed_ready_two_leaf_dataset()
+        self._add_example("unknown", "validation", 80)
+        self.db.commit()
+        outside = self.db.query(DatasetContent).filter_by(taxonomy_leaf_key="unknown").one()
+        outside.source_channel_id = self.db.query(DatasetContent).filter_by(data_split="train").first().source_channel_id
+        self.db.commit()
+        report = prepare_classification_dataset(self.db, required_leaf_keys=("phone", "camera"),
+                                                minimum_samples_per_leaf=2).report
+        self.assertFalse(report["ready"])
+        self.assertIn("source_channel_id", [r["field"] for r in report["partition_conflicts"]])
+
+    def test_unknown_group_must_match_its_actual_source_channel(self):
+        self._seed_ready_two_leaf_dataset()
+        self._add_example("unknown", "validation", 80)
+        self.db.commit()
+        outside = self.db.query(DatasetContent).filter_by(taxonomy_leaf_key="unknown").one()
+        outside.creator_group_key = "0" * 64
+        self.db.commit()
+        report = prepare_classification_dataset(self.db, required_leaf_keys=("phone", "camera"),
+                                                minimum_samples_per_leaf=2).report
+        self.assertFalse(report["ready"])
+        self.assertFalse(report["partition_integrity_passed"])
+        self.assertIn(outside.dataset_id, report["invalid_partition_assignments"])
+
     def test_out_of_scope_rows_are_evaluation_only_and_phase22_gate_blocks(self):
         self._seed_ready_two_leaf_dataset()
         self._add_example(UNKNOWN_LEAF_KEY, "test", 99)
@@ -463,8 +512,7 @@ class ClassificationTrainingTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                model["qualification"]["blocked_reason"]
-                == "phase22_collection_not_ready"
+                "phase22_collection_not_ready" in model["qualification"]["blocked_reasons"]
                 for model in result["models"]
             )
         )
@@ -479,6 +527,10 @@ class ClassificationTrainingTests(unittest.TestCase):
 
     def test_qualified_model_can_be_activated_and_used_by_runtime(self):
         self._seed_covered_two_leaf_dataset()
+        for index in range(10):
+            self._add_example("unknown", "validation", 100 + index)
+            self._add_example("unknown", "test", 200 + index)
+        self.db.commit()
         with tempfile.TemporaryDirectory() as temp_dir:
             result = train_and_evaluate_classification_models(
                 self.db,

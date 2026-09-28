@@ -8,11 +8,15 @@ class DashboardRepository {
   final ApiClient _client;
 
   Future<TrendHistory> getTrendHistory(
-      {required String platform, int days = 5, String? categoryId}) async {
+      {required String platform,
+      int days = 5,
+      String? categoryId,
+      String? itemKey}) async {
     final query = Uri(queryParameters: {
       'platform': platform,
       'days': '$days',
       if (categoryId != null) 'video_category_id': categoryId,
+      if (itemKey != null) 'item_key': itemKey,
     }).query;
     final response = await _client.get('/dashboard/public/history?$query');
     return TrendHistory.fromJson(Map<String, dynamic>.from(response as Map));

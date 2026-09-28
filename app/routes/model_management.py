@@ -8,6 +8,7 @@ from app.api.deps import require_roles
 from app.database.db import get_db
 from app.database.models import User
 from app.services import model_management as service
+from app.services.classification_collection_plan import preview_collection_channels
 
 router = APIRouter(prefix="/admin/training", tags=["admin-training"], dependencies=[Depends(require_roles("admin"))])
 
@@ -20,6 +21,19 @@ class TrainRequest(BaseModel):
 class ActivateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_active_model_id: int | None = Field(..., gt=0)
+
+
+class ChannelPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    channel_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+@router.post("/channel-preview")
+def channel_preview(payload: ChannelPreviewRequest, db: Session = Depends(get_db)):
+    try:
+        return preview_collection_channels(db, payload.channel_ids)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("")

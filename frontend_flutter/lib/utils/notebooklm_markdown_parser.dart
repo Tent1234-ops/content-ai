@@ -4,12 +4,14 @@ class NotebookLmMarkdownDocument {
     this.sourceTitle,
     this.creatorChannel,
     this.sourceUrl,
+    this.sourceVideoId,
   });
 
   final String transcript;
   final String? sourceTitle;
   final String? creatorChannel;
   final String? sourceUrl;
+  final String? sourceVideoId;
 }
 
 class NotebookLmMarkdownParser {
@@ -108,7 +110,20 @@ class NotebookLmMarkdownParser {
     }
     _trimBlankAndRuleLines(transcriptLines);
 
+    // Segment numbers are export structure, not spoken words or timestamps.
+    transcriptLines.removeWhere((line) => RegExp(
+          r'^#{1,6}\s+Segment\s+\d+\s*$',
+          caseSensitive: false,
+        ).hasMatch(line.trim()));
     final transcript = transcriptLines.join('\n').trim();
+    if (RegExp(
+      r'^\s*[\[(]?\s*(ไม่พบคำบรรยาย|ไม่พบ\s*transcript|no transcript|transcript (unavailable|not available))',
+      caseSensitive: false,
+    ).hasMatch(transcript)) {
+      throw const FormatException(
+        'The file contains a missing-transcript notice, not a transcript.',
+      );
+    }
     if (transcript.length < minTranscriptCharacters) {
       throw const FormatException(
         'The transcript section must contain at least 80 characters.',
@@ -125,6 +140,7 @@ class NotebookLmMarkdownParser {
       sourceTitle: sourceTitle,
       creatorChannel: creatorChannel,
       sourceUrl: sourceUrl,
+      sourceVideoId: metadata['youtube video id']?.replaceAll('`', '').trim(),
     );
   }
 

@@ -109,9 +109,9 @@ def parse_args() -> argparse.Namespace:
         "--no-phase22-gate",
         action="store_true",
         help=(
-            "Benchmark without enforcing the 80-samples-per-leaf and out-of-scope "
-            "promotion gate. Intended for diagnostics; models can pass only the "
-            "numeric metric gate."
+            "Benchmark without the larger Phase 22 collection targets. The "
+            "validation-selected scope policy and independent Unknown test gate "
+            "are still required; this option cannot bypass them."
         ),
     )
     parser.add_argument(

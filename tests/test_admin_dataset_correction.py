@@ -1,6 +1,7 @@
 import hashlib
 import json
 import unittest
+from unittest.mock import patch
 from datetime import datetime
 
 from sqlalchemy import create_engine
@@ -9,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database.db import Base
 from app.database.models import DatasetCollectionRun, DatasetContent, SystemLog
 from app.schemas.admin_report import AdminDatasetUpdate
-from app.services.admin_report import update_admin_dataset, delete_admin_dataset
+from app.services.admin_report import update_admin_dataset, delete_admin_dataset, restore_admin_dataset, list_admin_datasets
 from app.services.dataset_eligibility import production_transcript_query
 from app.services.dataset_contract import (
     NOTEBOOKLM_TRANSCRIPT_ACQUISITION,
@@ -117,6 +118,50 @@ class AdminDatasetCorrectionTests(unittest.TestCase):
         self.db.commit()
         self.db.refresh(row)
         return row
+
+    def test_trash_restore_preserves_content_split_and_permissions_after_restart(self):
+        row = self._add_dataset(video_id="restore0001", leaf_key="phone",
+                                transcript="phone battery camera display performance " * 8)
+        saved = (row.dataset_id, row.transcript, row.transcript_sha256, row.data_split, row.creator_group_key)
+        delete_admin_dataset(self.db, dataset_id=row.dataset_id, confirmation_id=row.dataset_id, user_id=9)
+        self.assertEqual(list_admin_datasets(self.db)[0], 0)
+        self.assertEqual(list_admin_datasets(self.db, trashed=True)[0], 1)
+        self.db.close()
+        self.db = sessionmaker(bind=self.engine)()
+        restored = restore_admin_dataset(self.db, dataset_id=saved[0], confirmation_id=saved[0], user_id=9)
+        self.assertEqual((restored.dataset_id, restored.transcript, restored.transcript_sha256,
+                          restored.data_split, restored.creator_group_key), saved)
+        self.assertTrue(restored.is_active and restored.is_training_eligible)
+        self.assertTrue(restored.is_keyword_recommendation_eligible)
+        self.assertIsNone(restored.deleted_at)
+        self.assertIsNone(restored.deletion_state_json)
+        self.assertEqual(list_admin_datasets(self.db, trashed=True)[0], 0)
+        self.assertIsNone(restore_admin_dataset(self.db, dataset_id=saved[0], confirmation_id=saved[0], user_id=9))
+        self.assertEqual(self.db.query(SystemLog).filter_by(action="admin_dataset_restore").count(), 1)
+
+    def test_failed_restore_commit_rolls_back_flags_and_success_log(self):
+        row = self._add_dataset(video_id="restore0003", leaf_key="phone",
+                                transcript="phone battery camera display performance " * 8)
+        dataset_id = row.dataset_id
+        delete_admin_dataset(self.db, dataset_id=dataset_id, confirmation_id=dataset_id, user_id=9)
+        with patch.object(self.db, 'commit', side_effect=RuntimeError('database write failed')):
+            with self.assertRaises(RuntimeError):
+                restore_admin_dataset(self.db, dataset_id=dataset_id, confirmation_id=dataset_id, user_id=9)
+        self.assertIsNotNone(self.db.get(DatasetContent, dataset_id).deleted_at)
+        self.assertFalse(self.db.get(DatasetContent, dataset_id).is_training_eligible)
+        self.assertEqual(self.db.query(SystemLog).filter_by(action='admin_dataset_restore').count(), 0)
+
+    def test_restore_cannot_reenable_invalid_training_contract(self):
+        row = self._add_dataset(video_id="restore0002", leaf_key="phone",
+                                transcript="phone battery camera display performance " * 8)
+        delete_admin_dataset(self.db, dataset_id=row.dataset_id, confirmation_id=row.dataset_id, user_id=9)
+        row.transcript_quality = "bad"
+        self.db.commit()
+        with self.assertRaises(ValueError):
+            restore_admin_dataset(self.db, dataset_id=row.dataset_id, confirmation_id=row.dataset_id, user_id=9)
+        self.assertIsNotNone(row.deleted_at)
+        self.assertFalse(row.is_training_eligible)
+        self.assertEqual(self.db.query(SystemLog).filter_by(action="admin_dataset_restore").count(), 0)
 
     def test_deleted_training_row_is_excluded_even_if_legacy_code_resets_flags(self):
         row = self._add_dataset(video_id="archive0001", leaf_key="phone",

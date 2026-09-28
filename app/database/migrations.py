@@ -387,7 +387,7 @@ def migrate_phase19_transcript_schema(engine: Engine) -> Dict[str, object]:
 
 def migrate_scope_completion_schema(engine: Engine) -> Dict[str, object]:
     definitions = {
-        "dataset_contents": {"deleted_at": "DATETIME NULL"},
+        "dataset_contents": {"deleted_at": "DATETIME NULL", "deletion_state_json": "TEXT NULL"},
         "system_configs": {
             "trend_refresh_enabled": "BOOLEAN NOT NULL DEFAULT TRUE",
             "trend_refresh_seconds": "INT NULL",

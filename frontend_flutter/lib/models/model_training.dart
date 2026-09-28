@@ -104,6 +104,11 @@ String trainingGateReason(String value) => switch (value) {
         'ตัวอย่างทดสอบนอกขอบเขตยังไม่เพียงพอ',
       'unknown_recall_below_threshold' =>
         'การตรวจจับคลิปนอกขอบเขตยังต่ำกว่าเกณฑ์',
+      'scope_validation_not_passed' =>
+        'เกณฑ์รับผลจำแนกยังไม่ผ่านชุด Validation',
+      'insufficient_unknown_test' =>
+        'จำนวนคลิปหรือช่องในชุดทดสอบ Unknown ยังไม่ครบ',
+      'unknown_test_not_passed' => 'ผลทดสอบการปฏิเสธ Unknown ยังไม่ผ่าน',
       'smoke_test_incomplete_dataset' =>
         'โมเดลทดลองจากข้อมูลไม่ครบ เปิดใช้งานไม่ได้',
       _ => value,

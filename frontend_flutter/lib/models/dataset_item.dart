@@ -22,6 +22,8 @@ class DatasetItem {
     this.isTrainingEligible = false,
     this.reviewedBy = '',
     this.reviewedAt = '',
+    this.deletedAt,
+    this.quality = const {},
   });
 
   final int datasetId;
@@ -46,6 +48,8 @@ class DatasetItem {
   final bool isTrainingEligible;
   final String reviewedBy;
   final String reviewedAt;
+  final DateTime? deletedAt;
+  final Map<String, dynamic> quality;
 
   String get taxonomyPath => [categoryLevel1, categoryLevel2, categoryLevel3]
       .where((value) => value.trim().isNotEmpty)
@@ -75,6 +79,8 @@ class DatasetItem {
       isTrainingEligible: json['is_training_eligible'] as bool? ?? false,
       reviewedBy: json['reviewed_by']?.toString() ?? '',
       reviewedAt: json['reviewed_at']?.toString() ?? '',
+      deletedAt: DateTime.tryParse(json['deleted_at']?.toString() ?? ''),
+      quality: Map<String, dynamic>.from(json['quality'] as Map? ?? const {}),
     );
   }
 

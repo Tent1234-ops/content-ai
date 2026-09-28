@@ -230,6 +230,8 @@ class _Statistics extends UsageStatisticsRepository {
 }
 
 class _Schedule extends AdminRepository {
+  @override
+  Future<Map<String, dynamic>> sourceHealth() async => {'items': []};
   bool fail = false;
   Map<String, dynamic>? saved;
   @override

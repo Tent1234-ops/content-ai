@@ -8,7 +8,8 @@ from app.schemas.analysis_settings import AnalysisParameters
 from app.services.analysis_settings import get_analysis_settings, save_analysis_settings
 from app.services.trend_settings import TrendScheduleParameters, trend_schedule, save_trend_schedule
 from app.services.usage_statistics import usage_statistics
-from app.services.dataset_readiness import dataset_readiness
+from app.services.dataset_readiness import dataset_readiness, dataset_quality
+from app.services.source_health import source_health
 from app.services.reference_statistics import (
     ReferenceStatisticsParameters, statistics_overview, statistics_settings,
     save_statistics_settings, video_statistics_history, refresh_reference_statistics,
@@ -48,6 +49,7 @@ from app.services.admin_report import (
     list_admin_logs,
     update_admin_dataset,
     delete_admin_dataset,
+    restore_admin_dataset,
 )
 from app.services.admin_settings import (
     get_admin_config,
@@ -152,6 +154,7 @@ def admin_datasets(
     source: str | None = Query(default=None),
     category: str | None = Query(default=None),
     search: str | None = Query(default=None),
+    trashed: bool = Query(default=False),
     _current_user: User = Depends(require_roles("admin")),
     db: Session = Depends(get_db),
 ):
@@ -162,10 +165,11 @@ def admin_datasets(
         source=source,
         category=category,
         search=search,
+        trashed=trashed,
     )
     return AdminDatasetListResponse(
         total=total,
-        items=[AdminDatasetItem.model_validate(item, from_attributes=True) for item in items],
+        items=[_dataset_response(item) for item in items],
     )
 
 
@@ -179,7 +183,7 @@ def admin_dataset_create(
         item = create_admin_dataset(db, payload=payload, user_id=current_user.user_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return AdminDatasetItem.model_validate(item, from_attributes=True)
+    return _dataset_response(item)
 
 
 @router.put("/datasets/{dataset_id}", response_model=AdminDatasetItem)
@@ -201,7 +205,32 @@ def admin_dataset_update(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
-    return AdminDatasetItem.model_validate(item, from_attributes=True)
+    return _dataset_response(item)
+
+
+def _dataset_response(item):
+    result = AdminDatasetItem.model_validate(item, from_attributes=True)
+    result.quality = dataset_quality(item)
+    return result
+
+
+@router.get("/sources/health")
+def admin_source_health(_user: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    return source_health(db)
+
+
+@router.post("/datasets/{dataset_id}/restore", response_model=AdminDatasetItem)
+def admin_dataset_restore(dataset_id: int, confirmation_id: int = Query(ge=1),
+                          user: User = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    try:
+        item = restore_admin_dataset(db, dataset_id=dataset_id, user_id=user.user_id,
+                                     confirmation_id=confirmation_id)
+    except (ValueError, TypeError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Dataset is not in trash")
+    return _dataset_response(item)
 
 
 @router.delete("/datasets/{dataset_id}")

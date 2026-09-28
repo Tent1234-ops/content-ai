@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.core.config import settings as runtime_settings
+from app.services.classification_acceptance import POLICY_VERSION, acceptance_summary
 from app.database.models import ModelEvaluationMetric
 from app.schemas.analysis_settings import AnalysisParameters, WHISPER_SIZES
 from app.services.admin_settings import get_or_create_admin_config
@@ -46,6 +48,9 @@ def _classification_snapshot(db: Session) -> dict:
         result.update(
             unknown_threshold=float(artifact["unknown_threshold"]),
             artifact_sha256=classification_artifact_sha256(model.artifact_path),
+            scope_validation_required=runtime_settings.classification_require_scope_validation,
+            acceptance_policy_version=POLICY_VERSION,
+            scope_validation=acceptance_summary(artifact.get("scope_policy")),
         )
     except Exception:
         result["status"] = "artifact_unavailable"

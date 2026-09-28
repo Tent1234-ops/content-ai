@@ -34,11 +34,12 @@ def public_trend_history(
     region: str = Query(default=settings.youtube_region, pattern="^[a-zA-Z]{2}$"),
     days: int = Query(default=5, ge=1, le=90),
     video_category_id: str | None = Query(default=None, pattern=r"^\d{1,3}$"),
+    item_key: str | None = Query(default=None, pattern=r"^[0-9a-f]{40}$"),
     db: Session = Depends(get_db),
 ):
     try:
         return load_trend_history(db, region=region.upper(), platform=platform,
-                                  days=days, category_id=video_category_id)
+                                  days=days, category_id=video_category_id, item_key=item_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

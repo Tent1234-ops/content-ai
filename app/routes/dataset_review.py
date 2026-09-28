@@ -117,8 +117,11 @@ def review_dataset_candidate(
             reviewed_leaf_key=payload.reviewed_leaf_key,
             transcript_quality=payload.transcript_quality,
             notes=payload.notes,
+            expected_candidate_sha256=payload.expected_candidate_sha256,
+            require_pending=payload.require_pending,
         )
     except YouTubeCCDatasetError as exc:
+        db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     db.add(

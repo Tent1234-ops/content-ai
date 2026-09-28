@@ -171,4 +171,32 @@ Short text.
       throwsFormatException,
     );
   });
+
+  test('keeps all segment text without treating numbered headings as speech',
+      () {
+    final document = NotebookLmMarkdownParser.parse('''
+# Transcript: Display title only
+- **Video Link:** https://youtu.be/abcdefghijk
+- **YouTube Video ID:** `abcdefghijk`
+
+### Segment 1
+$longTranscript
+### Segment 2
+$longTranscript
+''');
+    expect(document.transcript, '$longTranscript\n$longTranscript');
+    expect(document.transcript, isNot(contains('Display title')));
+    expect(document.sourceVideoId, 'abcdefghijk');
+  });
+
+  test('rejects a missing-transcript notice even if padded past minimum length',
+      () {
+    expect(() => NotebookLmMarkdownParser.parse('''
+# Transcript: No captions
+- **Video Link:** https://youtu.be/abcdefghijk
+### Segment 1
+[ไม่พบคำบรรยาย/Transcript ในระบบ YouTube สำหรับคลิปวิดีโอนี้]
+${'Additional notice. ' * 10}
+'''), throwsFormatException);
+  });
 }

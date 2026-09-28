@@ -161,6 +161,7 @@ class Phase20KeywordGapEvidenceTests(unittest.TestCase):
             self.db,
             domain="phone",
             user_keywords=["กล้อง", "แบตเตอรี่"],
+            transcript="กล้องและแบตเตอรี่ของมือถือรุ่นนี้",
             dimension_status=[],
             hook_terms=[],
             source_prefix="youtube",
@@ -199,6 +200,7 @@ class Phase20KeywordGapEvidenceTests(unittest.TestCase):
             self.db,
             domain="phone",
             user_keywords=snapshot["user_keywords"],
+            transcript="มือถือรุ่นนี้มีกล้องคมชัด ใช้ชิป Snapdragon แบตเตอรี่อึด จอ AMOLED และระบายความร้อนได้ดี",
             dimension_status=snapshot["dimension_status"],
             hook_terms=snapshot["hook_terms"],
             source_prefix="youtube",
@@ -207,6 +209,30 @@ class Phase20KeywordGapEvidenceTests(unittest.TestCase):
             "software support",
             {item["keyword"] for item in result["missing_keywords"]},
         )
+
+    def test_hook_suggestions_never_recycle_observed_terms_or_lose_evidence(self):
+        result = build_recommendation_from_analysis_data(
+            self.db, domain="phone", user_keywords=["chip performance"],
+            dimension_status=[], hook_terms=["dimensity"],
+            transcript="มือถือรุ่นนี้ใช้ชิป Dimensity และแบตเตอรี่อึด", source_prefix="youtube")
+        self.assertNotIn("battery life", {item["keyword"] for item in result["missing_keywords"]})
+        self.assertTrue(result["hook_keywords"])
+        for item in result["hook_keywords"]:
+            self.assertNotIn(item["keyword"], {"dimensity", "chip performance", "battery life"})
+            self.assertGreater(item["support_count"], 0)
+            self.assertTrue(item["supporting_dataset_row_ids"])
+            self.assertTrue(item["supporting_examples"])
+        serialized = RecommendationAnalysisResponse.model_validate(result).model_dump()
+        self.assertTrue(serialized["hook_keywords"][0]["supporting_dataset_row_ids"])
+
+    def test_all_supported_concepts_present_means_no_gap_or_hook_invention(self):
+        profile = build_dataset_profile_for_domain(self.db, domain="phone")
+        result = build_recommendation_from_analysis_data(
+            self.db, domain="phone", user_keywords=[row["keyword"] for row in profile["top_keywords"]],
+            dimension_status=[], hook_terms=["dimensity"],
+            transcript="ชิป Dimensity", source_prefix="youtube")
+        self.assertEqual(result["missing_keywords"], [])
+        self.assertEqual(result["hook_keywords"], [])
 
 
 if __name__ == "__main__":

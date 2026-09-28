@@ -1,6 +1,7 @@
 class TrendHistory {
   TrendHistory.fromJson(Map<String, dynamic> json)
       : region = json['region'] as String? ?? 'TH',
+        selectedKey = json['selected_key'] as String?,
         scope = json['ranking_scope'] as String? ?? 'global',
         items = (json['items'] as List? ?? [])
             .map((e) => HistoryItem.fromJson(Map<String, dynamic>.from(e)))
@@ -36,6 +37,7 @@ class TrendHistory {
 
   final String scope;
   final String region;
+  final String? selectedKey;
   final List<HistoryItem> items;
   final List<HistoryPoint> points;
   final bool stale;
@@ -106,7 +108,16 @@ class ViewInterval {
   final int? delta, fromRunId, fromItemId, fromViews;
   final double? perHour, seconds;
   final DateTime? from;
-  bool get measured => status == 'measured' && delta != null && perHour != null;
+  bool get measured =>
+      status == 'measured' &&
+      delta != null &&
+      delta! >= 0 &&
+      perHour != null &&
+      perHour!.isFinite &&
+      perHour! >= 0 &&
+      seconds != null &&
+      seconds! > 0 &&
+      from != null;
 }
 
 class HistoryHour {

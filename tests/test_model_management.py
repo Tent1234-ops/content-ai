@@ -19,6 +19,8 @@ from app.database.models import ClassificationModel, DatasetCollectionRun, Model
 from app.routes.model_management import router
 from app.services import model_management as service
 from tests import test_classification_training as fixtures
+from tests import test_classification_acceptance as scope_fixtures
+from app.services.classification_acceptance import POLICY_VERSION
 
 
 class ModelManagementTests(unittest.TestCase):
@@ -151,13 +153,21 @@ class ModelManagementTests(unittest.TestCase):
         folder = Path(self.tmp.name) / version
         folder.mkdir()
         artifact = folder / 'model.joblib'
-        joblib.dump({'artifact_schema_version': 2, 'model_key': 'test-model', 'model_version': version, 'labels': ['phone', 'camera'], 'unknown_leaf_key': 'unknown', 'unknown_threshold': 0.6, 'estimator': fixtures._ProbabilityEstimator()}, artifact)
+        scope_fixture = scope_fixtures.ClassificationAcceptanceTests()
+        scope_fixture.setUp()
+        joblib.dump({'artifact_schema_version': 3, 'model_key': 'test-model', 'model_version': version,
+                     'labels': list(scope_fixture.labels), 'unknown_leaf_key': 'unknown', 'unknown_threshold': 0.6,
+                     'estimator': scope_fixture.estimator, 'scope_policy': scope_fixture.fit(),
+                     'scope_test_passed': True}, artifact)
         (folder / 'evaluation.json').write_text(json.dumps({'artifact_sha256': hashlib.sha256(artifact.read_bytes()).hexdigest()}), encoding='utf-8')
         model = ClassificationModel(model_key='test-model', model_version=version, model_type='test', taxonomy_version='v1', status=status, is_active=active, artifact_path=str(artifact))
         self.db.add(model)
         self.db.flush()
         for split, name in [('promotion_gate', 'passed'), ('artifact_check', 'reload_classify_passed')]:
-            self.db.add(ModelEvaluationMetric(model_id=model.model_id, dataset_split=split, language='all', taxonomy_level=3, taxonomy_leaf_key='__overall__', metric_name=name, metric_value=1, sample_size=20, details='{"unknown_threshold":0.6}'))
+            self.db.add(ModelEvaluationMetric(model_id=model.model_id, dataset_split=split, language='all', taxonomy_level=3, taxonomy_leaf_key='__overall__', metric_name=name, metric_value=1, sample_size=20,
+                                             details=json.dumps({'unknown_threshold': 0.6,
+                                                                 'scope_validation_status': 'validated',
+                                                                 'scope_policy_version': POLICY_VERSION})))
         self.db.commit()
         return model
 
@@ -193,11 +203,20 @@ class ModelManagementTests(unittest.TestCase):
         self.db.commit()
         self.assertFalse(service.model_detail(self.db, model.model_id)['can_activate'])
 
+    def test_old_qualification_without_scope_evaluation_cannot_be_activated(self):
+        model = self.add_evaluated_model()
+        gate = self.db.query(ModelEvaluationMetric).filter_by(model_id=model.model_id, dataset_split='promotion_gate').one()
+        gate.details = '{"unknown_threshold":0.6}'
+        self.db.commit()
+        self.assertFalse(service.model_detail(self.db, model.model_id)['can_activate'])
+        with self.assertRaises(ValueError):
+            service.activate_evaluated_model(self.db, model.model_id, expected_active_model_id=None, user_id=self.user.user_id)
+
     def test_all_training_endpoints_require_admin(self):
         app = FastAPI()
         app.include_router(router)
         app.dependency_overrides[get_db] = lambda: self.db
-        paths = [('GET', '/admin/training'), ('POST', '/admin/training/runs'), ('GET', '/admin/training/runs/abc'), ('GET', '/admin/training/models'), ('GET', '/admin/training/models/1'), ('POST', '/admin/training/models/1/activate')]
+        paths = [('GET', '/admin/training'), ('POST', '/admin/training/channel-preview'), ('POST', '/admin/training/runs'), ('GET', '/admin/training/runs/abc'), ('GET', '/admin/training/models'), ('GET', '/admin/training/models/1'), ('POST', '/admin/training/models/1/activate')]
         with TestClient(app) as client:
             for method, path in paths:
                 self.assertEqual(client.request(method, path).status_code, 401)
@@ -207,6 +226,10 @@ class ModelManagementTests(unittest.TestCase):
                 self.assertEqual(client.request(method, path).status_code, 403)
             self.user.role = 'admin'
             self.assertEqual(client.get('/admin/training').status_code, 200)
+            preview = client.post('/admin/training/channel-preview', json={'channel_ids': ['UC' + 'a' * 22]})
+            self.assertEqual(preview.status_code, 200)
+            self.assertFalse(preview.json()['database_changed'])
+            self.assertEqual(client.post('/admin/training/channel-preview', json={'channel_ids': ['@creator']}).status_code, 422)
             self.assertEqual(client.get('/admin/training/models/999').status_code, 404)
             self.assertEqual(client.post('/admin/training/runs', json={'dataset_fingerprint': 'a'*64, 'promotion_threshold': 0.1}).status_code, 422)
             self.seed()

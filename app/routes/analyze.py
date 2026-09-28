@@ -24,6 +24,7 @@ from app.services.recommendation import (
     build_recommendation_from_analysis_data,
 )
 from app.services.taxonomy import normalize_taxonomy_leaf
+from app.services.recommendation_evidence import user_context
 
 router = APIRouter()
 
@@ -142,6 +143,10 @@ def _build_recommendation(db, *, filename: str, result: dict, settings_snapshot:
         transcript=classification_transcript,
         source_prefix="youtube",
         profile_limit=80,
+        evidence_context=user_context(
+            transcript=classification_transcript, raw_transcript=raw_transcript,
+            stt_meta=stt_meta, segments=result.get("transcript_segments"),
+            classification=classification, analysis_settings=settings_snapshot),
     )
     recommendation["classification"] = classification
     recommendation["content_keywords"] = list(user_signals["content_keywords"])[:12]

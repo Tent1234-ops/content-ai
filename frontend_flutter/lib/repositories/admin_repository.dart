@@ -57,8 +57,25 @@ class AdminRepository {
           await _client.put('/admin/trend-settings', values) as Map);
 
   Future<void> deleteDataset(int id) async {
-    await _client.delete('/admin/datasets/$id?confirmation_id=$id');
+    final result =
+        await _client.delete('/admin/datasets/$id?confirmation_id=$id') as Map;
+    if (result['deleted'] != true || result['dataset_id'] != id) {
+      throw StateError('ระบบยังไม่ยืนยันการย้ายข้อมูลเข้าถังขยะ');
+    }
   }
+
+  Future<DatasetItem> restoreDataset(int id) async {
+    final result = DatasetItem.fromJson(Map<String, dynamic>.from(await _client
+        .post('/admin/datasets/$id/restore?confirmation_id=$id', {}) as Map));
+    if (result.datasetId != id || result.deletedAt != null) {
+      throw StateError('ระบบยังไม่ยืนยันการกู้คืนข้อมูล');
+    }
+    return result;
+  }
+
+  Future<Map<String, dynamic>> sourceHealth() async =>
+      Map<String, dynamic>.from(
+          await _client.get('/admin/sources/health') as Map);
 
   Future<ManagedUsersPage> listUsers(
       {String query = '',
@@ -146,8 +163,10 @@ class AdminRepository {
     String source = 'all',
     String category = 'all',
     String search = '',
+    bool trashed = false,
   }) async {
     final buffer = StringBuffer('/admin/datasets?limit=$limit&offset=$offset');
+    buffer.write('&trashed=$trashed');
     if (source != 'all') {
       buffer.write('&source=$source');
     }
@@ -178,7 +197,12 @@ class AdminRepository {
     Map<String, dynamic> payload,
   ) async {
     final response = await _client.put('/admin/datasets/$datasetId', payload);
-    return DatasetItem.fromJson(Map<String, dynamic>.from(response as Map));
+    final result =
+        DatasetItem.fromJson(Map<String, dynamic>.from(response as Map));
+    if (result.datasetId != datasetId || result.deletedAt != null) {
+      throw StateError('ระบบยังไม่ยืนยันการบันทึกข้อมูล');
+    }
+    return result;
   }
 
   Future<List<DatasetReviewTaxonomyLeaf>> listTaxonomyLeaves() async {
@@ -227,6 +251,7 @@ class AdminRepository {
     String? reviewedLeafKey,
     String? transcriptQuality,
     String notes = '',
+    bool requirePending = false,
   }) async {
     final response = Map<String, dynamic>.from(
       await _client.post(
@@ -237,6 +262,9 @@ class AdminRepository {
           'reviewed_leaf_key': reviewedLeafKey,
           'transcript_quality': transcriptQuality,
           'notes': notes.trim().isEmpty ? null : notes.trim(),
+          if (candidate.candidateSha256.isNotEmpty)
+            'expected_candidate_sha256': candidate.candidateSha256,
+          'require_pending': requirePending,
         },
       ) as Map,
     );
@@ -268,6 +296,13 @@ class AdminRepository {
     return NotebookLMImportResult.fromJson(
       Map<String, dynamic>.from(response as Map),
     );
+  }
+
+  Future<List<Map<String, dynamic>>> previewTrainingChannels(
+      List<String> ids) async {
+    final response = trainingMap(await _client
+        .post('/admin/training/channel-preview', {'channel_ids': ids}));
+    return trainingRows(response['items']);
   }
 
   Future<RecommendationAdminReport> getRecommendationReport() async {

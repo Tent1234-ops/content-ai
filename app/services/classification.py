@@ -7,6 +7,7 @@ from typing import Dict, List
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.database.models import ClassificationModel, DatasetContent
 from app.services.classification_training import (
     ClassificationTrainingError,
@@ -241,6 +242,10 @@ def _classify_with_active_model(
             str(model.artifact_path),
             title=title,
             text=text,
+            require_scope_validation=(
+                model_snapshot.get("scope_validation_required", settings.classification_require_scope_validation)
+                if model_snapshot else settings.classification_require_scope_validation
+            ),
         )
     except (ClassificationTrainingError, OSError, ValueError):
         if model_snapshot is not None:
@@ -255,13 +260,18 @@ def _classify_with_active_model(
     )
     ready_leaves = ready_leaf_keys(db)
     warning: str | None = None
+    acceptance = prediction.get("acceptance") or {}
     if predicted_leaf_key == UNKNOWN_LEAF_KEY:
-        warning = (
-            "The trained model confidence is below its Unknown/Other threshold."
-        )
+        warning = {
+            "scope_validation_unavailable": "โมเดลยังไม่มีเกณฑ์ปฏิเสธคลิปนอกขอบเขตที่ผ่าน Validation จึงงดคำแนะนำเฉพาะหมวดชั่วคราว",
+            "outside_training_support": "ข้อความยังไม่สอดคล้องกับข้อมูลฝึกของหมวดที่โมเดลทายเพียงพอ จึงงดคำแนะนำเฉพาะหมวด",
+            "scope_policy_invalid": "ไม่สามารถตรวจรับผลจำแนกหมวดได้ จึงงดคำแนะนำเฉพาะหมวด",
+        }.get(acceptance.get("reason"), "โมเดลยังไม่ผ่านเกณฑ์ยืนยันหมวดหมู่ จึงงดคำแนะนำเฉพาะหมวด")
     elif predicted_leaf_key not in ready_leaves:
         predicted_leaf_key = UNKNOWN_LEAF_KEY
         warning = "The predicted category no longer meets the dataset coverage gate."
+    elif acceptance.get("accepted") is False:
+        warning = "คำเตือน: ยังไม่ได้ยืนยันความสามารถในการปฏิเสธคลิปนอกขอบเขต ผลหมวดและคำแนะนำนี้อาจผิดหมวด"
 
     path = taxonomy_path(predicted_leaf_key)
     probabilities = dict(prediction.get("probabilities") or {})
@@ -305,6 +315,8 @@ def _classify_with_active_model(
         "model_key": str(model.model_key),
         "model_version": str(model.model_version),
         "unknown_threshold": prediction.get("unknown_threshold"),
+        "raw_taxonomy_leaf_key": raw_leaf_key,
+        "acceptance": acceptance,
     }
 
 

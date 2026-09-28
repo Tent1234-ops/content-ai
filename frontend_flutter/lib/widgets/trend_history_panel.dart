@@ -9,6 +9,9 @@ import '../repositories/dashboard_repository.dart';
 String historyTime(DateTime at) =>
     '${at.day}/${at.month} ${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
 
+String historyEvidenceTime(DateTime at) =>
+    '${historyTime(at)}:${at.second.toString().padLeft(2, '0')}';
+
 String historyNumber(num? value) => value == null
     ? '-'
     : value
@@ -86,10 +89,12 @@ class _TrendHistoryPanelState extends State<TrendHistoryPanel> {
       final data = await widget.repository.getTrendHistory(
           platform: widget.platform,
           days: _days,
+          itemKey: _itemKey,
           categoryId: widget.categoryId);
       if (!mounted || request != _request) return;
       setState(() {
         _data = data;
+        if (data.selectedKey != null) _itemKey = data.selectedKey;
         if (!data.items.any((i) => i.key == _itemKey)) {
           _itemKey = data.items.isEmpty ? null : data.items.first.key;
         }
@@ -299,7 +304,13 @@ class _TrendHistoryPanelState extends State<TrendHistoryPanel> {
                   child: Text(item.title,
                       maxLines: 1, overflow: TextOverflow.ellipsis)))
               .toList(),
-          onChanged: (value) => setState(() => _itemKey = value),
+          onChanged: (value) {
+            setState(() {
+              _itemKey = value;
+              _data = null;
+            });
+            _load();
+          },
         );
 
   Widget _decisionSummary(TrendHistory data) {
@@ -493,7 +504,7 @@ class _TrendHistoryPanelState extends State<TrendHistoryPanel> {
       final p = rows[index];
       final interval = p.viewIntervals[_itemKey];
       return DataRow(cells: [
-        DataCell(Text(historyTime(p.at))),
+        DataCell(Text(historyEvidenceTime(p.at))),
         DataCell(Text(p.ranks[_itemKey] == null
             ? 'ไม่พบในรายการ'
             : '#${p.ranks[_itemKey]}')),
@@ -508,7 +519,7 @@ class _TrendHistoryPanelState extends State<TrendHistoryPanel> {
               : '-')),
           DataCell(Text(interval?.from == null
               ? '-'
-              : '${historyTime(interval!.from!)} ถึง ${historyTime(p.at)}\n${(interval.seconds! / 60).toStringAsFixed(1)} นาที')),
+              : '${historyEvidenceTime(interval!.from!)} ถึง ${historyEvidenceTime(p.at)}\n${interval.seconds!.toStringAsFixed(6)} วินาที')),
           DataCell(Text(viewIntervalStatus(interval?.status))),
         ],
         if (categories)
@@ -529,40 +540,36 @@ class _TrendHistoryPanelState extends State<TrendHistoryPanel> {
                   width: 1120,
                   height: 500,
                   child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: SingleChildScrollView(
-                        child: PaginatedDataTable(
-                            source: source,
-                            rowsPerPage: 10,
-                            availableRowsPerPage: const [],
-                            showFirstLastButtons: true,
-                            columns: [
-                              const DataColumn(label: Text('วัน / เวลา')),
-                              const DataColumn(
-                                  label: Text('อันดับรายการที่เลือก')),
-                              if (youtube) ...[
-                                const DataColumn(label: Text('ยอดวิวปลายช่วง')),
-                                const DataColumn(label: Text('ยอดวิวต้นช่วง')),
-                                const DataColumn(label: Text('ยอดเพิ่มจริง')),
-                                const DataColumn(
-                                    label: Text('เฉลี่ยต่อชั่วโมง')),
-                                const DataColumn(
-                                    label: Text('ช่วงเวลาที่เปรียบเทียบ')),
-                                const DataColumn(label: Text('สถานะยอดวิว')),
-                              ],
-                              if (categories)
-                                const DataColumn(
-                                    label: Text('คลิปหมวดที่เลือก / ทั้งหมด')),
-                              const DataColumn(label: Text('รหัสรอบข้อมูล')),
-                              const DataColumn(label: Text('รหัสรายการต้นทาง')),
-                            ])),
+                    child: PaginatedDataTable(
+                        source: source,
+                        rowsPerPage: 10,
+                        availableRowsPerPage: const [],
+                        showFirstLastButtons: true,
+                        columns: [
+                          const DataColumn(label: Text('วัน / เวลา')),
+                          const DataColumn(label: Text('อันดับรายการที่เลือก')),
+                          if (youtube) ...[
+                            const DataColumn(label: Text('ยอดวิวปลายช่วง')),
+                            const DataColumn(label: Text('ยอดวิวต้นช่วง')),
+                            const DataColumn(label: Text('ยอดเพิ่มจริง')),
+                            const DataColumn(label: Text('เฉลี่ยต่อชั่วโมง')),
+                            const DataColumn(
+                                label: Text('ช่วงเวลาที่เปรียบเทียบ')),
+                            const DataColumn(label: Text('สถานะยอดวิว')),
+                          ],
+                          if (categories)
+                            const DataColumn(
+                                label: Text('คลิปหมวดที่เลือก / ทั้งหมด')),
+                          const DataColumn(label: Text('รหัสรอบข้อมูล')),
+                          const DataColumn(label: Text('รหัสรายการต้นทาง')),
+                        ]),
                   )),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(context),
                     child: const Text('ปิด'))
               ],
-            ));
+            )).whenComplete(source.dispose);
   }
 }
 
@@ -626,8 +633,8 @@ class HistoryLineChart extends StatelessWidget {
           child: LineChart(
               duration: Duration.zero,
               LineChartData(
-                minX: min - range * 0.04,
-                maxX: max + range * 0.04,
+                minX: from == null ? min - range * 0.04 : min,
+                maxX: to == null ? max + range * 0.04 : max,
                 minY: rank ? -50 : 0,
                 maxY: rank ? -1 : top,
                 lineBarsData: viewGrowth

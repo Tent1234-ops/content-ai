@@ -2570,6 +2570,7 @@ def analyze_video(
             "transcript": raw_transcript,
             "raw_transcript": raw_transcript,
             "cleaned_transcript": cleaned_transcript,
+            "transcript_segments": stt_segments if stt.get("transcript_source") == "speech_to_text" else [],
             "analysis": {
                 "title": summary,
                 "domain": domain,

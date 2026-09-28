@@ -75,6 +75,8 @@ class DatasetReviewDecisionRequest(BaseModel):
     reviewed_leaf_key: str | None = Field(default=None, max_length=100)
     transcript_quality: Literal["good", "acceptable"] | None = None
     notes: str | None = Field(default=None, max_length=2000)
+    expected_candidate_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    require_pending: bool = False
 
 
 class DatasetReviewDecisionResponse(BaseModel):

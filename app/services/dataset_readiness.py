@@ -91,6 +91,15 @@ def _is_trend_archive(row: DatasetContent) -> bool:
             and not row.is_training_eligible and not row.is_keyword_recommendation_eligible)
 
 
+def dataset_quality(row: DatasetContent) -> dict:
+    checks = _checks(row, datetime.utcnow())
+    return {"status": "archived" if row.deleted_at else
+            "needs_attention" if any(not c["ok"] for c in checks) else "complete",
+            "issues": [c["label"] for c in checks if not c["ok"]],
+            "training_enabled": bool(row.is_training_eligible),
+            "reference_enabled": bool(row.is_keyword_recommendation_eligible)}
+
+
 def dataset_readiness(db: Session, *, category: str | None = None, role: str = "all",
                       offset: int = 0, limit: int = 20, now: datetime | None = None) -> dict:
     now = now or datetime.utcnow()

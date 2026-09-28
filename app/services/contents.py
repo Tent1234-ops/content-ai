@@ -97,6 +97,8 @@ def get_user_content_detail(db: Session, *, user_id: int, content_id: int) -> di
             source_prefix="youtube",
             profile_limit=150,
         )
+        if recommendation_payload.get("evidence_bundle"):
+            recommendation_payload["evidence_bundle"]["origin"] = "recomputed_legacy_not_original"
     return {
         "content_id": content.content_id,
         "title": content.title,

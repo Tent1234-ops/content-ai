@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -27,12 +28,15 @@ def list_admin_datasets(
     source: str | None = None,
     category: str | None = None,
     search: str | None = None,
+    trashed: bool = False,
 ):
-    query = db.query(DatasetContent).filter(DatasetContent.deleted_at.is_(None))
+    query = db.query(DatasetContent).filter(
+        DatasetContent.deleted_at.is_not(None) if trashed else DatasetContent.deleted_at.is_(None))
     if source:
         query = query.filter(DatasetContent.source_platform.like(f"{source}%"))
     if category:
-        query = query.filter(DatasetContent.category == category)
+        query = query.filter((DatasetContent.taxonomy_leaf_key == category) |
+                             (DatasetContent.category == category))
     if search:
         like_value = f"%{search.strip()}%"
         query = query.filter(
@@ -249,9 +253,12 @@ def delete_admin_dataset(db: Session, *, dataset_id: int, user_id: int,
         raise ValueError("Dataset confirmation does not match")
     item = db.query(DatasetContent).filter(
         DatasetContent.dataset_id == dataset_id,
-    ).with_for_update().first()
+    ).populate_existing().with_for_update().first()
     if item is None or item.deleted_at is not None:
         return False
+    item.deletion_state_json = json.dumps({name: bool(getattr(item, name)) for name in (
+        "is_active", "is_training_eligible", "is_keyword_recommendation_eligible",
+        "is_duration_recommendation_eligible")})
     item.deleted_at = datetime.utcnow()
     item.is_active = False
     item.is_training_eligible = False
@@ -259,8 +266,43 @@ def delete_admin_dataset(db: Session, *, dataset_id: int, user_id: int,
     item.is_duration_recommendation_eligible = False
     log_system_event(db, user_id=user_id, action="admin_dataset_delete", status="success",
                      detail=f"dataset_id={dataset_id}, archived=true, model_retrain_required=true")
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return True
+
+
+def restore_admin_dataset(db: Session, *, dataset_id: int, user_id: int,
+                          confirmation_id: int) -> DatasetContent | None:
+    if confirmation_id != dataset_id:
+        raise ValueError("Dataset confirmation does not match")
+    item = db.query(DatasetContent).filter_by(dataset_id=dataset_id).populate_existing().with_for_update().first()
+    if item is None or item.deleted_at is None:
+        return None
+    state = json.loads(item.deletion_state_json or "{}")
+    fields = ("is_active", "is_training_eligible", "is_keyword_recommendation_eligible",
+              "is_duration_recommendation_eligible")
+    # Legacy deletions have no eligibility backup. Never grant inferred permissions.
+    restored = {name: state.get(name, name == "is_active") is True for name in fields}
+    values = {column.name: getattr(item, column.name) for column in DatasetContent.__table__.columns}
+    values.update(restored, deleted_at=None)
+    validate_training_eligibility_values(values)
+    for name, value in restored.items():
+        setattr(item, name, value)
+    item.deleted_at = None
+    item.deletion_state_json = None
+    log_system_event(db, user_id=user_id, action="admin_dataset_restore", status="success",
+                     detail=json.dumps({"dataset_id": dataset_id, "restored_flags": restored,
+                                        "legacy_without_backup": not bool(state)}))
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(item)
+    return item
 
 
 def list_admin_cluster_runs(

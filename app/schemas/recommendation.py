@@ -17,12 +17,13 @@ class RecommendationKeywordExample(BaseModel):
     platform: str = "youtube"
     frequency: int = 0
     matched_terms: list[str] = Field(default_factory=list)
-    views: int = 0
-    likes: int = 0
-    comments: int = 0
+    views: Optional[int] = None
+    likes: Optional[int] = None
+    comments: Optional[int] = None
     average_views_per_day: float = 0.0
     engagement_rate: float = 0.0
     performance_weight: float = 0.0
+    occurrences: list[dict[str, object]] = Field(default_factory=list)
 
 
 class RecommendationKeywordItem(BaseModel):
@@ -38,12 +39,16 @@ class RecommendationKeywordItem(BaseModel):
         default_factory=list
     )
     score_components: dict[str, float] = Field(default_factory=dict)
+    supporting_records: list[RecommendationKeywordExample] = Field(default_factory=list)
+    channel_count: int = 0
+    evidence_topic_id: Optional[str] = None
 
 
 class RecommendationDimensionItem(BaseModel):
     name: str
     score: float
     user_status: str
+    evidence_topic_id: Optional[str] = None
 
 
 class DurationRecommendation(BaseModel):
@@ -104,6 +109,7 @@ class RecommendationTextRequest(BaseModel):
 
 class RecommendationAnalysisResponse(BaseModel):
     domain: str
+    status: Optional[str] = None
     classification: Optional[ClassificationResponse] = None
     user_keywords: list[str]
     missing_keywords: list[RecommendationKeywordItem]
@@ -113,6 +119,7 @@ class RecommendationAnalysisResponse(BaseModel):
     dataset_profile: DatasetProfileResponseItem
     evidence: dict[str, object] = Field(default_factory=dict)
     current_trend_ideas: dict[str, object] = Field(default_factory=dict)
+    evidence_bundle: dict[str, object] = Field(default_factory=dict)
 
 
 class ProfileComparisonItem(BaseModel):

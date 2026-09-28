@@ -1,6 +1,6 @@
 # Dashboard History
 
-The public Dashboard now includes two charts, independent of AI training and
+The public Dashboard now includes three charts, independent of AI training and
 recommendations. Guests and signed-in users see the same public data.
 
 ## Charts
@@ -12,6 +12,10 @@ recommendations. Guests and signed-in users see the same public data.
   **global** ranking. Share = category count / total observed entries * 100.
   This is not YouTube audience market share, view growth, or search volume.
   Category-specific charts are never pooled for this calculation.
+- YouTube view growth: a bar at an interval's ending time shows the selected
+  video's average added views per hour. Actual delta, duration, counters and
+  source IDs are available in the tooltip/evidence table. No such chart is
+  manufactured for Google. See [Phase 5 decisions](dashboard-decisions-phase5.md).
 - The table button exposes exact observation timestamps, selected ranks/counts,
   and original run IDs. Those IDs remain provenance even after raw run deletion.
 
@@ -22,6 +26,9 @@ recommendations. Guests and signed-in users see the same public data.
    successful live observation per UTC hour, region, platform, and ranking scope
    in `trend_history_buckets`. It retains the actual observation times and ranks,
    not averages or interpolated values.
+   It also preserves available YouTube view counters, metric versions and item
+   IDs. Same-run backfill can add missing fields from retained raw snapshots;
+   missing counters whose source rows have been deleted remain missing.
 3. Raw snapshot retention remains unchanged. Before raw deletion, archive both
    hourly observations and per-scope attempt statuses. Both archives are kept
    for 90 days; neither has a cascading FK to raw runs.

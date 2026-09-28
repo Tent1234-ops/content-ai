@@ -9,7 +9,8 @@ pipeline; it does not run training or load speech-to-text models.
 
 - `scripts/collect_trend_snapshots.py`: one due-slot check and collection, then exit.
 - `scripts/install_trend_scheduler.ps1`: register the current user's Windows task.
-- `scripts/run_trend_scheduler.ps1`: hidden Python launcher with stdout/stderr logs.
+- `scripts/run_trend_scheduler.py`: windowless Python launcher with stdout/stderr logs.
+- `scripts/run_trend_scheduler.ps1`: legacy launcher, no longer used by installed tasks.
 - `app/services/trend_scheduler.py`: cross-process lock, slot claim and audit.
 - `app/services/trend_settings.py`: persisted schedule and today's slot status.
 
@@ -32,6 +33,31 @@ The Windows user must be logged on. The computer, Internet, workspace drive
 (including Z: if used), Python environment, and database must be available.
 Closing the browser and Backend does not stop the standalone collector.
 Sleep or shutdown still prevents collection. This setup does not start MySQL.
+
+## Windowless Execution And Upgrades
+
+The task starts `pythonw.exe` directly, not PowerShell or a batch file. This avoids
+creating a console at startup, rather than hiding one after it appears. The
+launcher runs the collector using `CREATE_NO_WINDOW`, redirects stdin/stdout/stderr,
+waits for completion and passes its exit code back to Task Scheduler. Collection
+failures remain visible in LastTaskResult and the existing diagnostic logs.
+
+To upgrade an existing task, rerun the installer **without** `-ConfigureDaily`:
+
+```powershell
+.\scripts\install_trend_scheduler.ps1 -PythonPath 'C:\path\to\python.exe'
+```
+
+Only the existing task's action is replaced. Its triggers, principal, enabled
+state and settings are preserved, as are the collection hours configured in Admin.
+The installer requires `pythonw.exe` beside the supplied interpreter and refuses
+to silently fall back to a console launcher. No password or elevated run level
+is needed by the scheduled collector. Hiding a task in the Task Scheduler list
+alone does not prevent a console window.
+
+A manual diagnostic can run `pythonw.exe -B -X utf8 scripts/run_trend_scheduler.py
+--status`. It checks database settings without fetching providers; inspect
+`artifacts/trend-scheduler.stdout.log` and `artifacts/trend-scheduler.stderr.log`.
 
 ## Admin
 

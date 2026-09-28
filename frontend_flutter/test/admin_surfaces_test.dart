@@ -11,6 +11,61 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   testWidgets(
+      'trash restores only after confirmed persistence; failures keep row visible',
+      (tester) async {
+    final repository = _DatasetsRepository()..deleted = true;
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+        MaterialApp(home: AdminDatasetsScreen(repository: repository)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ถังขยะ'));
+    await tester.pumpAndSettle();
+    repository.failRestore = true;
+    await tester.tap(find.byTooltip('กู้คืน Dataset #42'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ยืนยันกู้คืน'));
+    await tester.pumpAndSettle();
+    expect(repository.deleted, true);
+    expect(find.textContaining('กู้คืนไม่สำเร็จ'), findsOneWidget);
+    expect(find.text('Phone review'), findsOneWidget);
+    expect(find.text('กู้คืนข้อมูลและสิทธิ์เดิมแล้ว'), findsNothing);
+    repository.failRestore = false;
+    await tester.tap(find.byTooltip('กู้คืน Dataset #42'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ยืนยันกู้คืน'));
+    await tester.pumpAndSettle();
+    expect(repository.deleted, false);
+    expect(find.text('ถังขยะว่าง'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'editor cancel is not a successful save; failed update stays open',
+      (tester) async {
+    final repository = _DatasetsRepository();
+    await tester.binding.setSurfaceSize(const Size(1280, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+        MaterialApp(home: AdminDatasetsScreen(repository: repository)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Phone review'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(repository.updatedPayload, isNull);
+    expect(find.text('บันทึกข้อมูลแล้ว'), findsNothing);
+    expect(tester.takeException(), isNull);
+    repository.failSave = true;
+    await tester.tap(find.text('Phone review'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('dataset-save')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('write failed'), findsOneWidget);
+    expect(find.byKey(const ValueKey('dataset-save')), findsOneWidget);
+    expect(find.text('บันทึกข้อมูลแล้ว'), findsNothing);
+  });
+  testWidgets(
       'dataset delete requires confirmation and removes the item after success',
       (tester) async {
     final repository = _DatasetsRepository();
@@ -30,7 +85,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(repository.deleted, true);
     expect(find.text('Phone review'), findsNothing);
-    expect(find.text('No datasets found'), findsOneWidget);
+    expect(find.text('ไม่พบข้อมูล'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
   test('system log parses backend audit fields and exposes Thai labels', () {
@@ -166,6 +221,15 @@ class _LogsRepository extends AdminRepository {
 }
 
 class _DatasetsRepository extends AdminRepository {
+  bool failRestore = false;
+  bool failSave = false;
+  @override
+  Future<DatasetItem> restoreDataset(int id) async {
+    if (failRestore) throw StateError('restore failed');
+    deleted = false;
+    return item;
+  }
+
   bool deleted = false;
   @override
   Future<void> deleteDataset(int id) async {
@@ -226,9 +290,11 @@ class _DatasetsRepository extends AdminRepository {
     String source = 'all',
     String category = 'all',
     String search = '',
+    bool trashed = false,
   }) async {
+    final visible = trashed == deleted;
     return PaginatedResult(
-        total: deleted ? 0 : 1, items: deleted ? [] : [item]);
+        total: visible ? 1 : 0, items: visible ? [item] : []);
   }
 
   @override
@@ -236,6 +302,7 @@ class _DatasetsRepository extends AdminRepository {
     int datasetId,
     Map<String, dynamic> payload,
   ) async {
+    if (failSave) throw StateError('write failed');
     updatedDatasetId = datasetId;
     updatedPayload = Map<String, dynamic>.from(payload);
     return item;

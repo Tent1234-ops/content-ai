@@ -30,6 +30,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
   final int _limit = 12;
   int _total = 0;
   int _tab = 0;
+  int _request = 0;
 
   @override
   void initState() {
@@ -39,6 +40,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
   }
 
   Future<void> _load() async {
+    final request = ++_request;
     setState(() {
       _loading = true;
       _error = null;
@@ -51,8 +53,9 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
         limit: _limit,
         offset: _offset,
         category: _category,
+        trashed: _tab == 3,
       );
-      if (!mounted) return;
+      if (!mounted || request != _request) return;
       if (response.items.isEmpty && _offset > 0) {
         _offset =
             response.total == 0 ? 0 : ((response.total - 1) ~/ _limit) * _limit;
@@ -61,6 +64,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
       }
       final discoveredCategories = <String>{
         'all',
+        _category,
         ...taxonomyLeaves.map((item) => item.leafKey),
       };
       for (final item in response.items) {
@@ -76,10 +80,10 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
         _categories = discoveredCategories.toList()..sort();
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || request != _request) return;
       setState(() => _error = error.toString());
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && request == _request) setState(() => _loading = false);
     }
   }
 
@@ -89,7 +93,7 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
   }
 
   String _categoryLabel(String leafKey) {
-    if (leafKey == 'all') return 'All';
+    if (leafKey == 'all') return 'ทั้งหมด';
     for (final leaf in _taxonomyLeaves) {
       if (leaf.leafKey == leafKey) return leaf.path;
     }
@@ -112,8 +116,8 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
         SnackBar(
           content: Text(
             saved == 'training'
-                ? 'Saved. Train and activate a new model before this correction affects Analyze.'
-                : 'Dataset metadata saved.',
+                ? 'บันทึกแล้ว ต้องฝึกและเปิดใช้โมเดลใหม่เพื่อให้การแก้ไขมีผลต่อการจำแนกหมวด'
+                : 'บันทึกข้อมูลแล้ว',
           ),
         ),
       );
@@ -160,30 +164,79 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
     }
   }
 
+  Future<void> _restore(DatasetItem item) async {
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: const Text('กู้คืน Dataset?'),
+                content: SizedBox(
+                    width: 520,
+                    child: Text('#${item.datasetId} ${item.title}\n\n'
+                        'รักษา Transcript หมวดหมู่ และชุดข้อมูลเดิม หากไม่มีประวัติสิทธิ์ก่อนลบ '
+                        'จะไม่เปิดสิทธิ์ฝึกหรือแนะนำให้อัตโนมัติ โมเดลที่ฝึกแล้วจะไม่เปลี่ยนแปลง')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('ยกเลิก')),
+                  FilledButton.icon(
+                      onPressed: () => Navigator.pop(context, true),
+                      icon: const Icon(Icons.restore),
+                      label: const Text('ยืนยันกู้คืน'))
+                ]));
+    if (confirmed != true || !mounted) return;
+    setState(() => _deleting = true);
+    try {
+      final restored = await _repository.restoreDataset(item.datasetId);
+      if (!mounted) return;
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(restored.isTrainingEligible
+                ? 'กู้คืนข้อมูลและสิทธิ์เดิมแล้ว'
+                : 'กู้คืนข้อมูลแล้ว รายการนี้ยังไม่เปิดสิทธิ์ใช้ฝึกโมเดล')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('กู้คืนไม่สำเร็จ: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AppShell(
-      title: 'Admin Datasets',
+      title: 'จัดการ Dataset',
       currentRoute: '/admin-datasets',
       isAdmin: true,
       actions: [
         IconButton(
-          onPressed: _load,
+          onPressed: _loading || _deleting ? null : _load,
           icon: const Icon(Icons.refresh),
-          tooltip: 'Refresh datasets',
+          tooltip: 'โหลดข้อมูลใหม่',
         ),
       ],
       child: Column(
         children: [
           DefaultTabController(
-            length: 3,
+            length: 4,
             initialIndex: _tab,
             child: TabBar(
-                onTap: (index) => setState(() => _tab = index),
+                isScrollable: true,
+                onTap: (index) {
+                  setState(() {
+                    _tab = index;
+                    _offset = 0;
+                  });
+                  if (index == 0 || index == 3) _load();
+                },
                 tabs: const [
                   Tab(text: 'รายการข้อมูล'),
                   Tab(text: 'คุณภาพและแผนเก็บข้อมูล'),
                   Tab(text: 'สถิติและการเติบโต'),
+                  Tab(icon: Icon(Icons.delete_outline), text: 'ถังขยะ'),
                 ]),
           ),
           if (_tab == 1)
@@ -195,8 +248,9 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
               padding: const EdgeInsets.all(16),
               child: DropdownButtonFormField<String>(
                 key: const ValueKey('dataset-category-filter'),
+                isExpanded: true,
                 initialValue: _category,
-                decoration: const InputDecoration(labelText: 'Category'),
+                decoration: const InputDecoration(labelText: 'หมวดหมู่'),
                 items: _categories
                     .map(
                       (value) => DropdownMenuItem(
@@ -208,78 +262,120 @@ class _AdminDatasetsScreenState extends State<AdminDatasetsScreen> {
                       ),
                     )
                     .toList(),
-                onChanged: (value) {
-                  if (value == null) return;
-                  setState(() => _category = value);
-                  _applyFilters();
-                },
+                onChanged: _loading || _deleting
+                    ? null
+                    : (value) {
+                        if (value == null) return;
+                        setState(() => _category = value);
+                        _applyFilters();
+                      },
               ),
             ),
             if (_loading) const LinearProgressIndicator(),
             Expanded(
               child: _error != null
                   ? ErrorStateView(message: _error!, onRetry: _load)
-                  : _items.isEmpty
-                      ? const EmptyStateView(
-                          title: 'No datasets found',
-                          message: 'No approved datasets match these filters.',
-                          icon: Icons.storage_outlined,
-                        )
-                      : RefreshIndicator(
-                          onRefresh: _load,
-                          child: ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            itemCount: _items.length + 1,
-                            itemBuilder: (context, index) {
-                              if (index == _items.length) {
-                                return PaginationBar(
-                                  offset: _offset,
-                                  limit: _limit,
-                                  total: _total,
-                                  onPrevious: _offset <= 0
-                                      ? null
-                                      : () {
-                                          setState(() => _offset =
-                                              (_offset - _limit)
-                                                  .clamp(0, _offset));
-                                          _load();
-                                        },
-                                  onNext: _offset + _limit >= _total
-                                      ? null
-                                      : () {
-                                          setState(() => _offset += _limit);
-                                          _load();
-                                        },
-                                );
-                              }
-                              final item = _items[index];
-                              final categoryLabel = item.taxonomyPath.isNotEmpty
-                                  ? item.taxonomyPath
-                                  : item.category;
-                              return Card(
-                                child: ListTile(
-                                  leading: const Icon(Icons.dataset_outlined),
-                                  title: Text(item.title),
-                                  subtitle: Text(
-                                    '${item.sourcePlatform} | $categoryLabel\n'
-                                    'views ${item.views} likes ${item.likes} comments ${item.comments} | '
-                                    'duration ${item.durationSeconds ?? 0}s',
-                                  ),
-                                  isThreeLine: true,
-                                  trailing: IconButton(
-                                      tooltip: 'ลบ Dataset #${item.datasetId}',
-                                      onPressed: _deleting || _loading
+                  : _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : _items.isEmpty
+                          ? EmptyStateView(
+                              title: _tab == 3 ? 'ถังขยะว่าง' : 'ไม่พบข้อมูล',
+                              message: 'ไม่มีรายการที่ตรงกับหมวดหมู่ที่เลือก',
+                              icon: Icons.storage_outlined,
+                            )
+                          : RefreshIndicator(
+                              onRefresh: _load,
+                              child: ListView.builder(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 16),
+                                itemCount: _items.length + 1,
+                                itemBuilder: (context, index) {
+                                  if (index == _items.length) {
+                                    return PaginationBar(
+                                      offset: _offset,
+                                      limit: _limit,
+                                      total: _total,
+                                      onPrevious: _offset <= 0
                                           ? null
-                                          : () => _delete(item),
-                                      icon: const Icon(Icons.delete_outline)),
-                                  onTap: _deleting
-                                      ? null
-                                      : () => _openEditor(item),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
+                                          : () {
+                                              setState(() => _offset =
+                                                  (_offset - _limit)
+                                                      .clamp(0, _offset));
+                                              _load();
+                                            },
+                                      onNext: _offset + _limit >= _total
+                                          ? null
+                                          : () {
+                                              setState(() => _offset += _limit);
+                                              _load();
+                                            },
+                                    );
+                                  }
+                                  final item = _items[index];
+                                  final categoryLabel =
+                                      item.taxonomyPath.isNotEmpty
+                                          ? item.taxonomyPath
+                                          : item.category;
+                                  return Card(
+                                    child: ListTile(
+                                      leading:
+                                          const Icon(Icons.dataset_outlined),
+                                      title: Text(item.title),
+                                      subtitle: Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 8),
+                                          child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                    '#${item.datasetId} · ${item.sourcePlatform} · $categoryLabel'),
+                                                Text(
+                                                    'ชุดข้อมูล: ${item.dataSplit.isEmpty ? "ยังไม่กำหนด" : item.dataSplit} · '
+                                                    'ความยาว ${item.durationSeconds == null ? "ยังไม่มีข้อมูล" : "${item.durationSeconds} วินาที"}'),
+                                                const SizedBox(height: 6),
+                                                Text(
+                                                    _tab == 3
+                                                        ? 'อยู่ในถังขยะ ไม่ใช้ในงานใหม่'
+                                                        : item.quality[
+                                                                    'status'] ==
+                                                                'complete'
+                                                            ? 'ข้อมูลประกอบครบตามรายการตรวจ'
+                                                            : item.quality
+                                                                    .isEmpty
+                                                                ? 'ยังไม่ได้ตรวจคุณภาพข้อมูล'
+                                                                : 'ต้องตรวจ: ${(item.quality['issues'] as List? ?? []).join(" · ")}',
+                                                    style: TextStyle(
+                                                        color: item.quality[
+                                                                    'status'] ==
+                                                                'complete'
+                                                            ? Theme.of(context)
+                                                                .colorScheme
+                                                                .secondary
+                                                            : Theme.of(context)
+                                                                .colorScheme
+                                                                .onSurfaceVariant)),
+                                              ])),
+                                      trailing: IconButton(
+                                          tooltip:
+                                              '${_tab == 3 ? "กู้คืน" : "ลบ"} Dataset #${item.datasetId}',
+                                          onPressed: _deleting || _loading
+                                              ? null
+                                              : () => _tab == 3
+                                                  ? _restore(item)
+                                                  : _delete(item),
+                                          icon: Icon(_tab == 3
+                                              ? Icons
+                                                  .restore_from_trash_outlined
+                                              : Icons.delete_outline)),
+                                      onTap: _deleting || _tab == 3
+                                          ? null
+                                          : () => _openEditor(item),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
             ),
           ],
         ],
@@ -368,6 +464,20 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
   }
 
   Future<void> _save() async {
+    for (final field in [_views, _likes, _comments, _duration]) {
+      if (field == _duration && field.text.trim().isEmpty) continue;
+      final value = int.tryParse(field.text.trim());
+      if (value == null || value < 0) {
+        setState(() =>
+            _error = 'ยอดสถิติและความยาวต้องเป็นจำนวนเต็มตั้งแต่ 0 ขึ้นไป');
+        return;
+      }
+    }
+    final score = double.tryParse(_score.text.trim());
+    if (score == null || !score.isFinite || score < 0) {
+      setState(() => _error = 'คะแนนต้องเป็นตัวเลขตั้งแต่ 0 ขึ้นไป');
+      return;
+    }
     if (_title.text.trim().isEmpty) {
       setState(() => _error = 'Title is required');
       return;
@@ -540,7 +650,7 @@ class _DatasetEditorDialogState extends State<_DatasetEditorDialog> {
       ),
       actions: [
         TextButton(
-            onPressed: _saving ? null : () => Navigator.pop(context, false),
+            onPressed: _saving ? null : () => Navigator.pop(context),
             child: const Text('Cancel')),
         FilledButton.icon(
           key: const ValueKey('dataset-save'),

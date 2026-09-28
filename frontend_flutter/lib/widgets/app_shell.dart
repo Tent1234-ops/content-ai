@@ -117,7 +117,10 @@ class AppShell extends StatelessWidget {
           ),
         ),
       ),
-      body: child,
+      body: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1600), child: child)),
     );
   }
 }

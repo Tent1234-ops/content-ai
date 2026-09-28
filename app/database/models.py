@@ -252,6 +252,7 @@ class DatasetContent(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     views = Column(BigInteger, nullable=False, default=0)
     deleted_at = Column(DateTime)
+    deletion_state_json = Column(Text)
     likes = Column(BigInteger, nullable=False, default=0)
     comments = Column(BigInteger, nullable=False, default=0)
     trend_score = Column(Float, nullable=False, default=0.0)

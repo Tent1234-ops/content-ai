@@ -116,7 +116,8 @@ def archive_attempts(db: Session, run: TrendSnapshotRun) -> None:
             scopes = {f"category:{key}": provider for key in settings.youtube_trend_category_ids}
         for scope, result in scopes.items():
             live = result.get("mode", provider.get("mode")) == "live"
-            status = "observed" if live and result.get("status") in {"ok", "empty"} else "failed"
+            completed = run.status in {"completed", "partial"}
+            status = "observed" if completed and live and result.get("status") in {"ok", "empty"} else "failed"
             if result.get("mode", provider.get("mode")) == "mock":
                 status = "excluded_mock"
             exists = db.query(TrendHistoryAttempt).filter_by(
@@ -222,7 +223,7 @@ def _rank_movement(points: list[dict], key: str, *, stale: bool, interrupted: bo
 
 def load_trend_history(
     db: Session, *, region: str, platform: str, days: int = 5,
-    category_id: str | None = None, now: datetime | None = None,
+    category_id: str | None = None, item_key: str | None = None, now: datetime | None = None,
 ) -> dict:
     if platform not in {"youtube", "google"} or days not in {1, 5, 7, 30, 90}:
         raise ValueError("Unsupported platform or history period")
@@ -248,7 +249,7 @@ def load_trend_history(
     attempts = db.query(TrendHistoryAttempt).filter(
         TrendHistoryAttempt.region == region, TrendHistoryAttempt.platform == platform,
         TrendHistoryAttempt.ranking_scope == scope, TrendHistoryAttempt.observed_at >= start,
-        TrendHistoryAttempt.observed_at <= end).order_by(TrendHistoryAttempt.observed_at).all()
+        TrendHistoryAttempt.observed_at <= end).order_by(TrendHistoryAttempt.observed_at, TrendHistoryAttempt.id).all()
     failures = [attempt.observed_at for attempt in attempts if attempt.status == "failed"]
     interruptions = [attempt.observed_at for attempt in attempts if attempt.status != "observed"]
     points = []
@@ -275,12 +276,17 @@ def load_trend_history(
             "view_metrics": {key: item.get("view_metric_version") for key, item in items.items()} if platform == "youtube" else {},
             "item_ids": {key: item.get("snapshot_item_id") for key, item in items.items()},
         })
-        points[-1]["view_intervals"] = {
-            key: _view_interval(points[-2] if len(points) > 1 else None, points[-1], key)
-            for key in ranks} if platform == "youtube" else {}
         previous_at = timestamp
     latest_ranks = points[-1]["ranks"] if points else {}
     keys = sorted(titles, key=lambda k: (latest_ranks.get(k, 999), titles[k]))
+    selected_key = item_key if item_key in titles else next(iter(keys), None)
+    previous = None
+    for point in points:
+        for field in ("views", "view_metrics", "item_ids"):
+            point[field] = {selected_key: point[field][selected_key]} if selected_key in point[field] else {}
+        point["view_intervals"] = {selected_key: _view_interval(previous, point, selected_key)} if (
+            platform == "youtube" and selected_key is not None) else {}
+        previous = point
     hourly = defaultdict(list)
     for attempt in attempts:
         hourly[attempt.observed_at.replace(minute=0, second=0, microsecond=0)].append(attempt)
@@ -300,6 +306,7 @@ def load_trend_history(
                        and (not ordered or latest_attempt.observed_at >= ordered[-1][0]))
     return {
         "platform": platform, "region": region, "ranking_scope": scope,
+        "selected_key": selected_key,
         "requested_from": utc_isoformat(start), "requested_to": utc_isoformat(end),
         "sampling": "first_and_last_observation_per_hour",
         "retention_days": RETENTION_DAYS,

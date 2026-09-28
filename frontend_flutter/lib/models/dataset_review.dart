@@ -225,6 +225,7 @@ class DatasetReviewCandidate {
     this.reviewedAt,
     this.reviewNotes,
     this.datasetId,
+    this.candidateSha256 = '',
   });
 
   final int collectionRunId;
@@ -258,6 +259,7 @@ class DatasetReviewCandidate {
   final DateTime? reviewedAt;
   final String? reviewNotes;
   final int? datasetId;
+  final String candidateSha256;
 
   bool get allAutomatedChecksPass =>
       automatedChecks.isNotEmpty &&
@@ -311,6 +313,7 @@ class DatasetReviewCandidate {
       reviewedAt: DateTime.tryParse(json['reviewed_at']?.toString() ?? ''),
       reviewNotes: json['review_notes']?.toString(),
       datasetId: (json['dataset_id'] as num?)?.toInt(),
+      candidateSha256: json['candidate_sha256']?.toString() ?? '',
     );
   }
 }

@@ -491,7 +491,10 @@ void main() {
 class _FakeDashboardRepository extends DashboardRepository {
   @override
   Future<TrendHistory> getTrendHistory(
-          {required String platform, int days = 5, String? categoryId}) async =>
+          {required String platform,
+          int days = 5,
+          String? categoryId,
+          String? itemKey}) async =>
       TrendHistory.fromJson({});
 
   _FakeDashboardRepository({Map<String, dynamic>? snapshotJson})

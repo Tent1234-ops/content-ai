@@ -5,6 +5,7 @@ import '../models/model_training.dart';
 import '../repositories/admin_repository.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/state_widgets.dart';
+import '../widgets/training_collection_panel.dart';
 
 class AdminTrainingScreen extends StatefulWidget {
   const AdminTrainingScreen({super.key, this.repository});
@@ -249,6 +250,7 @@ class _AdminTrainingScreenState extends State<AdminTrainingScreen>
     final leaves = trainingRows(data.dataset['by_leaf']);
     final phase = trainingMap(data.dataset['phase22']);
     final out = trainingMap(phase['out_of_scope']);
+    final plan = trainingMap(data.dataset['collection_plan']);
     final ready = data.dataset['ready'] == true;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Wrap(
@@ -313,10 +315,14 @@ class _AdminTrainingScreenState extends State<AdminTrainingScreen>
       Text(
           'Unknown threshold สำหรับรอบใหม่: ${trainingPercent(data.policy['unknown_threshold'])} · Cross-validation ตามช่องสูงสุด ${data.policy['grouped_cv_folds']} รอบ'),
       const SizedBox(height: 8),
-      ...trainingRows(phase['by_leaf']).map((r) => Text(
-          '${_category(r['leaf_key'])}: ${r['sample_count']}/${r['minimum_sample_count']} รายการ · ${r['unique_channels']}/${r['minimum_unique_channels']} ช่อง')),
-      Text(
-          'ตัวอย่างนอกขอบเขตสำหรับทดสอบ: ${out['sample_count'] ?? 0}/${out['minimum_sample_count'] ?? 30} รายการ'),
+      if (plan.isNotEmpty)
+        TrainingCollectionPanel(plan: plan, repository: _repository)
+      else ...[
+        ...trainingRows(phase['by_leaf']).map((r) => Text(
+            '${_category(r['leaf_key'])}: ${r['sample_count']}/${r['minimum_sample_count']} รายการ · ${r['unique_channels']}/${r['minimum_unique_channels']} ช่อง')),
+        Text(
+            'ตัวอย่างนอกขอบเขตสำหรับทดสอบ: ${out['sample_count'] ?? 0}/${out['minimum_sample_count'] ?? 30} รายการ'),
+      ],
       if (phase['ready'] != true)
         const Padding(
             padding: EdgeInsets.only(top: 8),

@@ -36,6 +36,12 @@ class ClassificationResponse(BaseModel):
     is_unknown: bool = False
     taxonomy_ready: bool = False
     warning: Optional[str] = None
+    raw_taxonomy_leaf_key: Optional[str] = None
+    model_id: Optional[int] = None
+    model_key: Optional[str] = None
+    model_version: Optional[str] = None
+    unknown_threshold: Optional[float] = None
+    acceptance: dict[str, object] = Field(default_factory=dict)
 
 
 class TaxonomyNodeItem(BaseModel):
