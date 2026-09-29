@@ -8,6 +8,7 @@ import '../widgets/app_shell.dart';
 import '../widgets/analysis_settings_audit.dart';
 import '../widgets/current_trend_ideas_panel.dart';
 import '../widgets/recommendation_evidence_panel.dart';
+import '../widgets/actionable_advice_panel.dart';
 import '../widgets/state_widgets.dart';
 
 class ResultScreenArgs {
@@ -134,6 +135,17 @@ class AnalysisReport extends StatelessWidget {
     final classification = recommendation.classification;
     final withheld = classification?.isUnknown == true;
     final bundle = recommendation.evidenceBundle;
+    final actions = recommendation.actionableRecommendations;
+    final topicEvidence = actions == null
+        ? bundle
+        : <String, dynamic>{
+            ...bundle,
+            'topics': bundle['action_topics'] ?? const [],
+            'recommendations': const [],
+            'canonicalization': 'curated_synonyms',
+            'method_version': actions.methodVersion,
+            'synonym_version': actions.catalogHash,
+          };
     final input = bundle['input'] as Map? ?? const {};
     final inputUnassessable =
         input.isNotEmpty && input['availability'] != 'available';
@@ -220,26 +232,33 @@ class AnalysisReport extends StatelessWidget {
               padding: EdgeInsets.only(bottom: 12),
               child: Text(
                   'งดคำแนะนำเฉพาะหมวด เพราะผลจำแนกยังไม่ผ่านเกณฑ์ตรวจรับ')),
-        _Suggestions(
-            title: 'ประเด็นจากคลิปอ้างอิง',
-            words: recommendation.missingKeywords,
-            empty: inputUnassessable
-                ? 'ยังตรวจว่าขาดหัวข้อใดไม่ได้จากข้อความที่มี'
-                : withheld
-                    ? 'ยังไม่เลือกคลิปอ้างอิง เพราะยังยืนยันหมวดหมู่ไม่ได้'
-                    : hasReference
-                        ? 'ยังไม่พบหัวข้อเพิ่มเติมที่มีหลักฐานสนับสนุนเพียงพอจากคลิปอ้างอิง'
-                        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับสร้างคำแนะนำ'),
-        _Suggestions(
-            title: 'คำแนะนำสำหรับช่วงเปิดคลิป',
-            words: recommendation.hookKeywords,
-            empty: inputUnassessable
-                ? 'ยังสร้างคำแนะนำช่วงเปิดไม่ได้จากข้อความที่มี'
-                : withheld
-                    ? 'ยังไม่สร้างคำแนะนำช่วงเปิดคลิปจนกว่าจะยืนยันหมวดหมู่ได้'
-                    : hasReference
-                        ? 'ยังไม่พบคำแนะนำเพิ่มเติมสำหรับช่วงเปิดคลิปจากข้อมูลอ้างอิง'
-                        : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับแนะนำช่วงเปิดคลิป'),
+        if (actions != null)
+          ActionableAdvicePanel(
+              data: actions,
+              bundle: bundle,
+              withheld: withheld || inputUnassessable)
+        else ...[
+          _Suggestions(
+              title: 'ประเด็นจากคลิปอ้างอิง',
+              words: recommendation.missingKeywords,
+              empty: inputUnassessable
+                  ? 'ยังตรวจว่าขาดหัวข้อใดไม่ได้จากข้อความที่มี'
+                  : withheld
+                      ? 'ยังไม่เลือกคลิปอ้างอิง เพราะยังยืนยันหมวดหมู่ไม่ได้'
+                      : hasReference
+                          ? 'ยังไม่พบหัวข้อเพิ่มเติมที่มีหลักฐานสนับสนุนเพียงพอจากคลิปอ้างอิง'
+                          : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับสร้างคำแนะนำ'),
+          _Suggestions(
+              title: 'คำแนะนำสำหรับช่วงเปิดคลิป',
+              words: recommendation.hookKeywords,
+              empty: inputUnassessable
+                  ? 'ยังสร้างคำแนะนำช่วงเปิดไม่ได้จากข้อความที่มี'
+                  : withheld
+                      ? 'ยังไม่สร้างคำแนะนำช่วงเปิดคลิปจนกว่าจะยืนยันหมวดหมู่ได้'
+                      : hasReference
+                          ? 'ยังไม่พบคำแนะนำเพิ่มเติมสำหรับช่วงเปิดคลิปจากข้อมูลอ้างอิง'
+                          : 'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับแนะนำช่วงเปิดคลิป'),
+        ],
         const Divider(),
         Text('ความยาวคลิปที่แนะนำ',
             style: Theme.of(context).textTheme.titleMedium),
@@ -274,7 +293,7 @@ class AnalysisReport extends StatelessWidget {
                   padding: const EdgeInsets.only(top: 8),
                   child: Text(evidence.warning!)),
             if (bundle.isNotEmpty)
-              RecommendationEvidencePanel(bundle: bundle)
+              RecommendationEvidencePanel(bundle: topicEvidence)
             else
               for (final keyword in supported.values)
                 _KeywordEvidence(item: keyword),

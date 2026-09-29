@@ -19,8 +19,10 @@ String _date(dynamic value) {
 }
 
 class RecommendationEvidencePanel extends StatelessWidget {
-  const RecommendationEvidencePanel({super.key, required this.bundle});
+  const RecommendationEvidencePanel(
+      {super.key, required this.bundle, this.expandTopics = false});
   final Map<String, dynamic> bundle;
+  final bool expandTopics;
 
   @override
   Widget build(BuildContext context) {
@@ -40,8 +42,11 @@ class RecommendationEvidencePanel extends StatelessWidget {
       for (final topic in topics)
         ExpansionTile(
           key: ValueKey('evidence-${topic['canonical_topic']}'),
+          initiallyExpanded: expandTopics,
           tilePadding: EdgeInsets.zero,
-          title: Text(topic['canonical_topic']?.toString() ?? ''),
+          title: Text(
+              (topic['title_th'] ?? topic['canonical_topic'])?.toString() ??
+                  ''),
           subtitle: Text('${_status(_map(topic['user'])['status'])} · '
               'หลักฐาน ${topic['support_count'] ?? 0} คลิป / ${topic['channel_count'] ?? 0} ช่อง'),
           children: [
@@ -53,9 +58,9 @@ class RecommendationEvidencePanel extends StatelessWidget {
                     Text(
                         'คำที่ใช้ตรวจ: ${(topic['synonyms'] as List? ?? []).join(', ')}'),
                     const SizedBox(height: 8),
-                    _Observation(
+                    TranscriptObservation(
                         title: 'ทั้งคลิป', observation: _map(topic['user'])),
-                    _Observation(
+                    TranscriptObservation(
                         title: 'ช่วงเปิดคลิป',
                         observation: _map(topic['user_hook'])),
                     if (recommendations.any((row) =>
@@ -92,8 +97,9 @@ class RecommendationEvidencePanel extends StatelessWidget {
   }
 }
 
-class _Observation extends StatelessWidget {
-  const _Observation({required this.title, required this.observation});
+class TranscriptObservation extends StatelessWidget {
+  const TranscriptObservation(
+      {super.key, required this.title, required this.observation});
   final String title;
   final Map<String, dynamic> observation;
   @override

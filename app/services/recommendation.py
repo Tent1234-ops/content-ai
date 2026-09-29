@@ -16,6 +16,7 @@ from app.services.dataset_contract import RECOMMENDATION_DURATION_MAX_SECONDS
 from app.services.dataset_eligibility import production_transcript_query, reference_transcript_rows
 from app.core.datetime_utils import utc_isoformat
 from app.services.recommendation_evidence import attach_evidence, freeze_reference, locate_terms, user_context
+from app.services.actionable_recommendations import build_actionable_recommendations
 from app.services.nlp import (
     extract_comparable_keyword_candidates,
     extract_keyword_candidates,
@@ -1196,6 +1197,12 @@ def build_recommendation_from_text(
     return recommendation
 
 
+def _finish_recommendation(result: dict, context: dict, *, keyword_domain: str) -> dict:
+    attach_evidence(result, context, keyword_domain=keyword_domain)
+    result["actionable_recommendations"] = build_actionable_recommendations(result)
+    return result
+
+
 def build_recommendation_from_analysis_data(
     db: Session,
     *,
@@ -1213,7 +1220,7 @@ def build_recommendation_from_analysis_data(
     if domain == "unknown":
         profile = _find_profile([], domain)
         profile["top_dimensions"] = []
-        return attach_evidence({
+        return _finish_recommendation({
             "domain": domain, "status": "withheld_unknown", "user_keywords": list(user_keywords),
             "missing_keywords": [], "hook_keywords": [], "missing_dimensions": [],
             "current_trend_ideas": {"status": "unsupported_category", "ideas": []},
@@ -1301,7 +1308,7 @@ def build_recommendation_from_analysis_data(
 
     from app.services.current_trend_ideas import build_current_trend_ideas
     current_ideas = build_current_trend_ideas(db, transcript=transcript, domain=domain)
-    return attach_evidence({
+    return _finish_recommendation({
         "domain": domain,
         "user_keywords": deduped_user_keywords[:12],
         "current_trend_ideas": current_ideas,

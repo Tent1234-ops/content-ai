@@ -120,6 +120,7 @@ class RecommendationAnalysisResponse(BaseModel):
     evidence: dict[str, object] = Field(default_factory=dict)
     current_trend_ideas: dict[str, object] = Field(default_factory=dict)
     evidence_bundle: dict[str, object] = Field(default_factory=dict)
+    actionable_recommendations: dict[str, object] = Field(default_factory=dict)
 
 
 class ProfileComparisonItem(BaseModel):

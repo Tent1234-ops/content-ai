@@ -1,5 +1,6 @@
 import 'common_models.dart';
 import 'current_trend_ideas.dart';
+import 'actionable_recommendations.dart';
 
 class DurationRecommendation {
   const DurationRecommendation({
@@ -196,6 +197,7 @@ class RecommendationResult {
     this.classification,
     this.currentTrendIdeas = const CurrentTrendIdeas(),
     this.evidenceBundle = const {},
+    this.actionableRecommendations,
   });
 
   final String domain;
@@ -212,6 +214,7 @@ class RecommendationResult {
   final ClassificationResult? classification;
   final CurrentTrendIdeas currentTrendIdeas;
   final Map<String, dynamic> evidenceBundle;
+  final ActionableRecommendations? actionableRecommendations;
 
   factory RecommendationResult.fromJson(Map<String, dynamic> json) {
     return RecommendationResult(
@@ -257,6 +260,11 @@ class RecommendationResult {
           (json['current_trend_ideas'] as Map?) ?? const {})),
       evidenceBundle: Map<String, dynamic>.from(
           (json['evidence_bundle'] as Map?) ?? const {}),
+      actionableRecommendations: json['actionable_recommendations'] is Map &&
+              (json['actionable_recommendations'] as Map).isNotEmpty
+          ? ActionableRecommendations.fromJson(Map<String, dynamic>.from(
+              json['actionable_recommendations'] as Map))
+          : null,
       classification: json['classification'] is Map
           ? ClassificationResult.fromJson(
               Map<String, dynamic>.from(json['classification'] as Map),
