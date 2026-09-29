@@ -16,6 +16,7 @@ from app.services.recommendation import (
     _high_performing_rows, _single_view_metric_cohort, _duration_evidence_rows,
 )
 from app.services.taxonomy import ACTIVE_LEAF_KEYS, TAXONOMY_VERSION, ready_leaf_keys
+from app.services.topic_comparisons import topic_comparison_readiness
 from app.services.trend_history import _samples_for_run
 from app.services.youtube_cc_dataset import extract_youtube_video_id, YouTubeCCDatasetError
 
@@ -129,6 +130,9 @@ def dataset_readiness(db: Session, *, category: str | None = None, role: str = "
         missing = Counter(c["key"] for r in rows if r.taxonomy_leaf_key == leaf
                           for c in _checks(r, now) if not c["ok"])
         general = len(cohort) - len(high)
+        comparison_audit = topic_comparison_readiness(
+            db, candidates, domain=leaf, as_of=now
+        )
         actions = []
         if len(classified) < 80:
             actions.append(f"เพิ่มคลิปที่ตรวจแล้วอีก {80 - len(classified)} คลิป ให้ถึงเป้าหมายเริ่มต้น 80 คลิป")
@@ -144,6 +148,9 @@ def dataset_readiness(db: Session, *, category: str | None = None, role: str = "
             actions.append(f"เพิ่มคลิปอ้างอิงกลุ่มคะแนนบนอย่างน้อย {10 - len(high)} คลิป พร้อมสถิติและวันที่เก็บ")
         if general < 10:
             actions.append(f"เพิ่มคลิปเปรียบเทียบทั่วไปอย่างน้อย {10 - general} คลิป จากหมวด/ช่วงเวลา/รูปแบบใกล้กัน")
+        if not any(topic["views_status"] in {"comparison_descriptive", "comparison_uncertain", "comparison_supported"}
+                   for topic in comparison_audit["topics"]):
+            actions.append("ยังไม่มีหัวข้อที่มีกลุ่มตรวจพบ/ยังไม่ตรวจพบอย่างน้อยฝั่งละ 10 คลิปจาก 5 ช่องคู่เทียบ")
         if durations < 10:
             actions.append(f"ยังขาดหลักฐานความยาว {10 - durations} คลิป สำหรับคำแนะนำคลิปไม่เกิน 5 นาที")
         if missing:
@@ -154,7 +161,8 @@ def dataset_readiness(db: Session, *, category: str | None = None, role: str = "
                       "reference_count": len(candidates), "selected_reference_count": len(high) if leaf in ready else 0,
                       "upper_pool_count": len(high), "comparison_pool_count": general,
                       "duration_count": durations, "view_metric_version": metric,
-                      "missing_fields": dict(missing), "actions": actions})
+                      "missing_fields": dict(missing), "topic_comparison": comparison_audit,
+                      "actions": actions})
     items = []
     # Include archived evaluation channels too: deleting a row must not release its holdout.
     held_channels = {v for (v,) in db.query(DatasetContent.source_channel_id).filter(
@@ -215,6 +223,7 @@ def dataset_readiness(db: Session, *, category: str | None = None, role: str = "
             "policy": {"reference_splits": ["train"], "excluded_splits": ["validation", "test"],
                        "target_per_category": [80, 100], "target_channels": 10,
                        "target_upper_pool": 10, "target_comparison_pool": 10,
+                       "topic_comparison_policy": "topic-comparison-policy-v1",
                        "evaluation_minimum_per_category": 5,
                        "performance_rule": "existing_top_40_percent_min_10_in_same_category_and_view_metric",
                        "causal_claim": False}}

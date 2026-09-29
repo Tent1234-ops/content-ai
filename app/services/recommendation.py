@@ -4,6 +4,7 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
+from datetime import datetime
 from statistics import median
 from typing import Any, Dict, Iterable, List
 
@@ -15,8 +16,9 @@ from app.services.classification import classify_text_domain
 from app.services.dataset_contract import RECOMMENDATION_DURATION_MAX_SECONDS
 from app.services.dataset_eligibility import production_transcript_query, reference_transcript_rows
 from app.core.datetime_utils import utc_isoformat
-from app.services.recommendation_evidence import attach_evidence, freeze_reference, locate_terms, user_context
+from app.services.recommendation_evidence import attach_evidence, fingerprint, freeze_reference, locate_terms, user_context
 from app.services.actionable_recommendations import build_actionable_recommendations
+from app.services.topic_comparisons import build_topic_comparisons
 from app.services.nlp import (
     extract_comparable_keyword_candidates,
     extract_keyword_candidates,
@@ -999,6 +1001,7 @@ def build_dataset_profile_for_domain(
     domain: str,
     source_prefix: str = "youtube",
     limit: int = 150,
+    now: datetime | None = None,
 ) -> Dict[str, object]:
     """Build recommendation evidence from the exact canonical category rows used."""
     canonical_domain = normalize_taxonomy_leaf(domain)
@@ -1006,7 +1009,7 @@ def build_dataset_profile_for_domain(
     admin_config = get_admin_config(db)
     eligible_rows: List[DatasetContent] = []
     if canonical_domain in ready_leaf_keys(db):
-        eligible_rows = [row for row in reference_transcript_rows(db, domain=canonical_domain)
+        eligible_rows = [row for row in reference_transcript_rows(db, domain=canonical_domain, now=now)
                          if row.source_platform.startswith(source_prefix)]
     # A video imported in multiple versions remains one supporting clip.
     eligible_rows = list({row.source_youtube_id or f"row:{row.dataset_id}": row for row in eligible_rows}.values())
@@ -1048,6 +1051,9 @@ def build_dataset_profile_for_domain(
     evidence_rows = list({row.dataset_id: row for row in [*rows, *duration_rows]}.values())
     return {
         "domain": canonical_domain,
+        # Removed before serialization and used only by the Phase 5 comparison service.
+        # This is the complete reference cohort before the performance filter.
+        "_comparison_reference_rows": eligible_rows,
         "_reference_documents": [freeze_reference(row) for row in evidence_rows],
         "sample_size": sample_size,
         "eligible_pool_size": len(eligible_rows),
@@ -1197,9 +1203,20 @@ def build_recommendation_from_text(
     return recommendation
 
 
-def _finish_recommendation(result: dict, context: dict, *, keyword_domain: str) -> dict:
+def _finish_recommendation(db: Session, result: dict, context: dict, *, keyword_domain: str,
+                           as_of: datetime) -> dict:
+    comparison_rows = result["dataset_profile"].pop("_comparison_reference_rows", [])
     attach_evidence(result, context, keyword_domain=keyword_domain)
     result["actionable_recommendations"] = build_actionable_recommendations(result)
+    comparisons = build_topic_comparisons(db, result, comparison_rows, as_of=as_of)
+    result["evidence_bundle"]["topic_comparisons"] = comparisons
+    result["evidence_bundle"]["data_fingerprint"] = fingerprint({
+        "phase2_data_fingerprint": result["evidence_bundle"]["data_fingerprint"],
+        "topic_comparisons": comparisons,
+    })
+    result["actionable_recommendations"]["evidence_data_fingerprint"] = (
+        result["evidence_bundle"]["data_fingerprint"]
+    )
     return result
 
 
@@ -1215,24 +1232,26 @@ def build_recommendation_from_analysis_data(
     profile_limit: int = 150,
     evidence_context: dict | None = None,
 ) -> Dict[str, object]:
+    as_of = datetime.utcnow()
     domain = normalize_taxonomy_leaf(domain)
     context = evidence_context or user_context(transcript=transcript)
     if domain == "unknown":
         profile = _find_profile([], domain)
         profile["top_dimensions"] = []
-        return _finish_recommendation({
+        return _finish_recommendation(db, {
             "domain": domain, "status": "withheld_unknown", "user_keywords": list(user_keywords),
             "missing_keywords": [], "hook_keywords": [], "missing_dimensions": [],
             "current_trend_ideas": {"status": "unsupported_category", "ideas": []},
             "recommended_duration": profile["recommended_duration"], "dataset_profile": profile,
             "evidence": _build_evidence(profile, source_prefix=source_prefix),
-        }, context, keyword_domain="unknown")
+        }, context, keyword_domain="unknown", as_of=as_of)
     keyword_domain = _keyword_domain(domain)
     profile = build_dataset_profile_for_domain(
         db,
         domain=domain,
         source_prefix=source_prefix,
         limit=profile_limit,
+        now=as_of,
     )
 
     normalized_user_keywords = {
@@ -1308,7 +1327,7 @@ def build_recommendation_from_analysis_data(
 
     from app.services.current_trend_ideas import build_current_trend_ideas
     current_ideas = build_current_trend_ideas(db, transcript=transcript, domain=domain)
-    return _finish_recommendation({
+    return _finish_recommendation(db, {
         "domain": domain,
         "user_keywords": deduped_user_keywords[:12],
         "current_trend_ideas": current_ideas,
@@ -1318,7 +1337,7 @@ def build_recommendation_from_analysis_data(
         "recommended_duration": profile["recommended_duration"],
         "dataset_profile": profile,
         "evidence": _build_evidence(profile, source_prefix=source_prefix),
-    }, context, keyword_domain=keyword_domain)
+    }, context, keyword_domain=keyword_domain, as_of=as_of)
 
 
 def build_recommendation_from_saved_content(
@@ -1339,22 +1358,8 @@ def build_recommendation_from_saved_content(
         return None
     saved = db.query(AnalysisResult).filter(AnalysisResult.content_id == content_id).order_by(
         AnalysisResult.created_at.desc(), AnalysisResult.result_id.desc()).first()
-    if saved:
-        try:
-            stored = json.loads(saved.summary or "{}").get("recommendation", {})
-        except (ValueError, TypeError):
-            stored = {}
-        if isinstance(stored, dict) and stored:
-            return stored
-    rebuilt = build_recommendation_from_text(
-        db,
-        title=content.title,
-        text=content.transcript or "",
-        source_prefix=source_prefix,
-        profile_limit=profile_limit,
-    )
-    rebuilt["evidence_bundle"]["origin"] = "recomputed_legacy_not_original"
-    return rebuilt
+    from app.services.saved_recommendations import stored_recommendation
+    return stored_recommendation(content, saved)
 
 
 def compare_dataset_profiles(

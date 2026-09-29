@@ -4,6 +4,7 @@ sqlalchemy
 pymysql
 cryptography
 numpy
+scipy
 pythainlp
 hdbscan
 python-multipart

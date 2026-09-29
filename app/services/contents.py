@@ -4,11 +4,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.database.models import AnalysisResult, Recommendation, UserContent
-from app.services.recommendation import build_recommendation_from_text
+from app.services.saved_recommendations import stored_recommendation
+from app.services.recommendation_evidence import fingerprint
 
 
 def _latest_analysis(content: UserContent) -> AnalysisResult | None:
-    rows = sorted(content.analysis_results, key=lambda item: item.created_at, reverse=True)
+    rows = sorted(content.analysis_results, key=lambda item: (item.created_at, item.result_id), reverse=True)
     return rows[0] if rows else None
 
 
@@ -85,22 +86,11 @@ def get_user_content_detail(db: Session, *, user_id: int, content_id: int) -> di
 
     analysis_row = _latest_analysis(content)
     analysis_summary = _parse_json_text(analysis_row.summary if analysis_row else None)
-    recommendation_payload = analysis_summary.get("recommendation", {})
-    if not recommendation_payload:
-        # Legacy rows only stored one duration integer, without the evidence cohort
-        # needed to justify it. Rebuild from the current verified dataset instead of
-        # manufacturing a precise-looking +/- 20 second range.
-        recommendation_payload = build_recommendation_from_text(
-            db,
-            title=content.title,
-            text=content.cleaned_transcript or content.transcript or "",
-            source_prefix="youtube",
-            profile_limit=150,
-        )
-        if recommendation_payload.get("evidence_bundle"):
-            recommendation_payload["evidence_bundle"]["origin"] = "recomputed_legacy_not_original"
+    recommendation_payload = stored_recommendation(content, analysis_row)
     return {
         "content_id": content.content_id,
+        "analysis_id": analysis_row.result_id if analysis_row else None,
+        "recommendation_fingerprint": fingerprint(recommendation_payload),
         "title": content.title,
         "created_at": content.created_at,
         "video_url": content.video_url,

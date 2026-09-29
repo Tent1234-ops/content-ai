@@ -21,6 +21,10 @@ void main() {
     await tester.tap(find.text('มือถือ').first);
     await tester.pumpAndSettle();
     expect(find.text('เพิ่ม Test อีก 2 คลิปจากช่องที่กันไว้'), findsOneWidget);
+    expect(find.textContaining('ความพร้อมเปรียบเทียบหัวข้อ: 30 คลิป'),
+        findsOneWidget);
+    expect(find.textContaining('ความเร็วในการชาร์จ: พบ 20 / ยังไม่พบ 10 คลิป'),
+        findsOneWidget);
     await tester.ensureVisible(find.text('#42 คลิปมือถือ'));
     await tester.tap(find.text('#42 คลิปมือถือ'));
     await tester.pumpAndSettle();
@@ -83,6 +87,24 @@ class _Readiness extends AdminRepository {
           'comparison_pool_count': 21,
           'duration_count': 7,
           'largest_channel_share': 0.2,
+          'topic_comparison': {
+            'eligible_video_count': 30,
+            'channels': 10,
+            'representativeness_limitation':
+                'คลิปอ้างอิงเป็นข้อมูลที่คัดเก็บ ไม่ใช่ตัวแทน YouTube ทั้งหมด',
+            'metadata_or_statistics_gaps': {
+              'no_recent_successful_observation': 2
+            },
+            'topics': [
+              {
+                'title': 'ความเร็วในการชาร์จ',
+                'detected_count': 20,
+                'not_detected_count': 10,
+                'paired_channel_count': 10,
+                'views_status': 'comparison_supported'
+              }
+            ]
+          },
           'actions': ['เพิ่ม Test อีก 2 คลิปจากช่องที่กันไว้']
         }
       ],

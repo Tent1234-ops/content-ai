@@ -70,24 +70,12 @@ class Phase21RecommendedDurationTests(unittest.TestCase):
 
         self.assertEqual([item.dataset_id for item in selected], [2, 4])
 
-    @patch("app.services.contents.build_recommendation_from_text")
-    def test_legacy_history_rebuilds_evidence_instead_of_inventing_range(
+    @patch("app.services.recommendation.build_recommendation_from_text")
+    def test_legacy_history_does_not_rebuild_or_invent_range(
         self,
         build_recommendation,
     ):
-        rebuilt = {
-            "domain": "phone",
-            "recommended_duration": {
-                "recommended_seconds": None,
-                "recommended_range": "Insufficient evidence",
-                "sample_size": 1,
-                "source": "youtube_metadata",
-                "evidence_status": "insufficient_evidence",
-                "minimum_sample_size": 10,
-                "target_sample_size": 15,
-            },
-        }
-        build_recommendation.return_value = rebuilt
+        build_recommendation.side_effect = AssertionError('Never recalculate history')
         content = SimpleNamespace(
             content_id=7,
             user_id=3,
@@ -98,18 +86,19 @@ class Phase21RecommendedDurationTests(unittest.TestCase):
             raw_transcript="phone transcript",
             cleaned_transcript="phone transcript",
             analysis_results=[],
+            recommendations=[],
         )
         db = MagicMock()
         db.query.return_value.filter.return_value.first.return_value = content
 
         result = get_user_content_detail(db, user_id=3, content_id=7)
 
-        self.assertEqual(result["recommendation"], rebuilt)
+        self.assertEqual(result['recommendation']['evidence_bundle']['origin'], 'historical_legacy_no_snapshot')
         self.assertEqual(
             result["recommendation"]["recommended_duration"]["recommended_range"],
             "Insufficient evidence",
         )
-        build_recommendation.assert_called_once()
+        build_recommendation.assert_not_called()
 
 
 if __name__ == "__main__":

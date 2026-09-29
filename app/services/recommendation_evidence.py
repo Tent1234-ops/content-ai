@@ -44,7 +44,9 @@ def valid_segments(segments) -> list[dict]:
     return result
 
 
-@lru_cache(maxsize=64)
+# Phase 5 compares every topic across a full category cohort. The previous cache
+# size (64) thrashed as soon as a category had 65 reference clips.
+@lru_cache(maxsize=512)
 def _thai_spans(text: str):
     thai_spans = set()
     if word_tokenize is not None and re.search(r"[\u0e00-\u0e7f]", text):

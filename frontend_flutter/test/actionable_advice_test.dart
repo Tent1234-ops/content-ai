@@ -82,6 +82,49 @@ Map<String, dynamic> _bundle() => {
           'statistics_captured_at': '2026-09-01T00:00:00Z'
         }
       ],
+      'topic_comparisons': {
+        'as_of': '2026-09-29T12:00:00Z',
+        'items': [
+          {
+            'evidence_topic_id': 'charge',
+            'cohort': {
+              'detected_count': 12,
+              'not_detected_count': 10,
+              'support_cohort_video_count': 8,
+              'comparison_pool_video_count': 14,
+            },
+            'metrics': {
+              'views': {
+                'status': 'comparison_supported',
+                'detected': {
+                  'count': 12,
+                  'median': 2000,
+                  'p25': 1500,
+                  'p75': 2500
+                },
+                'not_detected': {
+                  'count': 10,
+                  'median': 1000,
+                  'p25': 800,
+                  'p75': 1200
+                },
+                'paired_channel_count': 10,
+                'within_channel_median_difference': 700,
+                'uncertainty': {'status': 'available', 'low': 200, 'high': 900},
+              },
+              'comments_per_1000_views': {
+                'status': 'comparison_supported',
+                'detected': {'count': 12, 'median': 3, 'p25': 2, 'p75': 4},
+                'not_detected': {'count': 10, 'median': 5, 'p25': 4, 'p75': 6},
+                'paired_channel_count': 10,
+                'within_channel_median_difference': -2,
+                'uncertainty': {'status': 'available', 'low': -3, 'high': -1},
+              }
+            },
+            'limitation': 'เป็นความสัมพันธ์ในคลิปอ้างอิง ไม่ใช่เหตุและผล'
+          }
+        ]
+      },
     };
 
 void main() {
@@ -121,6 +164,16 @@ void main() {
       expect(find.textContaining('จับเวลาการชาร์จด้วยอุปกรณ์ที่รองรับ'),
           findsOneWidget);
       expect(find.textContaining('ไม่มี Timestamp จากต้นทาง'), findsWidgets);
+      await tester
+          .ensureVisible(find.text('เปรียบเทียบผลตอบรับของคลิปอ้างอิง'));
+      await tester.tap(find.text('เปรียบเทียบผลตอบรับของคลิปอ้างอิง'));
+      await tester.pumpAndSettle();
+      expect(find.text('ยอดวิวสะสม ณ เวลาเก็บข้อมูล'), findsOneWidget);
+      expect(find.text('ความคิดเห็นต่อ 1,000 วิว'), findsOneWidget);
+      await tester.tap(find.text('ความคิดเห็นต่อ 1,000 วิว'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('ผลต่างค่ากลางภายในช่อง -2'), findsOneWidget);
+      expect(find.textContaining('ไม่ใช่ผลเชิงสาเหตุ'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.tap(find.text('ปิด'));
       await tester.pumpAndSettle();
@@ -156,6 +209,9 @@ void main() {
             body: SingleChildScrollView(child: AnalysisReport(data: result)))));
     expect(find.text('OLD RAW SUGGESTION'), findsNothing);
     expect(find.text('OLD HOOK'), findsNothing);
+    await tester.ensureVisible(find.text('เปิดดูหลักฐานและเวอร์ชัน'));
+    await tester.tap(find.text('เปิดดูหลักฐานและเวอร์ชัน'));
+    await tester.pumpAndSettle();
     expect(find.text('OLD TOPIC EVIDENCE'), findsNothing);
     expect(find.text('ความเร็วในการชาร์จ'), findsOneWidget);
     expect(find.textContaining('จึงไม่มีข้อเสนอให้เพิ่มซ้ำ'), findsOneWidget);

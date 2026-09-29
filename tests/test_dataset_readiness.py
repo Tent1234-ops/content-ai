@@ -93,6 +93,9 @@ class DatasetReadinessTests(unittest.TestCase):
         plan = next(p for p in report['plans'] if p['category'] == 'phone')
         self.assertEqual(plan['classification_count'], 30)
         self.assertEqual(plan['channels'], 8)
+        self.assertEqual(plan['topic_comparison']['eligible_video_count'], 26)
+        self.assertTrue(plan['topic_comparison']['topics'])
+        self.assertEqual(plan['topic_comparison']['policy_version'], 'topic-comparison-policy-v1')
         self.assertTrue(plan['actions'])
         self.assertEqual(report['summary']['current_trend'], 0)
         self.assertEqual(report['policy']['reference_splits'], ['train'])
@@ -141,7 +144,8 @@ class DatasetReadinessTests(unittest.TestCase):
 
     def test_serialized_recommendation_preserves_dates_and_row_provenance(self):
         result = build_recommendation_from_analysis_data(self.db, domain='phone',
-            user_keywords=[], dimension_status=[], hook_terms=[], source_prefix='youtube')
+            user_keywords=[], dimension_status=[], hook_terms=[], source_prefix='youtube',
+            transcript='รีวิวมือถือและการใช้งานทั่วไป')
         result = RecommendationAnalysisResponse.model_validate(result).model_dump()
         self.assertTrue(result['evidence']['reference_records'])
         example = result['missing_keywords'][0]['supporting_examples'][0]

@@ -187,16 +187,21 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('1. พบอะไรในคลิป'), findsOneWidget);
+    expect(find.text('2. ควรเพิ่มอะไร'), findsOneWidget);
+    expect(find.text('3. เพราะอะไรจึงแนะนำ'), findsOneWidget);
+    await tester.tap(find.text('คำสำคัญและข้อความถอดเสียง'));
+    await tester.pumpAndSettle();
     for (final heading in <String>[
       'คำสำคัญที่พบทั้งคลิป',
       'หัวข้อหลักที่ใช้เปรียบเทียบ',
       'คำสำคัญที่พบในช่วงเปิดคลิป',
-      'ประเด็นจากคลิปอ้างอิง',
-      'ความยาวคลิปที่แนะนำ',
-      'คำแนะนำสำหรับช่วงเปิดคลิป',
+      'คำแนะนำที่บันทึกไว้เดิม',
+      'คำแนะนำช่วงเปิดที่บันทึกไว้เดิม',
     ]) {
       expect(find.text(heading), findsOneWidget);
     }
+    expect(find.text('ความยาวคลิปที่แนะนำ'), findsOneWidget);
     expect(
       find.text('ยังไม่พบคำสำคัญจากเนื้อหาในคลิปนี้'),
       findsOneWidget,
@@ -210,13 +215,11 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.text('ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับสร้างคำแนะนำ'),
+      find.text('ไม่มีคำแนะนำคำสำคัญบันทึกไว้'),
       findsOneWidget,
     );
     expect(
-      find.text(
-        'ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอสำหรับแนะนำช่วงเปิดคลิป',
-      ),
+      find.text('ไม่มีคำแนะนำช่วงเปิดบันทึกไว้'),
       findsOneWidget,
     );
     expect(
@@ -254,6 +257,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('คำสำคัญและข้อความถอดเสียง'));
+    await tester.pumpAndSettle();
     expect(find.text('แบตเตอรี่'), findsOneWidget);
     expect(find.text('battery life'), findsAtLeastNWidgets(1));
     expect(find.text('ชิป'), findsOneWidget);
@@ -413,6 +418,7 @@ class _FakeAdminRepository extends AdminRepository {
   Future<DatasetReviewDecisionResult> reviewDatasetCandidate({
     required DatasetReviewCandidate candidate,
     required String decision,
+    bool requirePending = true,
     String? reviewedLeafKey,
     String? transcriptQuality,
     String notes = '',

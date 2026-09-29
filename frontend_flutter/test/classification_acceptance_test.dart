@@ -34,8 +34,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('งดคำแนะนำเฉพาะหมวด'), findsOneWidget);
     expect(find.textContaining('ยังไม่มั่นใจพอ'), findsNothing);
-    expect(find.text('ยังไม่เลือกคลิปอ้างอิง เพราะยังยืนยันหมวดหมู่ไม่ได้'),
-        findsOneWidget);
+    expect(find.text('ยังไม่ยืนยันหมวดหมู่สำหรับสร้างคำแนะนำ'), findsOneWidget);
     expect(find.textContaining('ยังไม่มีข้อมูลคลิปอ้างอิงในหมวดนี้เพียงพอ'),
         findsNothing);
     await tester.tap(find.text('ผลทายก่อนตรวจรับ'));

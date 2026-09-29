@@ -106,6 +106,11 @@ class EvidenceBundleTests(unittest.TestCase):
             self.assertEqual(doc['taxonomy_leaf_key'], 'phone')
             self.assertEqual(doc['data_split'], 'train')
             self.assertNotIn(doc['channel_id'], heldout_channels)
+        for comparison in bundle['topic_comparisons']['items']:
+            for record in comparison['records']:
+                self.assertEqual(record['taxonomy_leaf_key'], 'phone')
+                self.assertEqual(record['data_split'], 'train')
+                self.assertNotIn(record['channel_id'], heldout_channels)
 
     def test_real_reference_segments_survive_and_untimed_window_is_never_used(self):
         row = self.db.query(DatasetContent).first()
@@ -168,19 +173,18 @@ class EvidenceBundleTests(unittest.TestCase):
         self.assertEqual(reloaded['evidence_bundle'], result['evidence_bundle'])
         self.assertIsNone(build_recommendation_from_saved_content(self.db, content_id=saved['content_id'], user_id=user_id + 1))
 
-    def test_legacy_without_saved_recommendation_marks_recomputation_explicitly(self):
+    def test_legacy_without_saved_recommendation_never_recomputes(self):
         user = User(username='legacy-user', email='legacy@example.test', password_hash='fixture')
         self.db.add(user)
         self.db.flush()
         content = UserContent(user_id=user.user_id, title='Legacy', transcript='camera photo')
         self.db.add(content)
         self.db.commit()
-        with patch('app.services.contents.build_recommendation_from_text', return_value=self.build()):
+        with patch('app.services.recommendation.build_recommendation_from_text', side_effect=AssertionError('Never rebuild history')):
             detail = get_user_content_detail(self.db, user_id=user.user_id, content_id=content.content_id)
-        self.assertEqual(detail['recommendation']['evidence_bundle']['origin'], 'recomputed_legacy_not_original')
-        with patch('app.services.recommendation.build_recommendation_from_text', return_value=self.build()):
             result = build_recommendation_from_saved_content(self.db, user_id=user.user_id, content_id=content.content_id)
-        self.assertEqual(result['evidence_bundle']['origin'], 'recomputed_legacy_not_original')
+        self.assertEqual(detail['recommendation']['evidence_bundle']['origin'], 'historical_legacy_no_snapshot')
+        self.assertEqual(result, detail['recommendation'])
 
 
 if __name__ == '__main__':

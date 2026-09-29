@@ -18,6 +18,14 @@ String _date(dynamic value) {
       : '${parsed.toLocal().toString().split('.').first} (เวลาท้องถิ่น)';
 }
 
+String _number(dynamic value) {
+  if (value is! num) return 'ไม่มีข้อมูล';
+  final number = value.toDouble();
+  return number == number.roundToDouble()
+      ? number.toInt().toString()
+      : number.toStringAsFixed(2);
+}
+
 class RecommendationEvidencePanel extends StatelessWidget {
   const RecommendationEvidencePanel(
       {super.key, required this.bundle, this.expandTopics = false});
@@ -32,6 +40,10 @@ class RecommendationEvidencePanel extends StatelessWidget {
     };
     final topics = _rows(bundle['topics']);
     final recommendations = _rows(bundle['recommendations']);
+    final comparisons = <String, Map<String, dynamic>>{
+      for (final row in _rows(_map(bundle['topic_comparisons'])['items']))
+        '${row['evidence_topic_id']}': row,
+    };
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       if (bundle['origin'] == 'recomputed_legacy_not_original')
         const Padding(
@@ -73,6 +85,10 @@ class RecommendationEvidencePanel extends StatelessWidget {
                           document:
                               documents[reference['dataset_id']] ?? const {},
                           support: reference),
+                    if (comparisons.containsKey('${topic['topic_id']}'))
+                      _TopicComparison(
+                          comparison: comparisons['${topic['topic_id']}']!,
+                          asOf: _map(bundle['topic_comparisons'])['as_of']),
                     const SizedBox(height: 12),
                   ],
                 )),
@@ -95,6 +111,115 @@ class RecommendationEvidencePanel extends StatelessWidget {
       ),
     ]);
   }
+}
+
+class _TopicComparison extends StatelessWidget {
+  const _TopicComparison({required this.comparison, required this.asOf});
+  final Map<String, dynamic> comparison;
+  final dynamic asOf;
+
+  static const _metricLabels = {
+    'views': 'ยอดวิวสะสม ณ เวลาเก็บข้อมูล',
+    'likes_per_1000_views': 'ไลก์ต่อ 1,000 วิว',
+    'comments_per_1000_views': 'ความคิดเห็นต่อ 1,000 วิว',
+    'views_per_hour': 'ยอดวิวเพิ่มเฉลี่ยต่อชั่วโมงจริง',
+  };
+
+  String _statusText(String status) => switch (status) {
+        'comparison_supported' =>
+          'พบความแตกต่างในตัวอย่างนี้ โดยมีช่วงความไม่แน่นอนไม่คร่อมศูนย์',
+        'comparison_uncertain' =>
+          'ยังสรุปทิศทางความแตกต่างไม่ได้ เพราะช่วงความไม่แน่นอนคร่อมศูนย์',
+        'comparison_descriptive' =>
+          'แสดงค่ากลางได้ แต่จำนวนช่องยังไม่พอประเมินช่วงความไม่แน่นอน',
+        'reference_only' =>
+          'พบในคลิปอ้างอิง แต่กลุ่มเปรียบเทียบยังเล็กเกินกว่าจะสรุป',
+        _ => 'ยังไม่มีกลุ่มตรวจพบและยังไม่ตรวจพบที่เปรียบเทียบกันได้',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final cohort = _map(comparison['cohort']);
+    final metrics = _map(comparison['metrics']);
+    return ExpansionTile(
+      key: ValueKey('topic-comparison-${comparison['evidence_topic_id']}'),
+      tilePadding: EdgeInsets.zero,
+      title: const Text('เปรียบเทียบผลตอบรับของคลิปอ้างอิง'),
+      subtitle: Text(
+          'ตรวจพบ ${cohort['detected_count'] ?? 0} · ยังไม่ตรวจพบ ${cohort['not_detected_count'] ?? 0} คลิป'),
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('อ้างอิงสถิติล่าสุดไม่เกิน ${_date(asOf)}'),
+              Text(
+                  'กลุ่มคลิปผลตอบรับสูง ${cohort['support_cohort_video_count'] ?? 0} · '
+                  'คลิปอ้างอิงอื่น ${cohort['comparison_pool_video_count'] ?? 0}'),
+              const SizedBox(height: 8),
+              for (final entry in metrics.entries)
+                _ComparisonMetric(
+                    title: _metricLabels[entry.key] ?? entry.key,
+                    metric: _map(entry.value),
+                    statusText: _statusText),
+              const SizedBox(height: 8),
+              Text('${comparison['limitation'] ?? ''}',
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ComparisonMetric extends StatelessWidget {
+  const _ComparisonMetric(
+      {required this.title, required this.metric, required this.statusText});
+  final String title;
+  final Map<String, dynamic> metric;
+  final String Function(String) statusText;
+
+  @override
+  Widget build(BuildContext context) {
+    final detected = _map(metric['detected']);
+    final absent = _map(metric['not_detected']);
+    final uncertainty = _map(metric['uncertainty']);
+    final interval = uncertainty['status'] == 'available'
+        ? 'ช่วงความไม่แน่นอน 95% ${_number(uncertainty['low'])} ถึง ${_number(uncertainty['high'])}'
+        : 'ยังไม่มีช่วงความไม่แน่นอน (${uncertainty['reason'] ?? 'ข้อมูลไม่พอ'})';
+    return ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      title: Text(title),
+      subtitle: Text(statusText('${metric['status']}')),
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('กลุ่มตรวจพบ: ${_summaryArm(detected)}'),
+                Text('กลุ่มยังไม่ตรวจพบ: ${_summaryArm(absent)}'),
+                Text(
+                    'ช่องที่มีทั้งสองกลุ่ม ${metric['paired_channel_count'] ?? 0} ช่อง · '
+                    'ผลต่างค่ากลางภายในช่อง ${_number(metric['within_channel_median_difference'])}'),
+                Text(interval),
+                const Text(
+                    'ค่าบวกหมายถึงกลุ่มตรวจพบสูงกว่าในตัวอย่างนี้ ค่าลบหมายถึงต่ำกว่า ไม่ใช่ผลเชิงสาเหตุ'),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _summaryArm(Map<String, dynamic> arm) =>
+      '${arm['count'] ?? 0} คลิป · ค่ากลาง ${_number(arm['median'])} · '
+      'P25–P75 ${_number(arm['p25'])}–${_number(arm['p75'])}';
 }
 
 class TranscriptObservation extends StatelessWidget {

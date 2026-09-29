@@ -118,6 +118,9 @@ void main() {
       final third = tester.getTopLeft(find.text('3. เพราะอะไรจึงแนะนำ')).dy;
       expect(first < second && second < third, isTrue);
       expect(find.textContaining('Dataset IDs: 8, 9'), findsNothing);
+      await tester.ensureVisible(find.text('เปิดดูหลักฐานและเวอร์ชัน'));
+      await tester.tap(find.text('เปิดดูหลักฐานและเวอร์ชัน'));
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('หลักฐาน: thermal control'));
       await tester.tap(find.text('หลักฐาน: thermal control'));
       await tester.pumpAndSettle();

@@ -210,16 +210,24 @@ class CurrentTrendIdeasTests(unittest.TestCase):
             detail = get_user_content_detail(self.db, user_id=user_id, content_id=saved['content_id'])
         self.assertEqual(detail['recommendation']['current_trend_ideas'], ideas)
 
-    def test_legacy_content_without_transcript_does_not_use_title(self):
+    def test_legacy_content_without_transcript_does_not_recompute_from_title(self):
         user = User(username='legacy-test', email='legacy@example.test', password_hash='test', role='user')
         self.db.add(user)
         self.db.flush()
         content = UserContent(user_id=user.user_id, title='iPhone 27 Pro battery review', transcript=None)
         self.db.add(content)
         self.db.commit()
-        with patch('app.services.contents.build_recommendation_from_text', return_value={}) as build:
-            get_user_content_detail(self.db, user_id=user.user_id, content_id=content.content_id)
-        self.assertEqual(build.call_args.kwargs['text'], '')
+        detail = get_user_content_detail(
+            self.db, user_id=user.user_id, content_id=content.content_id
+        )
+        recommendation = detail['recommendation']
+        self.assertEqual(recommendation['user_keywords'], [])
+        self.assertNotIn('current_trend_ideas', recommendation)
+        self.assertEqual(
+            recommendation['evidence_bundle']['origin'],
+            'historical_legacy_no_snapshot',
+        )
+        self.assertNotIn('iPhone', json.dumps(recommendation, ensure_ascii=False))
 
     def test_database_failure_does_not_break_reference_recommendation(self):
         from sqlalchemy.exc import OperationalError

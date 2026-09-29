@@ -54,8 +54,9 @@ class _TrainingCollectionPanelState extends State<TrainingCollectionPanel> {
       final result = await widget.repository.previewTrainingChannels(ids);
       if (mounted) setState(() => _preview = result);
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() => _error = 'ตรวจชุดข้อมูลไม่สำเร็จ กรุณาลองใหม่');
+      }
     } finally {
       if (mounted) setState(() => _checking = false);
     }

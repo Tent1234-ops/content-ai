@@ -418,6 +418,21 @@ class AnalysisResult(Base):
     cluster = relationship("Cluster", back_populates="analysis_results")
     dataset = relationship("DatasetContent", back_populates="analysis_results")
     classification_model = relationship("ClassificationModel", back_populates="analysis_results")
+    revision_plan = relationship("ClipRevisionPlan", back_populates="analysis", uselist=False, cascade="all, delete-orphan")
+
+
+class ClipRevisionPlan(Base):
+    __tablename__ = "clip_revision_plans"
+
+    analysis_id = Column(Integer, ForeignKey("analysis_results.result_id", ondelete="CASCADE"), primary_key=True)
+    recommendation_fingerprint = Column(String(64), nullable=False)
+    selected_advice_ids = Column(Text, nullable=False, default="[]")
+    notes = Column(Text, nullable=False, default="")
+    revision = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    analysis = relationship("AnalysisResult", back_populates="revision_plan")
 
 
 class ClusterRun(Base):

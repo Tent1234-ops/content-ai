@@ -60,6 +60,8 @@ String systemLogActionLabel(String action) {
       return 'กู้คืนการตั้งค่าระบบ';
     case 'video_analyze_save':
       return 'บันทึกผลวิเคราะห์วิดีโอ';
+    case 'clip_revision_plan_save':
+      return 'บันทึกแผนปรับคลิป (ยังไม่ใช่การปรับเสร็จ)';
     case 'nlp_extract_save':
       return 'บันทึกผลสกัดคำสำคัญ';
     case 'classification_model_smoke_test':

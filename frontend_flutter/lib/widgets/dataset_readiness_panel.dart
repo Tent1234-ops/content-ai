@@ -72,6 +72,9 @@ class _DatasetReadinessPanelState extends State<DatasetReadinessPanel> {
 
   Widget _plan(Map<String, dynamic> plan) {
     final splits = _map(plan['split_counts']);
+    final comparison = _map(plan['topic_comparison']);
+    final comparisonTopics = _rows(comparison['topics']);
+    final comparisonGaps = _map(comparison['metadata_or_statistics_gaps']);
     final category = '${plan['category']}';
     return ExpansionTile(
       key: PageStorageKey('plan-$category'),
@@ -93,6 +96,25 @@ class _DatasetReadinessPanelState extends State<DatasetReadinessPanel> {
                         'หลักฐานความยาว ${plan['duration_count']}'),
                     Text(
                         'สัดส่วนช่องที่มีข้อมูลมากที่สุด ${((plan['largest_channel_share'] as num? ?? 0) * 100).toStringAsFixed(1)}%'),
+                    if (comparison.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                          'ความพร้อมเปรียบเทียบหัวข้อ: ${comparison['eligible_video_count'] ?? 0} คลิป · '
+                          '${comparison['channels'] ?? 0} ช่อง',
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(
+                          '${comparison['representativeness_limitation'] ?? ''}'),
+                      if (comparisonGaps.isNotEmpty)
+                        Text(
+                            'ข้อมูลที่ยังขาด: ${comparisonGaps.entries.map((entry) => '${entry.key} ${entry.value}').join(' · ')}'),
+                      for (final topic in comparisonTopics)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                              '${topic['title']}: พบ ${topic['detected_count']} / ยังไม่พบ ${topic['not_detected_count']} คลิป · '
+                              'ช่องคู่เทียบ ${topic['paired_channel_count']} · ${_comparisonStatus(topic['views_status'])}'),
+                        ),
+                    ],
                     const SizedBox(height: 8),
                     for (final action in plan['actions'] as List? ?? [])
                       Padding(
@@ -109,6 +131,15 @@ class _DatasetReadinessPanelState extends State<DatasetReadinessPanel> {
       ],
     );
   }
+
+  String _comparisonStatus(dynamic value) => switch (value) {
+        'comparison_supported' => 'เปรียบเทียบพร้อมและมีทิศทางในตัวอย่าง',
+        'comparison_uncertain' => 'เปรียบเทียบได้แต่ทิศทางยังไม่แน่ชัด',
+        'comparison_descriptive' =>
+          'แสดงค่ากลางได้ ยังประเมินความไม่แน่นอนไม่พอ',
+        'reference_only' => 'ใช้ได้เพียงยืนยันว่าพบในคลิปอ้างอิง',
+        _ => 'ยังไม่มีกลุ่มที่เปรียบเทียบกันได้',
+      };
 
   Widget _item(Map<String, dynamic> item) {
     final roles = item['roles'] as List? ?? [];
@@ -254,8 +285,8 @@ class _DatasetReadinessPanelState extends State<DatasetReadinessPanel> {
               SizedBox(
                   width: 260,
                   child: DropdownButtonFormField<String>(
-                          key: const ValueKey('audit-category'),
-                          isExpanded: true,
+                    key: const ValueKey('audit-category'),
+                    isExpanded: true,
                     initialValue: _category,
                     decoration: const InputDecoration(labelText: 'หมวดหมู่'),
                     items: [
@@ -282,8 +313,8 @@ class _DatasetReadinessPanelState extends State<DatasetReadinessPanel> {
               SizedBox(
                   width: 300,
                   child: DropdownButtonFormField<String>(
-                          key: const ValueKey('audit-role'),
-                          isExpanded: true,
+                    key: const ValueKey('audit-role'),
+                    isExpanded: true,
                     initialValue: _role,
                     decoration:
                         const InputDecoration(labelText: 'บทบาทหรือสถานะ'),

@@ -1,5 +1,6 @@
 import '../models/common_models.dart';
 import '../models/content_history.dart';
+import '../models/clip_revision_plan.dart';
 import '../models/recommendation_result.dart';
 import '../services/api_client.dart';
 
@@ -7,6 +8,15 @@ class ContentRepository {
   ContentRepository({ApiClient? client}) : _client = client ?? ApiClient();
 
   final ApiClient _client;
+
+  Future<ClipRevisionPlan> getRevisionPlan(int contentId) async =>
+      ClipRevisionPlan.fromJson(Map<String, dynamic>.from(
+          await _client.get('/contents/$contentId/revision-plan') as Map));
+
+  Future<ClipRevisionPlan> saveRevisionPlan(
+          int contentId, Map<String, dynamic> body) async =>
+      ClipRevisionPlan.fromJson(Map<String, dynamic>.from(await _client.put(
+          '/contents/$contentId/revision-plan', body) as Map));
 
   Future<AnalysisResultViewData> getContentResult(int contentId) async {
     final response = await _client.get('/contents/$contentId');
