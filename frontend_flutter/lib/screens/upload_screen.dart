@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'dart:math';
 
 import '../models/recommendation_result.dart';
 import '../models/analysis_settings.dart';
@@ -36,6 +37,10 @@ class _UploadScreenState extends State<UploadScreen> {
   String _statusMessage = '';
   String? _suggestedTopic;
   bool _hasReadRouteArgs = false;
+  Map<String, dynamic>? _revisionContext;
+  String? _revisionClientRequestId;
+  String? _revisionJobId;
+  bool _revisionCanRetry = false;
 
   @override
   void initState() {
@@ -180,13 +185,25 @@ class _UploadScreenState extends State<UploadScreen> {
         await _showVideoTooLongDialog(_selectedDuration);
         return;
       }
-      final jobId = await _repository.startAnalyzeAndSaveVideo(
-        fileName: _selectedFileName!,
-        filePath: _selectedFilePath,
-        fileBytes: _selectedFileBytes,
-        fileStream: _selectedFileStream,
-        fileSize: _selectedFileSize,
-      );
+      final revision = _revisionContext;
+      final jobId = revision == null
+          ? await _repository.startAnalyzeAndSaveVideo(
+              fileName: _selectedFileName!,
+              filePath: _selectedFilePath,
+              fileBytes: _selectedFileBytes,
+              fileStream: _selectedFileStream,
+              fileSize: _selectedFileSize,
+            )
+          : await _repository.startRevisionVideo(
+              fileName: _selectedFileName!,
+              filePath: _selectedFilePath,
+              fileBytes: _selectedFileBytes,
+              fileStream: _selectedFileStream,
+              fileSize: _selectedFileSize,
+              context: revision,
+              clientRequestId: _revisionClientRequestId!,
+            );
+      _revisionJobId = revision == null ? null : jobId;
 
       if (!mounted) return;
       setState(() {
@@ -194,7 +211,8 @@ class _UploadScreenState extends State<UploadScreen> {
         _statusMessage = 'Queued job $jobId';
       });
 
-      final response = await _pollAnalysisJob(jobId);
+      final response =
+          await _pollAnalysisJob(jobId, revision: revision != null);
 
       if (!mounted) return;
 
@@ -232,9 +250,12 @@ class _UploadScreenState extends State<UploadScreen> {
     }
   }
 
-  Future<AnalysisResultViewData> _pollAnalysisJob(String jobId) async {
+  Future<AnalysisResultViewData> _pollAnalysisJob(String jobId,
+      {bool revision = false}) async {
     while (true) {
-      final job = await _repository.getAnalysisJob(jobId);
+      final job = revision
+          ? await _repository.getRevisionJob(jobId)
+          : await _repository.getAnalysisJob(jobId);
       if (!mounted) {
         throw Exception('Upload screen was closed.');
       }
@@ -265,6 +286,7 @@ class _UploadScreenState extends State<UploadScreen> {
       }
 
       if (job.isFailed) {
+        if (revision) _revisionCanRetry = true;
         if (job.status == 'not_found') {
           throw Exception(
             'Analysis job was lost because the backend restarted. Please submit the clip again.',
@@ -272,8 +294,41 @@ class _UploadScreenState extends State<UploadScreen> {
         }
         throw Exception(job.error ?? 'Analysis failed.');
       }
+      if (job.isInterrupted) {
+        _revisionCanRetry = revision;
+        throw Exception(
+            'งานหยุดเพราะ Backend รีสตาร์ต สามารถกดลองใหม่โดยใช้ไฟล์และแผนเดิมได้');
+      }
 
       await Future.delayed(const Duration(seconds: 2));
+    }
+  }
+
+  Future<void> _retryRevision() async {
+    final jobId = _revisionJobId;
+    if (jobId == null) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _revisionCanRetry = false;
+      _statusMessage = 'กำลังส่งงานเดิมใหม่...';
+    });
+    try {
+      final accepted = await _repository.retryRevisionJob(jobId);
+      _revisionJobId = accepted.jobId.isEmpty ? jobId : accepted.jobId;
+      final result = await _pollAnalysisJob(_revisionJobId!, revision: true);
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/result',
+          arguments: ResultScreenArgs(initialData: result));
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = error.toString();
+          _revisionCanRetry = true;
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -307,6 +362,7 @@ class _UploadScreenState extends State<UploadScreen> {
       _uploadProgress = 0;
       _statusMessage = '';
       _error = null;
+      _revisionCanRetry = false;
     });
   }
 
@@ -317,6 +373,12 @@ class _UploadScreenState extends State<UploadScreen> {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Map<String, dynamic>) {
         _suggestedTopic = args['suggestedTopic']?.toString();
+        final revision = args['revisionContext'];
+        if (revision is Map) {
+          _revisionContext = Map<String, dynamic>.from(revision);
+          _revisionClientRequestId =
+              'revision-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(0x7fffffff)}';
+        }
       }
       _hasReadRouteArgs = true;
     }
@@ -456,6 +518,10 @@ class _UploadScreenState extends State<UploadScreen> {
                   ),
                 ),
               if (_suggestedTopic != null) const SizedBox(height: 16),
+              if (_revisionContext != null) ...[
+                _RevisionUploadContext(data: _revisionContext!),
+                const SizedBox(height: 16),
+              ],
 
               // Upload Section
               if (!hasFile) ...[
@@ -576,7 +642,11 @@ class _UploadScreenState extends State<UploadScreen> {
               if (_error != null)
                 ErrorStateView(
                   message: _error!,
-                  onRetry: hasFile ? _uploadAndAnalyze : _pickFile,
+                  onRetry: _revisionCanRetry
+                      ? _retryRevision
+                      : hasFile
+                          ? _uploadAndAnalyze
+                          : _pickFile,
                 ),
 
               const SizedBox(height: 16),
@@ -621,6 +691,42 @@ class _UploadScreenState extends State<UploadScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _RevisionUploadContext extends StatelessWidget {
+  const _RevisionUploadContext({required this.data});
+  final Map<String, dynamic> data;
+
+  @override
+  Widget build(BuildContext context) {
+    final topics = (data['selected_topics'] as List? ?? const [])
+        .map((item) => item.toString())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          border: Border.all(color: Theme.of(context).dividerColor),
+          borderRadius: BorderRadius.circular(6)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('อัปโหลดฉบับแก้ไข',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Text('ต้นฉบับ: ${data['parent_title'] ?? '-'}'),
+        Text('แผนฉบับ ${data['expected_plan_revision']} · '
+            '${data['plan_saved_at'] ?? 'ไม่พบเวลาบันทึก'}'),
+        const SizedBox(height: 8),
+        Text(topics.isEmpty
+            ? 'แผนนี้มีเฉพาะบันทึก ระบบจะวิเคราะห์คลิปใหม่โดยไม่มีการเทียบหัวข้ออัตโนมัติ'
+            : 'หัวข้อที่จะตรวจ: ${topics.join(' / ')}'),
+        const SizedBox(height: 8),
+        const Text(
+            'ผลจะอธิบายการเปลี่ยนแปลงของข้อความเท่านั้น ไม่ใช่คะแนนว่าคลิปดีขึ้นหรือจะได้รับยอดเพิ่ม'),
+      ]),
     );
   }
 }

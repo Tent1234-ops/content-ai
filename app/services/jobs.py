@@ -73,8 +73,9 @@ def stop_worker():
         _worker_thread.join(timeout=2)
 
 
-def _enqueue_inprocess(func: Callable, *args, **kwargs) -> str:
-    job_id = str(uuid.uuid4())
+def _enqueue_inprocess(func: Callable, *args, job_id: str | None = None,
+                       owner_user_id: int | None = None, **kwargs) -> str:
+    job_id = job_id or str(uuid.uuid4())
     _jobs[job_id] = {
         "status": "queued",
         "stage": "queued",
@@ -83,6 +84,7 @@ def _enqueue_inprocess(func: Callable, *args, **kwargs) -> str:
         "result": None,
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
+        "owner_user_id": owner_user_id,
     }
     with _queue_lock:
         _queue.append({"job_id": job_id, "func": func, "args": args, "kwargs": kwargs})
@@ -90,7 +92,8 @@ def _enqueue_inprocess(func: Callable, *args, **kwargs) -> str:
     return job_id
 
 
-def _enqueue_rq(func: Callable, *args, redis_url: str = None, **kwargs) -> str:
+def _enqueue_rq(func: Callable, *args, redis_url: str = None, job_id: str | None = None,
+                owner_user_id: int | None = None, **kwargs) -> str:
     if not _rq_available:
         raise RuntimeError("RQ/redis not available in this environment. Install rq and redis package to enable this backend.")
     if not redis_url:
@@ -107,21 +110,26 @@ def _enqueue_rq(func: Callable, *args, redis_url: str = None, **kwargs) -> str:
         raise RuntimeError(f"Failed to connect to Redis at {redis_url}: {e}")
 
     # RQ returns job id
-    job = q.enqueue(func, *args, job_timeout=-1, **kwargs)
+    job = q.enqueue(func, *args, job_timeout=-1, job_id=job_id, **kwargs)
+    job.meta["owner_user_id"] = owner_user_id
+    job.save_meta()
     return job.get_id()
 
 
-def enqueue(func: Callable, *args, **kwargs) -> str:
+def enqueue(func: Callable, *args, _job_id: str | None = None,
+            _owner_user_id: int | None = None, **kwargs) -> str:
     """Enqueue a callable for background execution and return job_id
 
     Backends supported: inprocess, rq
     """
     backend = runtime_get("job_backend") or "inprocess"
     if backend == "inprocess":
-        return _enqueue_inprocess(func, *args, **kwargs)
+        return _enqueue_inprocess(func, *args, job_id=_job_id,
+                                  owner_user_id=_owner_user_id, **kwargs)
     elif backend == "rq":
         redis_url = runtime_get("redis_url")
-        return _enqueue_rq(func, *args, redis_url=redis_url, **kwargs)
+        return _enqueue_rq(func, *args, redis_url=redis_url, job_id=_job_id,
+                           owner_user_id=_owner_user_id, **kwargs)
     else:
         raise RuntimeError(f"Background backend '{backend}' not implemented")
 
@@ -143,10 +151,17 @@ def update_current_job(*, stage: str, progress: int, message: str | None = None)
         update_job(job_id, stage=stage, progress=progress, message=message)
 
 
-def get_status(job_id: str) -> Dict:
+def get_status(job_id: str, *, requester_user_id: int | None = None,
+               requester_role: str | None = None) -> Dict:
     backend = runtime_get("job_backend") or "inprocess"
     if backend == "inprocess":
-        return _jobs.get(job_id, {"status": "not_found"})
+        job = _jobs.get(job_id)
+        if job is None:
+            return {"status": "not_found"}
+        owner = job.get("owner_user_id")
+        if requester_user_id is not None and requester_role != "admin" and owner != requester_user_id:
+            return {"status": "not_found"}
+        return job
     elif backend == "rq":
         if not _rq_available:
             return {"status": "error", "error": "rq/redis not available"}
@@ -156,6 +171,9 @@ def get_status(job_id: str) -> Dict:
             redis_url = runtime_get("redis_url")
             conn = Redis.from_url(redis_url)
             job = Job.fetch(job_id, connection=conn)
+            owner = job.meta.get("owner_user_id")
+            if requester_user_id is not None and requester_role != "admin" and owner != requester_user_id:
+                return {"status": "not_found"}
             return {"status": job.get_status(), "result": job.result}
         except Exception as e:
             return {"status": "error", "error": str(e)}

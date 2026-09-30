@@ -6,6 +6,7 @@ import '../repositories/content_repository.dart';
 import '../state/auth_scope.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/analysis_settings_audit.dart';
+import '../widgets/revision_comparison_panel.dart';
 import '../widgets/current_trend_ideas_panel.dart';
 import '../widgets/recommendation_evidence_panel.dart';
 import '../widgets/actionable_advice_panel.dart';
@@ -232,7 +233,25 @@ class AnalysisReport extends StatelessWidget {
       ])
         if (item.hasDatasetEvidence) item.keyword: item,
     };
+    final revisionComparison = data.raw['revision_comparison'] is Map
+        ? Map<String, dynamic>.from(data.raw['revision_comparison'] as Map)
+        : null;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (revisionComparison != null) ...[
+        RevisionComparisonPanel(
+            data: revisionComparison,
+            onOpenParent: repository == null
+                ? null
+                : () {
+                    final parent = revisionComparison['parent'] as Map?;
+                    final contentId = (parent?['content_id'] as num?)?.toInt();
+                    if (contentId != null) {
+                      Navigator.pushNamed(context, '/result',
+                          arguments: ResultScreenArgs(contentId: contentId));
+                    }
+                  }),
+        const SizedBox(height: 24),
+      ],
       _Band(
           title: '1. พบอะไรในคลิป',
           icon: Icons.fact_check_outlined,

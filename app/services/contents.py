@@ -3,7 +3,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.database.models import AnalysisResult, Recommendation, UserContent
+from app.database.models import AnalysisResult, ClipRevisionComparison, Recommendation, UserContent
 from app.services.saved_recommendations import stored_recommendation
 from app.services.recommendation_evidence import fingerprint
 
@@ -19,12 +19,12 @@ def _latest_recommendation(content: UserContent) -> Recommendation | None:
 
 
 def _parse_json_text(raw_text: str | None) -> dict[str, Any]:
-    if not raw_text:
+    if not isinstance(raw_text, str) or not raw_text:
         return {}
     try:
         data = json.loads(raw_text)
         return data if isinstance(data, dict) else {}
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return {}
 
 
@@ -87,6 +87,18 @@ def get_user_content_detail(db: Session, *, user_id: int, content_id: int) -> di
     analysis_row = _latest_analysis(content)
     analysis_summary = _parse_json_text(analysis_row.summary if analysis_row else None)
     recommendation_payload = stored_recommendation(content, analysis_row)
+    revision_row = (
+        db.query(ClipRevisionComparison)
+        .filter_by(user_id=user_id, child_content_id=content_id, status="completed")
+        .order_by(ClipRevisionComparison.completed_at.desc())
+        .first()
+    )
+    revision_comparison = None
+    if revision_row is not None:
+        parsed_comparison = _parse_json_text(
+            getattr(revision_row, "comparison_result_json", None)
+        )
+        revision_comparison = parsed_comparison or None
     return {
         "content_id": content.content_id,
         "analysis_id": analysis_row.result_id if analysis_row else None,
@@ -100,4 +112,5 @@ def get_user_content_detail(db: Session, *, user_id: int, content_id: int) -> di
         "analysis": analysis_summary.get("ai_analysis", {}),
         "nlp_result": analysis_summary.get("nlp_result", {}),
         "recommendation": recommendation_payload,
+        "revision_comparison": revision_comparison,
     }

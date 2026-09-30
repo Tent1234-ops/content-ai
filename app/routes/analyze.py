@@ -1,14 +1,19 @@
 import os
 import shutil
 import uuid
+import hashlib
+import json
+import re
+from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app.api.deps import require_roles
+from app.core.datetime_utils import utc_isoformat
 from app.database.db import SessionLocal, get_db
 from sqlalchemy.orm import Session
-from app.database.models import User
+from app.database.models import AnalysisResult, ClipRevisionComparison, User, UserContent
 from app.services.analysis_settings import capture_analysis_settings, get_analysis_settings
 from app.services.ai_pipeline import analyze_video as pipeline_analyze
 from app.services.classification import classify_text_domain
@@ -25,6 +30,14 @@ from app.services.recommendation import (
 )
 from app.services.taxonomy import normalize_taxonomy_leaf
 from app.services.recommendation_evidence import user_context
+from app.services.revision_comparisons import (
+    build_revision_comparison,
+    create_revision_job,
+    get_revision_job,
+    prepare_retry,
+    revision_job_response,
+    update_revision_job,
+)
 
 router = APIRouter()
 
@@ -46,6 +59,14 @@ def _save_validated_upload(file: UploadFile, *, max_duration_seconds: int = 300)
         Path(file_path).unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return file_path
+
+
+def _file_sha256(file_path: str) -> str:
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _build_recommendation(db, *, filename: str, result: dict, settings_snapshot: dict | None = None) -> tuple[dict, dict]:
@@ -183,6 +204,13 @@ def analyze_video_job(file_path: str, filename: str, user_id: int | None = None,
             asr_model_size=settings_snapshot["asr_model"],
         )
         result["analysis_settings"] = settings_snapshot
+        update_revision_job(
+            db,
+            comparison_id,
+            status="running",
+            stage="classifying",
+            progress=62,
+        )
         recommendation, _nlp_result = _build_recommendation(db, filename=filename, result=result, settings_snapshot=settings_snapshot)
         result["recommendation"] = recommendation
         return result
@@ -245,6 +273,121 @@ def analyze_and_save_video_job(file_path: str, filename: str, user_id: int, *, s
         db.close()
 
 
+def analyze_revision_video_job(comparison_id: int) -> dict:
+    """Run the existing pipeline once, then commit child result and comparison together."""
+    db = SessionLocal()
+    try:
+        row = db.get(ClipRevisionComparison, comparison_id)
+        if row is None:
+            raise RuntimeError("Revision job is no longer available.")
+        update_revision_job(
+            db,
+            comparison_id,
+            status="running",
+            stage="extracting_audio",
+            progress=12,
+            started_at=datetime.utcnow(),
+            error_code=None,
+            error_message=None,
+        )
+        row = db.get(ClipRevisionComparison, comparison_id)
+        user = db.query(User).filter_by(user_id=row.user_id, is_active=True).first()
+        if user is None:
+            raise RuntimeError("บัญชีผู้ใช้ไม่พร้อมสำหรับการบันทึกผล")
+        if db.get(AnalysisResult, row.parent_analysis_id) is None:
+            raise RuntimeError("ผลวิเคราะห์ต้นฉบับถูกลบระหว่างประมวลผล")
+        if not os.path.isfile(row.file_path) or _file_sha256(row.file_path) != row.file_sha256:
+            raise RuntimeError("ไฟล์ฉบับแก้ไขไม่ตรงกับไฟล์ที่รับเข้าระบบ")
+        settings_snapshot = json.loads(row.settings_snapshot_json)
+        plan_snapshot = json.loads(row.plan_snapshot_json)
+        update_current_job(stage="extracting_audio", progress=18, message="Preparing revised clip audio")
+        result = pipeline_analyze(
+            row.file_path,
+            display_name=row.original_filename,
+            hook_duration_seconds=settings_snapshot["hook_duration_seconds"],
+            asr_model_size=settings_snapshot["asr_model"],
+        )
+        result["analysis_settings"] = settings_snapshot
+        transcript = str(result.get("transcript") or "")
+        raw_transcript = str(result.get("raw_transcript") or transcript)
+        cleaned_transcript = str(
+            result.get("cleaned_transcript") or normalize_text_for_nlp(raw_transcript)
+        )
+        recommendation, nlp_result = _build_recommendation(
+            db,
+            filename=row.original_filename,
+            result=result,
+            settings_snapshot=settings_snapshot,
+        )
+        comparison = build_revision_comparison(plan_snapshot, recommendation)
+        update_revision_job(
+            db,
+            comparison_id,
+            status="running",
+            stage="saving",
+            progress=90,
+        )
+        update_current_job(stage="saving", progress=90, message="Saving revised analysis and comparison")
+        saved = save_video_analysis_result(
+            db,
+            user=user,
+            filename=row.original_filename,
+            file_path=row.file_path,
+            transcript=transcript,
+            raw_transcript=raw_transcript,
+            cleaned_transcript=cleaned_transcript,
+            analysis_payload=result,
+            nlp_result=nlp_result,
+            recommendation_payload=recommendation,
+            commit=False,
+        )
+        db.expire_all()
+        active_user = db.query(User).filter_by(user_id=row.user_id, is_active=True).first()
+        parent = db.query(UserContent).filter_by(
+            content_id=row.parent_content_id, user_id=row.user_id
+        ).first()
+        row = db.get(ClipRevisionComparison, comparison_id)
+        if active_user is None or parent is None or row is None:
+            db.rollback()
+            raise RuntimeError("บัญชีหรือผลต้นฉบับถูกปิดก่อนบันทึกผล")
+        child = db.get(UserContent, saved["content_id"])
+        comparison["child"].update(
+            {
+                "content_id": saved["content_id"],
+                "analysis_id": saved["analysis_id"],
+                "title": child.title,
+                "created_at": utc_isoformat(child.created_at),
+            }
+        )
+        row.child_content_id = saved["content_id"]
+        row.child_analysis_id = saved["analysis_id"]
+        row.comparison_result_json = json.dumps(comparison, ensure_ascii=False)
+        row.status = "completed"
+        row.stage = "completed"
+        row.progress = 100
+        row.completed_at = datetime.utcnow()
+        row.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(row)
+        return revision_job_response(db, row)["result"]
+    except Exception as exc:
+        db.rollback()
+        row = db.get(ClipRevisionComparison, comparison_id)
+        if row is not None and row.status != "completed":
+            row.status = "failed"
+            row.stage = "failed"
+            row.error_code = exc.__class__.__name__
+            row.error_message = str(exc)[:500] if isinstance(exc, RuntimeError) else "ประมวลผลฉบับแก้ไขไม่สำเร็จ กรุณาลองใหม่"
+            row.updated_at = datetime.utcnow()
+            db.commit()
+            safe_message = row.error_message
+        else:
+            safe_message = "งานถูกยกเลิกเพราะต้นฉบับหรือบัญชีไม่พร้อมใช้งาน"
+        raise RuntimeError(safe_message) from None
+    finally:
+        db.close()
+
+
 @router.get("/analyze/settings")
 def read_upload_settings(
     db: Session = Depends(get_db),
@@ -270,7 +413,8 @@ async def analyze(
     settings_snapshot = _capture_upload_settings(db)
     file_path = _save_validated_upload(file, max_duration_seconds=settings_snapshot["upload_max_duration_seconds"])
     filename = Path(file.filename or file_path).name
-    job_id = enqueue(analyze_video_job, file_path, filename, current_user.user_id, settings_snapshot=settings_snapshot)
+    job_id = enqueue(analyze_video_job, file_path, filename, current_user.user_id,
+                     settings_snapshot=settings_snapshot, _owner_user_id=current_user.user_id)
     return {"job_id": job_id}
 
 
@@ -285,5 +429,109 @@ async def analyze_and_save(
     file_path = _save_validated_upload(file, max_duration_seconds=settings_snapshot["upload_max_duration_seconds"])
     filename = Path(file.filename or file_path).name
     print(f"[analyze/save] saved file to {file_path}, enqueueing analysis+save job", flush=True)
-    job_id = enqueue(analyze_and_save_video_job, file_path, filename, current_user.user_id, settings_snapshot=settings_snapshot)
+    job_id = enqueue(analyze_and_save_video_job, file_path, filename, current_user.user_id,
+                     settings_snapshot=settings_snapshot, _owner_user_id=current_user.user_id)
     return {"job_id": job_id}
+
+
+@router.post("/analyze/revision")
+async def analyze_revision(
+    file: UploadFile = File(...),
+    parent_content_id: int = Form(...),
+    parent_analysis_id: int = Form(...),
+    parent_recommendation_fingerprint: str = Form(...),
+    expected_plan_revision: int = Form(...),
+    client_request_id: str = Form(...),
+    current_user: User = Depends(require_roles("admin", "user")),
+    db: Session = Depends(get_db),
+):
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,100}", client_request_id):
+        raise HTTPException(422, "client_request_id ไม่ถูกต้อง")
+    if not re.fullmatch(r"[0-9a-f]{64}", parent_recommendation_fingerprint):
+        raise HTTPException(422, "recommendation fingerprint ไม่ถูกต้อง")
+    if expected_plan_revision <= 0:
+        raise HTTPException(409, "กรุณาบันทึกแผนก่อนอัปโหลดฉบับแก้ไข")
+    settings_snapshot = _capture_upload_settings(db)
+    file_path = _save_validated_upload(
+        file,
+        max_duration_seconds=settings_snapshot["upload_max_duration_seconds"],
+    )
+    filename = Path(file.filename or file_path).name
+    try:
+        row, created = create_revision_job(
+            db,
+            user_id=current_user.user_id,
+            parent_content_id=parent_content_id,
+            parent_analysis_id=parent_analysis_id,
+            parent_fingerprint=parent_recommendation_fingerprint,
+            expected_plan_revision=expected_plan_revision,
+            client_request_id=client_request_id,
+            file_sha256=_file_sha256(file_path),
+            file_path=file_path,
+            filename=filename,
+            settings_snapshot=settings_snapshot,
+        )
+        if not created:
+            if Path(file_path).resolve() != Path(row.file_path).resolve():
+                Path(file_path).unlink(missing_ok=True)
+            return revision_job_response(db, row)
+        try:
+            enqueue(
+                analyze_revision_video_job,
+                row.comparison_id,
+                _job_id=row.job_id,
+                _owner_user_id=current_user.user_id,
+            )
+        except Exception:
+            update_revision_job(
+                db,
+                row.comparison_id,
+                status="failed",
+                stage="failed",
+                error_code="enqueue_failed",
+                error_message="ส่งงานวิเคราะห์ไม่สำเร็จ กรุณากดลองใหม่",
+            )
+            raise HTTPException(503, "ส่งงานวิเคราะห์ไม่สำเร็จ กรุณากดลองใหม่")
+        return revision_job_response(db, row)
+    except Exception:
+        if 'row' not in locals() or not created:
+            Path(file_path).unlink(missing_ok=True)
+        raise
+
+
+@router.get("/revision-jobs/{job_id}")
+def read_revision_job(
+    job_id: str,
+    current_user: User = Depends(require_roles("admin", "user")),
+    db: Session = Depends(get_db),
+):
+    return revision_job_response(
+        db, get_revision_job(db, user_id=current_user.user_id, job_id=job_id)
+    )
+
+
+@router.post("/revision-jobs/{job_id}/retry")
+def retry_revision_job(
+    job_id: str,
+    current_user: User = Depends(require_roles("admin", "user")),
+    db: Session = Depends(get_db),
+):
+    row = prepare_retry(db, user_id=current_user.user_id, job_id=job_id)
+    try:
+        enqueue(
+            analyze_revision_video_job,
+            row.comparison_id,
+            _job_id=row.job_id,
+            _owner_user_id=current_user.user_id,
+        )
+    except Exception:
+        update_revision_job(
+            db,
+            row.comparison_id,
+            status="failed",
+            stage="failed",
+            error_code="enqueue_failed",
+            error_message="ส่งงานวิเคราะห์ใหม่ไม่สำเร็จ",
+        )
+        raise HTTPException(503, "ส่งงานวิเคราะห์ใหม่ไม่สำเร็จ")
+    return revision_job_response(db, row)

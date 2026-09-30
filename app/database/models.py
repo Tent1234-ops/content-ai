@@ -435,6 +435,63 @@ class ClipRevisionPlan(Base):
     analysis = relationship("AnalysisResult", back_populates="revision_plan")
 
 
+class ClipRevisionComparison(Base):
+    __tablename__ = "clip_revision_comparisons"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "client_request_id",
+            name="uq_clip_revision_comparison_user_request",
+        ),
+        Index("ix_clip_revision_comparison_job", "job_id"),
+        Index("ix_clip_revision_comparison_child", "child_content_id"),
+    )
+
+    comparison_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    parent_content_id = Column(
+        Integer,
+        ForeignKey("user_contents.content_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    parent_analysis_id = Column(
+        Integer,
+        ForeignKey("analysis_results.result_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    child_content_id = Column(
+        Integer,
+        ForeignKey("user_contents.content_id", ondelete="SET NULL"),
+    )
+    child_analysis_id = Column(
+        Integer,
+        ForeignKey("analysis_results.result_id", ondelete="SET NULL"),
+    )
+    parent_recommendation_fingerprint = Column(String(64), nullable=False)
+    plan_revision = Column(Integer, nullable=False)
+    client_request_id = Column(String(100), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    file_sha256 = Column(String(64), nullable=False)
+    file_path = Column(String(1024), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    job_id = Column(String(64), nullable=False, unique=True)
+    job_backend = Column(String(20), nullable=False, default="inprocess")
+    status = Column(String(30), nullable=False, default="queued")
+    stage = Column(String(50), nullable=False, default="queued")
+    progress = Column(Integer, nullable=False, default=0)
+    error_code = Column(String(100))
+    error_message = Column(String(500))
+    plan_snapshot_json = Column(AnalysisPayloadText, nullable=False)
+    settings_snapshot_json = Column(AnalysisPayloadText, nullable=False)
+    comparison_result_json = Column(AnalysisPayloadText)
+    snapshot_sha256 = Column(String(64), nullable=False)
+    captured_at = Column(DateTime, nullable=False)
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ClusterRun(Base):
     __tablename__ = "cluster_runs"
 

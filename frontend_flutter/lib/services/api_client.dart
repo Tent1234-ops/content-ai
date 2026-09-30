@@ -76,10 +76,12 @@ class ApiClient {
     Stream<List<int>>? fileStream,
     int? fileSize,
     required String fileName,
+    Map<String, String> fields = const {},
   }) async {
     final request = http.MultipartRequest('POST', Uri.parse(baseUrl + path));
     final headers = await _headers(json: false);
     request.headers.addAll(headers);
+    request.fields.addAll(fields);
     if (fileBytes != null) {
       request.files.add(
           http.MultipartFile.fromBytes("file", fileBytes, filename: fileName));

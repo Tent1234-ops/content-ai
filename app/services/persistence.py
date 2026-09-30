@@ -338,6 +338,7 @@ def save_video_analysis_result(
     recommendation_payload: Dict[str, object],
     raw_transcript: str | None = None,
     cleaned_transcript: str | None = None,
+    commit: bool = True,
 ) -> Dict[str, object]:
     title = str(
         analysis_payload.get("analysis", {}).get("title")
@@ -405,8 +406,7 @@ def save_video_analysis_result(
             )
             .first()
         )
-    db.add(
-        AnalysisResult(
+    analysis_result = AnalysisResult(
             content_id=content.content_id,
             classification_model_id=(
                 classification_model.model_id if classification_model else None
@@ -427,7 +427,8 @@ def save_video_analysis_result(
                 ensure_ascii=False,
             ),
         )
-    )
+    db.add(analysis_result)
+    db.flush()
     log_system_event(
         db,
         user_id=user.user_id,
@@ -435,10 +436,12 @@ def save_video_analysis_result(
         status="success",
         detail=f"content_id={content.content_id}, keywords={saved_keywords}",
     )
-    db.commit()
+    if commit:
+        db.commit()
 
     return {
         "content_id": content_id,
+        "analysis_id": analysis_result.result_id,
         "saved_keywords": saved_keywords,
         "recommended_keywords": recommendation_keywords,
         "recommended_duration": recommended_duration,

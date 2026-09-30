@@ -34,6 +34,7 @@ class UserContentDetailResponse(BaseModel):
     analysis: dict[str, Any]
     nlp_result: dict[str, Any]
     recommendation: dict[str, Any]
+    revision_comparison: dict[str, Any] | None = None
 
 
 class ClipRevisionPlanRequest(BaseModel):

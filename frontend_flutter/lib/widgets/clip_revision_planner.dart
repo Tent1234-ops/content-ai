@@ -135,6 +135,46 @@ class _ClipRevisionPlannerState extends State<ClipRevisionPlanner> {
     }
   }
 
+  Future<void> _openRevisionUpload() async {
+    final plan = _plan;
+    if (plan == null || plan.revision <= 0) return;
+    if (_dirty) {
+      final useSaved = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+                  title: const Text('แผนฉบับร่างยังไม่ถูกบันทึก'),
+                  content: const Text(
+                      'บันทึกฉบับร่างก่อน หรือยืนยันว่าจะใช้แผนฉบับที่บันทึกไว้ในการเทียบครั้งนี้'),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('กลับไปบันทึก')),
+                    FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('ใช้แผนที่บันทึกไว้')),
+                  ]));
+      if (useSaved != true || !mounted) return;
+    }
+    final actions =
+        widget.data.recommendation.actionableRecommendations?.items ?? [];
+    final titles = actions
+        .where((item) => plan.selectedIds.contains(item.id))
+        .map((item) => item.title)
+        .toList();
+    Navigator.pushNamed(context, '/upload', arguments: {
+      'revisionContext': {
+        'parent_content_id': plan.contentId,
+        'parent_analysis_id': plan.analysisId,
+        'parent_recommendation_fingerprint': plan.fingerprint,
+        'expected_plan_revision': plan.revision,
+        'parent_title': widget.data.title,
+        'plan_saved_at': plan.savedAt?.toIso8601String(),
+        'selected_topics': titles,
+        'notes_only': plan.selectedIds.isEmpty,
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final actions = widget.data.recommendation.actionableRecommendations;
@@ -210,7 +250,18 @@ class _ClipRevisionPlannerState extends State<ClipRevisionPlanner> {
             onPressed: _loading || _saving ? null : _load,
             icon: const Icon(Icons.refresh),
             label: const Text('โหลดแผนที่บันทึก')),
+        FilledButton.tonalIcon(
+            key: const ValueKey('upload-revision'),
+            onPressed:
+                enabled && _plan!.revision > 0 ? _openRevisionUpload : null,
+            icon: const Icon(Icons.upload_file_outlined),
+            label: const Text('อัปโหลดฉบับแก้ไข')),
       ]),
+      if (_plan != null && _plan!.revision > 0 && _plan!.selectedIds.isEmpty)
+        const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text(
+                'แผนนี้มีเฉพาะบันทึก: ระบบจะวิเคราะห์คลิปใหม่ตามปกติ แต่ไม่มีหัวข้อสำหรับเทียบอัตโนมัติ')),
     ]);
   }
 }

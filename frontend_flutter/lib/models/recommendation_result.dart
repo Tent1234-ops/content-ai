@@ -539,6 +539,7 @@ class RecommendationEvidence {
 
 class AnalysisJobStatus {
   const AnalysisJobStatus({
+    required this.jobId,
     required this.status,
     required this.stage,
     required this.progress,
@@ -548,6 +549,7 @@ class AnalysisJobStatus {
   });
 
   final String status;
+  final String jobId;
   final String stage;
   final int progress;
   final String message;
@@ -555,6 +557,7 @@ class AnalysisJobStatus {
   final String? error;
 
   bool get isComplete => status == 'completed';
+  bool get isInterrupted => status == 'interrupted';
   bool get isFailed =>
       status == 'failed' || status == 'error' || status == 'not_found';
 
@@ -562,6 +565,7 @@ class AnalysisJobStatus {
     final status = json['status']?.toString() ?? 'unknown';
     final rawResult = json['result'];
     return AnalysisJobStatus(
+      jobId: json['job_id']?.toString() ?? '',
       status: status,
       stage: json['stage']?.toString() ?? status,
       progress: (json['progress'] as num?)?.toInt() ?? 0,

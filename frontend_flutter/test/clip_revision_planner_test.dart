@@ -257,4 +257,46 @@ void main() {
   test('empty HTTP success body is not a valid saved plan', () {
     expect(() => ClipRevisionPlan.fromJson({}), throwsFormatException);
   });
+
+  testWidgets(
+      'saved plan enables revision upload and dirty draft requires confirmation',
+      (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repo = PlanRepository()
+      ..stored = ClipRevisionPlan(
+          contentId: 41,
+          analysisId: 81,
+          fingerprint: 'a' * 64,
+          revision: 1,
+          selectedIds: const ['charging'],
+          notes: 'แผนที่บันทึกแล้ว',
+          savedAt: DateTime.utc(2026, 9, 29));
+    await mount(tester, repo);
+    final upload = find.byKey(const ValueKey('upload-revision'));
+    expect(tester.widget<FilledButton>(upload).onPressed, isNotNull);
+    await tester.enterText(find.byKey(const ValueKey('revision-plan-notes')),
+        'ฉบับร่างที่ยังไม่บันทึก');
+    await tester.pump();
+    await tester.tap(upload);
+    await tester.pumpAndSettle();
+    expect(find.text('แผนฉบับร่างยังไม่ถูกบันทึก'), findsOneWidget);
+    expect(find.text('ใช้แผนที่บันทึกไว้'), findsOneWidget);
+  });
+
+  testWidgets(
+      'notes-only saved plan explains automatic comparison is unavailable',
+      (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repo = PlanRepository()
+      ..stored = ClipRevisionPlan(
+          contentId: 41,
+          analysisId: 81,
+          fingerprint: 'a' * 64,
+          revision: 1,
+          selectedIds: const [],
+          notes: 'แก้ตามบันทึกส่วนตัว',
+          savedAt: DateTime.utc(2026, 9, 29));
+    await mount(tester, repo);
+    expect(find.textContaining('แผนนี้มีเฉพาะบันทึก'), findsOneWidget);
+  });
 }

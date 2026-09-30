@@ -36,6 +36,7 @@ from app.services.trend_topic_store import active_version
 from app.services.taxonomy import sync_taxonomy_registry
 from app.services.admin_settings import get_or_create_admin_config
 from app.services.youtube_cc_dataset import repair_quota_waiting_run_statuses
+from app.services.revision_comparisons import mark_inprocess_jobs_interrupted
 from models.speech_to_text import check_model_readiness
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
@@ -68,6 +69,7 @@ def preload_ai_models():
 async def startup_event():
     global asr_model_status
     with SessionLocal() as db:
+        mark_inprocess_jobs_interrupted(db)
         asr_model_status = check_model_readiness(get_or_create_admin_config(db).asr_model_default)
         active_version(db)
         backfill_retained_history(db)
